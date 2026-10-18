@@ -5,6 +5,10 @@ import { CONTRACT_VERSION, type Item, type Link, type MapDefinition, type Plugin
 import { analyzeProject, IGNORED_FILE } from './read/analyzer';
 import type { FeComponent, FeModel } from './read/model';
 import { loadAliases } from './read/resolve';
+import { ReactPreviews } from './preview/previewer';
+
+/** Previews of components (one per window: it keeps the dev servers it started). */
+export const previews = new ReactPreviews();
 
 const CODE = /\.[cm]?[jt]sx?$/;
 /** Files that say how imports like "@/components/Card" resolve. */
@@ -185,5 +189,16 @@ export const reactPlugin: Plugin = {
     return pkg ? { reason: `${pkg} is in package.json` } : undefined;
   },
   maps: MAPS,
-  readers: [{ id: 'react', wants: wantsFile, read: (files) => toMaps(readModel(files)) }],
+  readers: [
+    {
+      id: 'react',
+      wants: wantsFile,
+      read: (files, project) => {
+        const model = readModel(files);
+        previews.remember(project.root, model, files);
+        return toMaps(model);
+      },
+    },
+  ],
+  previews: [previews.previewer],
 };
