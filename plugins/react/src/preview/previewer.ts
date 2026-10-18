@@ -12,10 +12,12 @@ import { situationsModule } from './situations';
 import { findDexie, seedFor, typesFrom } from './dexie';
 import { readShapes } from '../read/shapes';
 import { replyRules, type ReplyRule } from './replies';
+import { record, withRecordings } from './recordings';
 
-/** Situations every component can be shown in (the page's names in brackets when they differ). */
-export const SITUATIONS = ['normal', 'loading', 'empty', 'error', 'long text'];
-const SITUATION_IDS: Record<string, string> = { 'long text': 'long' };
+/** Situations every component can be shown in. "live backend" calls the developer's real dev backend. */
+export const LIVE = 'live backend';
+export const SITUATIONS = ['normal', 'loading', 'empty', 'error', 'long text', LIVE];
+const SITUATION_IDS: Record<string, string> = { 'long text': 'long', [LIVE]: 'live' };
 
 interface Known {
   model: FeModel;
@@ -30,11 +32,20 @@ export class ReactPreviews {
   private readonly servers = new Map<string, DevServer>();
   /** Whether the folder is trusted in VS Code (set by the extension): previews run the project's own code. */
   trusted: () => boolean = () => true;
+  /** Whether previews may call the developer's real dev backend in this project (asks the first time). */
+  allowLive: (root: string) => Promise<boolean> = async () => false;
+  /** A dev login token for this project, when the developer gave one (kept in VS Code's secret storage). */
+  token: (root: string) => Promise<string | undefined> = async () => undefined;
 
   /** What the reader found in a project, kept for previews. */
   remember(root: string, model: FeModel, files: SourceFile[]) {
     const code = files.filter((f) => /\.[cm]?[jt]sx?$/.test(f.path));
     this.known.set(root, { model, replies: replyRules(readShapes(code)), texts: new Map(files.map((f) => [f.path, f.text])) });
+  }
+
+  /** The React projects read so far (their folders). */
+  roots(): string[] {
+    return [...this.known.keys()];
   }
 
   /** The component a card shows: a component card, or the page a route card opens. */
@@ -59,7 +70,15 @@ export class ReactPreviews {
     wants: (item) => item.id.startsWith('react:component:') || item.id.startsWith('react:route:'),
     situations: () => SITUATIONS,
     render: (request) => this.render(request),
+    heard: (message, context) => this.heard(message, context.project.root),
   };
+
+  /** A page in the "live backend" situation recorded a real reply: kept (data only) for "normal" to use. */
+  private heard(message: Record<string, unknown>, root: string) {
+    if (message.type !== 'recorded' || typeof message.address !== 'string') return;
+    const known = this.known.get(root)?.replies.map((r) => r.match) ?? [];
+    record(root, message.address, message.reply, known);
+  }
 
   private async render(req: PreviewRequest): Promise<PreviewOutput> {
     const root = req.project.root;
@@ -72,16 +91,22 @@ export class ReactPreviews {
     const plan = devPlan(root);
     if ('unsupported' in plan) throw new Error(plan.unsupported);
     if (!this.trusted()) throw new Error("Previews start this project's dev server, which runs its code. Trust this folder first: Command Palette → \"Workspaces: Manage Workspace Trust\".");
+    const live = req.situation === LIVE;
+    if (live && !(await this.allowLive(root))) {
+      throw new Error('The live backend situation is off for this project. Choose it again to allow previews to call your dev backend, or use the other situations (no backend needed).');
+    }
 
     writeHarness(root);
     const known = this.known.get(root)!;
     const types = typesFrom(known.texts);
     const route = known.model.routes.find((r) => r.target === c.id)?.path;
+    // The app's own login page, for logging in inside the preview when the backend asks for it.
+    const login = known.model.routes.find((r) => /log-?in|sign-?in|auth/i.test(r.path))?.path;
     // Stand-ins: example rows for the app's browser database (Dexie), matching the page's address.
     const dexie = findDexie(known.texts);
     const seed = dexie ? seedFor(dexie, route, types) : undefined;
     const key = createHash('sha256').update(`${c.path}#${c.name}`).digest('hex').slice(0, 16);
-    writeIfChanged(join(root, PREVIEW_DIR, 'cards', `${key}.json`), JSON.stringify({ path: c.path, export: c.name, props: exampleProps(c, types), ...(route ? { route } : {}), ...(seed ? { seed } : {}), requests: known.replies }, null, 2));
+    writeIfChanged(join(root, PREVIEW_DIR, 'cards', `${key}.json`), JSON.stringify({ path: c.path, export: c.name, props: exampleProps(c, types), ...(route ? { route } : {}), ...(seed ? { seed } : {}), requests: withRecordings(root, known.replies), ...(login ? { login } : {}) }, null, 2));
 
     let server = this.servers.get(root);
     if (!server) {
@@ -90,7 +115,9 @@ export class ReactPreviews {
     }
     const base = await server.ensure();
     const situation = SITUATION_IDS[req.situation] ?? req.situation;
-    return { url: `${base}/${PREVIEW_DIR}/index.html?c=${key}&s=${encodeURIComponent(situation)}&theme=${req.theme}&w=${req.width}&t=${Date.now()}` };
+    // A dev token travels in the address's #fragment: browsers never send that part to any server or log it.
+    const token = live ? await this.token(root) : undefined;
+    return { url: `${base}/${PREVIEW_DIR}/index.html?c=${key}&s=${encodeURIComponent(situation)}&theme=${req.theme}&w=${req.width}&t=${Date.now()}${token ? `#token=${encodeURIComponent(token)}` : ''}` };
   }
 }
 

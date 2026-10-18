@@ -15,5 +15,19 @@
   ],
   "extensionDependencies": [
     "arka102202.visual-editor"
-  ]
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "visualEditor.react.setDevToken",
+        "title": "Set Dev Login Token for Previews",
+        "category": "Visual Editor"
+      },
+      {
+        "command": "visualEditor.react.forgetLive",
+        "title": "Forget Recorded Replies and Token",
+        "category": "Visual Editor"
+      }
+    ]
+  }
 }
