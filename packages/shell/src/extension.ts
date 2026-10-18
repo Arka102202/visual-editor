@@ -11,6 +11,8 @@ import { findWorkspace, isIgnoredPath, isProjectFile } from './projects';
 import { basename, relative, sep } from 'node:path';
 import { CurrentProject } from './currentProject';
 import { MapPanel } from './mapPanel';
+import { OutsideChanges } from './changes';
+import { Review } from './review';
 
 export function activate(context: vscode.ExtensionContext): ShellApi {
   const registry = new PluginRegistry();
@@ -27,8 +29,11 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     get: () => context.workspaceState.get<string>('visualEditor.currentProject'),
     set: (root) => void context.workspaceState.update('visualEditor.currentProject', root),
   });
-  const projectsView = new ProjectsView(index, current);
-  context.subscriptions.push(index, projectsView, vscode.window.registerTreeDataProvider('visualEditor.projects', projectsView));
+  // Review: changes wait here for the developer's OK; files changed any other way are marked on the map.
+  const changes = new OutsideChanges();
+  const review = new Review(context.extensionUri, index, current, changes);
+  const projectsView = new ProjectsView(index, current, review);
+  context.subscriptions.push(index, review, projectsView, vscode.window.registerTreeDataProvider('visualEditor.projects', projectsView));
   const folders = () => (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
   const scan = () => {
     const workspaces = folders().map(findWorkspace);
@@ -62,13 +67,27 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     if (basename(uri.fsPath) === 'pnpm-workspace.yaml') rescan = true;
     // A new file outside every project known so far may be loose code that makes a new project.
     if (addedOrRemoved && !index.snapshot().some((s) => uri.fsPath.startsWith(s.project.root + sep))) rescan = true;
+    // Which project it's in (the deepest root), to mark its cards as changed outside review.
+    const owner = index
+      .snapshot()
+      .map((s) => s.project.root)
+      .filter((r) => uri.fsPath.startsWith(r + sep))
+      .sort((a, b) => b.length - a.length)[0];
+    if (owner) changes.note(owner, relative(owner, uri.fsPath).split(sep).join('/'), uri.fsPath);
     pending.add(uri.fsPath);
     if (timer) clearTimeout(timer);
     timer = setTimeout(flush, 300);
   };
   const watcher = vscode.workspace.createFileSystemWatcher('**/*');
+  // Proposals arrive as files (from the assistant hub, agents, plugins); the main watcher leaves that folder out.
+  const proposalWatcher = vscode.workspace.createFileSystemWatcher('**/.visual-editor/proposals/*.json');
+  const onProposal = (uri: vscode.Uri) => review.proposalFileChanged(uri.fsPath);
   context.subscriptions.push(
     watcher,
+    proposalWatcher,
+    proposalWatcher.onDidCreate(onProposal),
+    proposalWatcher.onDidChange(onProposal),
+    proposalWatcher.onDidDelete(onProposal),
     watcher.onDidCreate(onFile(true)),
     watcher.onDidDelete(onFile(true)),
     watcher.onDidChange(onFile(false)),
@@ -78,13 +97,16 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
 
   // One status bar button for everything.
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  status.command = 'visualEditor.openMap';
   const updateStatus = () => {
     const n = registry.list().length;
     const projects = index.snapshot().length;
     const shown = current.get();
-    status.text = `$(symbol-structure) Visual Editor${projects > 1 && shown ? ` · ${shown.project.name}` : ''}${n ? ` · ${n} plugin${n === 1 ? '' : 's'}` : ''}`;
-    status.tooltip = `Open the map${n ? `\nPlugins: ${registry.list().map((p) => p.name).join(', ')}` : '\nNo plugins yet: add one for your project (React, Express…)'}`;
+    const waiting = review.waiting();
+    status.text = `$(symbol-structure) Visual Editor${projects > 1 && shown ? ` · ${shown.project.name}` : ''}${n ? ` · ${n} plugin${n === 1 ? '' : 's'}` : ''}${waiting ? ` · ${waiting} proposed` : ''}`;
+    // Waiting proposals come first: the button opens Review until they're handled.
+    status.command = waiting ? 'visualEditor.openReview' : 'visualEditor.openMap';
+    status.backgroundColor = waiting ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
+    status.tooltip = `${waiting ? `${waiting} change${waiting === 1 ? '' : 's'} waiting for your OK: open Review` : 'Open the map'}${n ? `\nPlugins: ${registry.list().map((p) => p.name).join(', ')}` : '\nNo plugins yet: add one for your project (React, Express…)'}`;
   };
   updateStatus();
   status.show();
@@ -93,14 +115,17 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     registry.onChange(updateStatus),
     index.onChange(updateStatus),
     current.onChange(updateStatus),
+    review.onChange(updateStatus),
     vscode.commands.registerCommand('visualEditor.showPlugins', () => vscode.commands.executeCommand('visualEditor.plugins.focus')),
   );
 
   // The map, and choosing which project it shows.
-  const map = new MapPanel(context.extensionUri, index, current);
+  const map = new MapPanel(context.extensionUri, index, current, review, changes);
   context.subscriptions.push(
     map,
     vscode.commands.registerCommand('visualEditor.openMap', () => map.show()),
+    vscode.commands.registerCommand('visualEditor.openReview', () => review.show()),
+    vscode.commands.registerCommand('visualEditor.tryProposal', () => review.tryExample()),
     vscode.commands.registerCommand('visualEditor.chooseProject', async (root?: string) => {
       if (!root) {
         const shown = current.get()?.project.root;

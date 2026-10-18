@@ -22,6 +22,13 @@ See your project as maps, review every change before it happens, and keep a memo
 4. Click **Visual Editor** in the status bar (or the map button on the Projects list) to open the **map**: the shown
    project's cards and lines. Drag to move, pinch or Ctrl+scroll to zoom, **Fit** to see everything, double-click a
    card to open its code. With several projects, pick one at the top of the map or click it in the Projects list.
+5. Run **Visual Editor: Try Review with an Example Proposal**. A proposal waits in the **Review** tab: why, and what
+   changes in each file. The status bar turns yellow, and the cards it touches are marked yellow on the map.
+   **Approve and apply** changes the files (all or none), **Undo** puts them back, **Send back** and **Reject** keep a
+   note. Edit a file by hand and its cards turn blue: changed outside review.
+
+Proposals are files in the project's `.visual-editor/proposals/` folder, so assistants, agents and plugins all
+propose the same way, and nothing changes the code without review.
 
 ## Work on it
 

@@ -2,11 +2,14 @@
 // and when another project is chosen.
 
 import * as vscode from 'vscode';
+import { webviewPage } from './webviewPage';
 import { join } from 'node:path';
+import { cardMarks, type OutsideChanges } from './changes';
 import type { CurrentProject } from './currentProject';
 import { layoutMap } from './layout';
 import type { FromMap, ToMap } from './mapMessages';
 import type { ProjectIndex } from './projectIndex';
+import type { Review } from './review';
 
 export class MapPanel {
   private panel: vscode.WebviewPanel | undefined;
@@ -18,8 +21,15 @@ export class MapPanel {
     private readonly extensionUri: vscode.Uri,
     private readonly index: ProjectIndex,
     private readonly current: CurrentProject,
+    private readonly review: Review,
+    private readonly changes: OutsideChanges,
   ) {
-    this.subscriptions.push(index.onChange(() => this.update()), current.onChange(() => this.update()));
+    this.subscriptions.push(
+      index.onChange(() => this.update()),
+      current.onChange(() => this.update()),
+      review.onChange(() => this.update()),
+      changes.onChange(() => this.update()),
+    );
   }
 
   /** Opens the map, or brings it to the front. */
@@ -35,7 +45,7 @@ export class MapPanel {
       localResourceRoots: [dist],
     });
     panel.iconPath = vscode.Uri.joinPath(this.extensionUri, 'media', 'icon.svg');
-    panel.webview.html = page(panel.webview, vscode.Uri.joinPath(dist, 'map.js'));
+    panel.webview.html = webviewPage(panel.webview, vscode.Uri.joinPath(dist, 'map.js'), 'Visual Editor');
     panel.webview.onDidReceiveMessage((m: FromMap) => this.receive(m), undefined, this.subscriptions);
     panel.onDidDispose(() => {
       this.panel = undefined;
@@ -56,6 +66,11 @@ export class MapPanel {
       this.send();
     } else if (m.type === 'choose') {
       this.current.choose(m.root);
+    } else if (m.type === 'openReview') {
+      this.review.show();
+    } else if (m.type === 'clearChanged') {
+      const root = this.current.get()?.project.root;
+      if (root) this.changes.clear(root);
     } else if (m.type === 'open') {
       const root = this.current.get()?.project.root;
       if (!root) return;
@@ -80,12 +95,17 @@ export class MapPanel {
     const states = this.index.snapshot();
     const state = this.current.get();
     const maps = state?.detected.flatMap((d) => d.plugin.maps ?? []) ?? [];
+    const proposals = state ? this.review.proposals(state.project.root) : [];
+    const changed = state ? this.changes.get(state.project.root) : new Set<string>();
     const message: ToMap = {
       type: 'show',
       projects: states.map((s) => ({ root: s.project.root, name: s.project.name, group: s.project.group, cards: s.items.length })),
       current: state?.project.root,
       plugins: state?.detected.map((d) => d.plugin.name) ?? [],
       layout: layoutMap(state?.items ?? [], state?.links ?? [], maps),
+      marks: cardMarks(state?.items ?? [], proposals, changed),
+      proposed: proposals.filter((p) => p.status === 'proposed').length,
+      changed: changed.size,
       empty: !state
         ? { title: 'Open a folder', detail: 'Visual Editor draws the projects in the folder you open.' }
         : !state.detected.length
@@ -97,20 +117,4 @@ export class MapPanel {
     this.panel.title = state ? `Map · ${state.project.name}` : 'Visual Editor';
     void this.panel.webview.postMessage(message);
   }
-}
-
-function page(webview: vscode.Webview, script: vscode.Uri): string {
-  const nonce = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, '0')).join('');
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Visual Editor</title>
-</head>
-<body>
-<script nonce="${nonce}" src="${webview.asWebviewUri(script)}"></script>
-</body>
-</html>`;
 }

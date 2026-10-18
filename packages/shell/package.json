@@ -47,6 +47,17 @@
         "icon": "$(type-hierarchy-sub)"
       },
       {
+        "command": "visualEditor.openReview",
+        "title": "Open Review",
+        "category": "Visual Editor",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "visualEditor.tryProposal",
+        "title": "Try Review with an Example Proposal",
+        "category": "Visual Editor"
+      },
+      {
         "command": "visualEditor.chooseProject",
         "title": "Choose Project",
         "category": "Visual Editor",
@@ -66,9 +77,14 @@
           "group": "navigation@1"
         },
         {
-          "command": "visualEditor.chooseProject",
+          "command": "visualEditor.openReview",
           "when": "view == visualEditor.projects",
           "group": "navigation@2"
+        },
+        {
+          "command": "visualEditor.chooseProject",
+          "when": "view == visualEditor.projects",
+          "group": "navigation@3"
         }
       ]
     }

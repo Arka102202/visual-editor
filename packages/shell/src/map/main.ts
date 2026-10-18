@@ -4,20 +4,17 @@
 import type { Layout, PlacedCard } from '../layout';
 import { MAX_FIELDS } from '../layout';
 import type { FromMap, ToMap } from '../mapMessages';
+import { addStyles, el } from '../ui/dom';
 
 declare function acquireVsCodeApi(): { postMessage(message: FromMap): void };
 const vscode = acquireVsCodeApi();
 
-const style = document.createElement('style');
-style.textContent = `
-  :root { color-scheme: light dark; }
-  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--vscode-editor-background); color: var(--vscode-foreground); font: var(--vscode-font-size, 13px) / 1.4 var(--vscode-font-family, system-ui); }
+addStyles(`
   .bar { position: absolute; inset: 0 0 auto 0; height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--vscode-panel-border, #8883); background: var(--vscode-editor-background); z-index: 2; }
   .bar select, .bar button { font: inherit; color: var(--vscode-dropdown-foreground); background: var(--vscode-dropdown-background); border: 1px solid var(--vscode-dropdown-border, #8884); border-radius: 4px; padding: 3px 8px; }
   .bar button { cursor: pointer; color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); border-color: transparent; }
   .bar .name { font-weight: 600; }
   .bar .chips { display: flex; gap: 4px; flex: 1; overflow: hidden; }
-  .chip { font-size: 11px; padding: 1px 7px; border-radius: 10px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); white-space: nowrap; }
   .zoom { font-size: 11px; opacity: .7; min-width: 36px; text-align: right; }
   .stage { position: absolute; inset: 40px 0 0 0; overflow: hidden; cursor: grab; touch-action: none; }
   .stage.dragging { cursor: grabbing; }
@@ -28,6 +25,12 @@ style.textContent = `
   svg.lines text { font-size: 11px; fill: var(--vscode-descriptionForeground, #888); }
   .section-title { position: absolute; font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; opacity: .65; }
   .card { position: absolute; box-sizing: border-box; border-radius: 8px; background: var(--vscode-editorWidget-background, #2a2a2a); border: 1px solid var(--vscode-editorWidget-border, #8884); box-shadow: 0 1px 3px #0003; cursor: default; overflow: hidden; }
+  .card.proposed { border: 2px solid #d9a400; }
+  .card.changed { border: 2px solid #2f6fdb; }
+  .card .mark { font-size: 10px; font-weight: 600; padding: 0 6px; border-radius: 6px; }
+  .card.proposed .mark { background: #d9a400; color: #1e1e1e; }
+  .card.changed .mark { background: #2f6fdb; color: #fff; }
+  .bar .chip.proposed, .bar .chip.changed { cursor: pointer; border: 0; font: inherit; font-size: 11px; padding: 1px 8px; }
   .card.selected { border-color: var(--vscode-focusBorder, #39f); box-shadow: 0 0 0 2px var(--vscode-focusBorder, #39f); }
   .card .head { padding: 8px 12px 6px; border-bottom: 1px solid #8882; height: 56px; box-sizing: border-box; }
   .card .top { display: flex; align-items: center; gap: 6px; }
@@ -43,17 +46,8 @@ style.textContent = `
   .empty { position: absolute; inset: 40px 0 0 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; gap: 6px; }
   .empty h2 { margin: 0; font-size: 16px; font-weight: 600; }
   .empty p { margin: 0; opacity: .7; max-width: 420px; }
-  [hidden] { display: none !important; }
-`;
-document.head.append(style);
+`);
 
-/** Makes an element with a class and text (text is never read as HTML). */
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  if (text !== undefined) e.textContent = text;
-  return e;
-}
 const SVG = 'http://www.w3.org/2000/svg';
 
 // The page: a bar on top, the stage below, and a message for when there's nothing to draw.
@@ -65,7 +59,11 @@ const chips = el('div', 'chips');
 const zoomText = el('span', 'zoom');
 const fitButton = el('button', undefined, 'Fit');
 fitButton.title = 'Show the whole map';
-bar.append(picker, projectName, chips, zoomText, fitButton);
+const proposedBadge = el('button', 'chip proposed');
+proposedBadge.title = 'Changes waiting for your OK: open Review';
+const changedBadge = el('button', 'chip changed');
+changedBadge.title = 'Cards whose code changed outside review (by hand, a formatter, git…). Click to clear the marks.';
+bar.append(picker, projectName, chips, proposedBadge, changedBadge, zoomText, fitButton);
 const stage = el('div', 'stage');
 const world = el('div', 'world');
 stage.append(world);
@@ -80,6 +78,7 @@ let view = { x: 40, y: 40, k: 1 };
 let layout: Layout = { sections: [], links: [], width: 0, height: 0 };
 let shownRoot: string | undefined;
 let selected: string | undefined;
+let marks: ToMap['marks'] = {};
 const cardEls = new Map<string, HTMLElement>();
 let lineEls: { from: string; to: string; path: SVGPathElement }[] = [];
 
@@ -113,7 +112,12 @@ function drawCard(c: PlacedCard): HTMLElement {
   Object.assign(card.style, { left: `${c.x}px`, top: `${c.y}px`, width: `${c.w}px`, height: `${c.h}px` });
   const head = el('div', 'head');
   const top = el('div', 'top');
-  top.append(el('span', 'label', item.label), el('span', 'kind', item.kind));
+  top.append(el('span', 'label', item.label));
+  const mark = marks[item.id];
+  if (mark) {
+    card.classList.add(mark);
+    top.append(el('span', 'mark', mark === 'proposed' ? 'proposed' : 'changed'));
+  } else top.append(el('span', 'kind', item.kind));
   head.append(top);
   if (item.sub) head.append(el('div', 'sub', item.sub));
   card.append(head);
@@ -208,6 +212,11 @@ function show(m: ToMap) {
   emptyTitle.textContent = m.empty?.title ?? '';
   emptyDetail.textContent = m.empty?.detail ?? '';
   layout = m.layout;
+  marks = m.marks;
+  proposedBadge.textContent = `${m.proposed} proposed`;
+  proposedBadge.hidden = !m.proposed;
+  changedBadge.textContent = `${m.changed} file${m.changed === 1 ? '' : 's'} changed outside review`;
+  changedBadge.hidden = !m.changed;
   draw();
   // A new project starts fitted; updates to the same one keep where you were looking.
   if (m.current !== shownRoot) {
@@ -255,6 +264,8 @@ stage.addEventListener(
   { passive: false },
 );
 fitButton.addEventListener('click', fit);
+proposedBadge.addEventListener('click', () => vscode.postMessage({ type: 'openReview' }));
+changedBadge.addEventListener('click', () => vscode.postMessage({ type: 'clearChanged' }));
 picker.addEventListener('change', () => vscode.postMessage({ type: 'choose', root: picker.value }));
 
 window.addEventListener('message', (e: MessageEvent<ToMap>) => {
