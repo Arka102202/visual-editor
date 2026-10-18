@@ -6,7 +6,8 @@ import * as vscode from 'vscode';
 import type { OutsideChanges } from './changes';
 import type { CurrentProject } from './currentProject';
 import type { FromPreview, Frame, ToPreview } from './previewMessages';
-import { overlay, previewerFor, proposalSides, render, situations, SIZES, type Size } from './previews';
+import { overlay, previewerFor, proposalSides, render, situations, SIZES, type Found, type Size } from './previews';
+import type { Item, ProjectInfo } from '@visual-editor/contract';
 import type { PreviewServer } from './previewServer';
 import type { ProjectIndex } from './projectIndex';
 import type { Review } from './review';
@@ -34,6 +35,8 @@ export class PreviewPanel implements vscode.Disposable {
   shownFrames = 0;
   /** The tab was moved into its own floating window. */
   private floating = false;
+  /** The previewer that drew the current preview, to pass on what its pages say. */
+  private drawn: { found: Found; item: Item; project: ProjectInfo } | undefined;
   /** What the preview pages said lately (newest last). */
   readonly frameMessages: Record<string, unknown>[] = [];
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -89,6 +92,12 @@ export class PreviewPanel implements vscode.Disposable {
     if (m.type === 'frame') {
       this.frameMessages.push(m.data);
       if (this.frameMessages.length > 50) this.frameMessages.shift();
+      const d = this.drawn;
+      try {
+        d?.found.previewer.heard?.(m.data, { item: d.item, project: d.project });
+      } catch {
+        // A plugin failing to listen doesn't stop the preview.
+      }
       return;
     }
     if (m.type === 'shown') {
@@ -136,6 +145,7 @@ export class PreviewPanel implements vscode.Disposable {
       this.panel.title = 'Preview';
       return this.post({ type: 'show', title: item?.label ?? 'Preview', situations: [], situation: '', theme: this.theme, size: this.size, frames: [{ error: item ? 'No plugin can preview this card.' : 'This card is gone (its code changed or its plugin was removed).' }], floating: this.floating });
     }
+    this.drawn = { found, item, project: state.project };
     const list = situations(found, item);
     const situation = this.situation && list.includes(this.situation) ? this.situation : list[0];
     const base = vscodeFiles(target.root, this.changes).read;
