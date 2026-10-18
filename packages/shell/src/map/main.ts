@@ -13,12 +13,16 @@ declare function acquireVsCodeApi(): { postMessage(message: FromMap): void };
 const vscode = acquireVsCodeApi();
 
 addStyles(`
-  .bar { position: absolute; inset: 0 0 auto 0; height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--vscode-panel-border, #8883); background: var(--vscode-editor-background); z-index: 2; }
+  /* One line always: when the space is too small the bar scrolls sideways; nothing in it wraps or changes shape. */
+  .bar { position: absolute; inset: 0 0 auto 0; height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--vscode-panel-border, #8883); background: var(--vscode-editor-background); z-index: 2; overflow-x: auto; overflow-y: hidden; white-space: nowrap; scrollbar-width: thin; }
+  .bar::-webkit-scrollbar { height: 4px; }
+  .bar::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, #8886); border-radius: 2px; }
+  .bar > * { flex: none; }
   .bar select, .bar button { font: inherit; color: var(--vscode-dropdown-foreground); background: var(--vscode-dropdown-background); border: 1px solid var(--vscode-dropdown-border, #8884); border-radius: 4px; padding: 3px 8px; }
   .bar button { cursor: pointer; color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); border-color: transparent; }
   .bar .name { font-weight: 600; }
-  .bar .chips { display: flex; gap: 4px; overflow: hidden; }
-  .tabs { display: flex; gap: 2px; flex: 1; overflow: hidden; margin-left: 8px; }
+  .bar .chips { display: flex; gap: 4px; }
+  .bar > .tabs { display: flex; gap: 2px; flex: 1 0 auto; margin-left: 8px; }
   .tabs button { background: transparent; color: var(--vscode-foreground); opacity: .7; padding: 3px 10px; border-radius: 4px; white-space: nowrap; }
   .tabs button.on { opacity: 1; background: var(--vscode-toolbar-activeBackground, #8883); font-weight: 600; }
   .tabs button .n { opacity: .6; font-weight: normal; margin-left: 4px; }
