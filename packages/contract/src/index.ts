@@ -4,7 +4,7 @@
 // No VS Code imports here: plugins and the shell's tests use it outside VS Code too.
 
 /** The contract version this package describes. Plugins say which version they were built for. */
-export const CONTRACT_VERSION = 1;
+export const CONTRACT_VERSION = 2;
 
 /** Something that can be stopped or removed (same shape as VS Code's Disposable). */
 export interface Disposable {
@@ -111,6 +111,38 @@ export interface MapDefinition {
   description?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Previews (contract 2): how a card looks. The shell owns the frame (sizes, light and dark, situations, before and
+// after a proposal); a plugin only says what to show in it.
+// ---------------------------------------------------------------------------
+
+export interface PreviewRequest {
+  item: Item;
+  project: ProjectInfo;
+  /** One of the situations the previewer offers (its first one by default). */
+  situation: string;
+  theme: 'light' | 'dark';
+  /** The frame's width in CSS pixels (e.g. 375 for Mobile). */
+  width: number;
+  /**
+   * A file's text (relative path), or undefined when it doesn't exist. Always read through this: when the preview is
+   * for a proposal, it returns the proposed text, so Before and After can be shown without changing anything.
+   */
+  read(path: string): Promise<string | undefined>;
+}
+
+/** What to show: a whole HTML page (scripts allowed, no network beyond this computer), or the address of a dev server page. */
+export type PreviewOutput = { html: string } | { url: string };
+
+export interface Previewer {
+  id: string;
+  /** Which cards it can preview. */
+  wants(item: Item): boolean;
+  /** Named situations to choose from, e.g. ["normal", "empty", "loading"]. */
+  situations?(item: Item): string[];
+  render(request: PreviewRequest): PreviewOutput | Promise<PreviewOutput>;
+}
+
 /** A Visual Editor plugin. Fill only the slots you need; more slots come in later contract versions. */
 export interface Plugin {
   /** Short and unique, e.g. "react", "express". */
@@ -127,6 +159,8 @@ export interface Plugin {
   detect(project: ProjectInfo): Detection | undefined | Promise<Detection | undefined>;
   readers?: Reader[];
   maps?: MapDefinition[];
+  /** Contract 2: previews of its cards. */
+  previews?: Previewer[];
 }
 
 // ---------------------------------------------------------------------------

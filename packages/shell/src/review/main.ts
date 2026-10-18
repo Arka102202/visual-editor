@@ -46,6 +46,7 @@ addStyles(`
   .empty h2 { font-size: 16px; margin: 0 0 6px; }
   .empty p { opacity: .7; margin: 0 0 16px; }
   .problems { font-size: 12px; padding: 10px 14px; opacity: .8; }
+  .try { margin: 18px 14px; }
 `);
 
 const STATUS_WORDS: Record<ReviewItem['status'], string> = {
@@ -78,12 +79,17 @@ function show(m: ToReview) {
   const done = m.items.filter((i) => i.status !== 'proposed');
   if (waiting.length) list.append(el('div', 'group', `Waiting for you (${waiting.length})`), ...waiting.map(row));
   if (done.length) list.append(el('div', 'group', 'Done'), ...done.map(row));
+  // Always at hand, not only when Review is empty.
+  const more = el('button', 'try', 'Try an example proposal');
+  more.title = tryButton.title;
+  more.addEventListener('click', () => vscode.postMessage({ type: 'try' }));
   if (m.problems.length) {
     const box = el('div', 'problems');
     box.append(el('div', 'group', "Couldn't read"));
     for (const p of m.problems) box.append(el('div', undefined, `${p.file}: ${p.message}`));
     list.append(box);
   }
+  list.append(more);
   const chosen = m.items.find((i) => i.id === m.selected);
   if (chosen) drawDetail(chosen);
 }
@@ -134,6 +140,9 @@ function drawDetail(item: ReviewItem) {
     const undo = button('Undo', undefined, 'Put the files back as they were', { type: 'undo', id: item.id });
     undo.disabled = item.conflicts.length > 0;
     actions.append(undo);
+  }
+  for (const p of item.previews) {
+    actions.append(button(`Preview ${p.label}`, undefined, 'See it before and after this change, side by side', { type: 'preview', id: item.id, item: p.id }));
   }
   if (actions.childElementCount) detail.append(actions);
 

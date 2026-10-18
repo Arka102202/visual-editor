@@ -2,13 +2,14 @@
 
 import type * as vscode from 'vscode';
 
-export function webviewPage(webview: vscode.Webview, script: vscode.Uri, title: string): string {
+/** `extraCsp`: more policy, e.g. which frames a page may show. */
+export function webviewPage(webview: vscode.Webview, script: vscode.Uri, title: string, extraCsp = ''): string {
   const nonce = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, '0')).join('');
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; ${extraCsp}">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title}</title>
 </head>

@@ -20,6 +20,8 @@ export interface CardMemory {
   id: string;
   /** Notes, rules and decisions about it, and changes to it, newest first. */
   entries: MemoryEntry[];
+  /** A plugin can show how it looks. */
+  canPreview: boolean;
 }
 
 export type ShowMap = {
@@ -48,6 +50,7 @@ export type FromMap =
   /** A card was chosen (its notes and history are wanted), or none. */
   | { type: 'card'; id?: string }
   | { type: 'addNote'; id: string }
+  | { type: 'preview'; id: string }
   | { type: 'clearChanged' }
   /** Open a card's code: path relative to the shown project's root. */
   | { type: 'open'; path: string; line?: number };

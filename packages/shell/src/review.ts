@@ -5,6 +5,8 @@
 import * as vscode from 'vscode';
 import { webviewPage } from './webviewPage';
 import { vscodeFiles } from './vscodeFiles';
+import { previewableFor } from './previews';
+import type { PreviewTarget } from './previewPanel';
 import { join } from 'node:path';
 import type { Disposable } from '@visual-editor/contract';
 import type { OutsideChanges } from './changes';
@@ -22,6 +24,8 @@ export class Review implements vscode.Disposable {
   private panel: vscode.WebviewPanel | undefined;
   private ready = false;
   private selected: string | undefined;
+  /** Opens the Preview tab (set once the preview panel exists). */
+  openPreview: ((target: PreviewTarget) => void) | undefined;
   private readonly subscriptions: vscode.Disposable[] = [];
 
   constructor(
@@ -190,6 +194,7 @@ export class Review implements vscode.Disposable {
     }
     this.selected = m.id;
     if (m.type === 'select') return this.send();
+    if (m.type === 'preview') return this.openPreview?.({ root, item: m.item, proposal: m.id });
     const store = this.store(root);
     const p = store.get(m.id);
     if (!p) return;
@@ -266,6 +271,7 @@ export class Review implements vscode.Disposable {
           ...counts(c.before, c.after),
           hunks: hunks(c.before, c.after),
         })),
+        previews: state ? previewableFor(state, p).map((i) => ({ id: i.id, label: i.label })) : [],
         conflicts: files ? (p.status === 'proposed' ? await conflicts(p, files) : p.status === 'applied' ? await undoConflicts(p, files) : []) : [],
       });
     }

@@ -144,6 +144,12 @@ function showCard(m: CardMemory) {
     open.addEventListener('click', () => vscode.postMessage({ type: 'open', path: item.source!.path, line: item.source!.line }));
     buttons.append(open);
   }
+  if (m.canPreview) {
+    const preview = el('button', 'primary', 'Preview');
+    preview.title = 'See how it looks';
+    preview.addEventListener('click', () => vscode.postMessage({ type: 'preview', id: item.id }));
+    buttons.prepend(preview);
+  }
   const note = el('button', undefined, 'Add a note');
   note.title = 'Something to remember about this card (kept in the project, read by assistants)';
   note.addEventListener('click', () => vscode.postMessage({ type: 'addNote', id: item.id }));

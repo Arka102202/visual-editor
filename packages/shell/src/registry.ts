@@ -26,6 +26,9 @@ export function checkPlugin(plugin: Partial<Plugin> | undefined, taken: (id: str
   for (const r of plugin.readers ?? []) {
     if (!r?.id || typeof r.wants !== 'function' || typeof r.read !== 'function') return 'One of its readers is missing an id, wants() or read().';
   }
+  for (const p of plugin.previews ?? []) {
+    if (!p?.id || typeof p.wants !== 'function' || typeof p.render !== 'function') return 'One of its previews is missing an id, wants() or render().';
+  }
   return undefined;
 }
 

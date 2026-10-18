@@ -35,6 +35,10 @@ See your project as maps, review every change before it happens, and keep a memo
    ("give me an overview of this project", "add a subtitle to the card"). It reads the map, rules and memory through
    the **assistant hub**, and every change it wants arrives in Review as a proposal.
 
+8. Click a card on the map, then **Preview**: the plugin draws how it looks, in a frame with sizes (Mobile, Tablet,
+   Desktop, Fit), Light and Dark, and its situations (e.g. "empty"). In Review, **Preview** on a proposal shows
+   **Before** and **After** side by side, drawn from the proposed files before anything changes.
+
 Proposals are files in the project's `.visual-editor/proposals/` folder, so assistants, agents and plugins all
 propose the same way, and nothing changes the code without review. Memory lives in `.visual-editor/memory/entries/`,
 one small file per entry, so it can go into git and the team shares it. The hub runs on this computer only, behind a

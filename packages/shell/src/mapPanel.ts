@@ -11,6 +11,8 @@ import type { FromMap, ShowMap, ToMap } from './mapMessages';
 import type { ProjectIndex } from './projectIndex';
 import type { Review } from './review';
 import { forCard } from './memory';
+import { previewerFor } from './previews';
+import type { PreviewTarget } from './previewPanel';
 import type { ProjectMemory } from './memoryView';
 
 export class MapPanel {
@@ -18,6 +20,8 @@ export class MapPanel {
   private ready = false;
   /** The card whose notes and history the page shows. */
   private card: string | undefined;
+  /** Opens the Preview tab (set once the preview panel exists). */
+  openPreview: ((target: PreviewTarget) => void) | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private readonly subscriptions: vscode.Disposable[] = [];
 
@@ -85,6 +89,9 @@ export class MapPanel {
     } else if (m.type === 'card') {
       this.card = m.id;
       this.sendCard();
+    } else if (m.type === 'preview') {
+      const root = this.current.get()?.project.root;
+      if (root) this.openPreview?.({ root, item: m.id });
     } else if (m.type === 'addNote') {
       void this.addNote(m.id);
     } else if (m.type === 'clearChanged') {
@@ -115,7 +122,7 @@ export class MapPanel {
     const state = this.current.get();
     const item = state?.items.find((i) => i.id === this.card);
     if (!state || !item) return;
-    void this.panel.webview.postMessage({ type: 'card', id: item.id, entries: forCard(this.memory.entries(state.project.root), item) } satisfies ToMap);
+    void this.panel.webview.postMessage({ type: 'card', id: item.id, entries: forCard(this.memory.entries(state.project.root), item), canPreview: !!previewerFor(state, item) } satisfies ToMap);
   }
 
   /** Changes come in bursts; redraw once they settle. */
