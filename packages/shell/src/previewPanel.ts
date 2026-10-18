@@ -32,6 +32,10 @@ export class PreviewPanel implements vscode.Disposable {
   private drawing = 0;
   /** Frames the page says are on screen. */
   shownFrames = 0;
+  /** The tab was moved into its own floating window. */
+  private floating = false;
+  /** What the preview pages said lately (newest last). */
+  readonly frameMessages: Record<string, unknown>[] = [];
   private timer: ReturnType<typeof setTimeout> | undefined;
   private readonly subscriptions: vscode.Disposable[] = [];
 
@@ -61,7 +65,7 @@ export class PreviewPanel implements vscode.Disposable {
         localResourceRoots: [dist],
       });
       panel.iconPath = vscode.Uri.joinPath(this.extensionUri, 'media', 'icon.svg');
-      panel.webview.html = webviewPage(panel.webview, vscode.Uri.joinPath(dist, 'preview.js'), 'Preview', 'frame-src http://127.0.0.1:* http://localhost:*;');
+      panel.webview.html = webviewPage(panel.webview, vscode.Uri.joinPath(dist, 'preview.js'), 'Preview', 'frame-src http://127.0.0.1:* http://localhost:* http://*.localhost:*;');
       panel.webview.onDidReceiveMessage((m: FromPreview) => this.receive(m), undefined, this.subscriptions);
       panel.onDidDispose(() => {
         this.panel = undefined;
@@ -82,10 +86,16 @@ export class PreviewPanel implements vscode.Disposable {
   }
 
   private receive(m: FromPreview) {
+    if (m.type === 'frame') {
+      this.frameMessages.push(m.data);
+      if (this.frameMessages.length > 50) this.frameMessages.shift();
+      return;
+    }
     if (m.type === 'shown') {
       this.shownFrames = m.frames;
       return;
     }
+    if (m.type === 'window') return void this.toggleWindow();
     if (m.type === 'ready') this.ready = true;
     else if (m.type === 'situation') this.situation = m.name;
     else if (m.type === 'theme') this.theme = m.theme;
@@ -93,6 +103,15 @@ export class PreviewPanel implements vscode.Disposable {
       this.size = m.size;
       this.width = Math.max(200, Math.round(m.width));
     }
+    void this.draw();
+  }
+
+  /** Moves the tab into a floating window (where it can go full screen), or back into the main window. */
+  private async toggleWindow() {
+    if (!this.panel) return;
+    this.panel.reveal(undefined, false);
+    await vscode.commands.executeCommand(this.floating ? 'workbench.action.restoreEditorsToMainWindow' : 'workbench.action.moveEditorToNewWindow');
+    this.floating = !this.floating;
     void this.draw();
   }
 
@@ -115,7 +134,7 @@ export class PreviewPanel implements vscode.Disposable {
     const found = state && item ? previewerFor(state, item) : undefined;
     if (!state || !item || !found) {
       this.panel.title = 'Preview';
-      return this.post({ type: 'show', title: item?.label ?? 'Preview', situations: [], situation: '', theme: this.theme, size: this.size, frames: [{ error: item ? 'No plugin can preview this card.' : 'This card is gone (its code changed or its plugin was removed).' }] });
+      return this.post({ type: 'show', title: item?.label ?? 'Preview', situations: [], situation: '', theme: this.theme, size: this.size, frames: [{ error: item ? 'No plugin can preview this card.' : 'This card is gone (its code changed or its plugin was removed).' }], floating: this.floating });
     }
     const list = situations(found, item);
     const situation = this.situation && list.includes(this.situation) ? this.situation : list[0];
@@ -148,6 +167,7 @@ export class PreviewPanel implements vscode.Disposable {
       theme: this.theme,
       size: this.size,
       frames,
+      floating: this.floating,
     });
   }
 }
