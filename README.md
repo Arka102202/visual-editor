@@ -17,6 +17,8 @@ See your project as maps, review every change before it happens, and keep a memo
 1. `npm install` (once)
 2. Open this folder in VS Code, open **Run and Debug**, pick **Visual Editor + Hello plugin**, press **F5**.
 3. In the new window, the status bar shows **Visual Editor · 1 plugin**, and the Visual Editor side panel lists it.
+   Its **Projects** list shows each project found (one, several side by side, or a monorepo's packages), the plugins
+   that suit it, and how many cards they found. Add or edit a file and the count follows.
 
 ## Work on it
 

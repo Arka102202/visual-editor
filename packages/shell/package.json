@@ -30,6 +30,10 @@
     "views": {
       "visualEditor": [
         {
+          "id": "visualEditor.projects",
+          "name": "Projects"
+        },
+        {
           "id": "visualEditor.plugins",
           "name": "Plugins"
         }
