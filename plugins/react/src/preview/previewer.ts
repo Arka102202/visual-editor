@@ -10,8 +10,10 @@ import { DevServer, devPlan } from './devServer';
 import { appSetup, exampleProps, PREVIEW_DIR, previewHtml, previewTsx } from './harness';
 import { situationsModule } from './situations';
 import { findDexie, seedFor, typesFrom } from './dexie';
-import { readShapes } from '../read/shapes';
-import { replyRules, type ReplyRule } from './replies';
+import { readShapesAndBindings, type Binding, type ReplyShape, type Shape } from '../read/shapes';
+import { loadTypeScript, mergeShapes, TypeView } from '../read/types';
+import { exampleOf, replyRules, type ReplyRule } from './replies';
+import { CALLBACK } from './harness';
 import { record, withRecordings } from './recordings';
 
 /** Situations every component can be shown in. "live backend" calls the developer's real dev backend. */
@@ -21,7 +23,12 @@ const SITUATION_IDS: Record<string, string> = { 'long text': 'long', [LIVE]: 'li
 
 interface Known {
   model: FeModel;
-  /** Example replies for the requests the code makes, from how it uses them. */
+  /** Reply shapes from how the code uses the data, and where the variables holding them are declared. */
+  used: ReplyShape[];
+  bindings: Binding[];
+  /** Example replies (types first, then usage), worked out when first needed. */
+  rules?: ReplyRule[];
+  /** Reply matches the code makes, for filing recordings. */
   replies: ReplyRule[];
   /** File texts, to read the TypeScript types of props for example values. */
   texts: Map<string, string>;
@@ -30,6 +37,49 @@ interface Known {
 export class ReactPreviews {
   private readonly known = new Map<string, Known>();
   private readonly servers = new Map<string, DevServer>();
+  /** Each project's TypeScript view (null: the project has no TypeScript with the compiler interface). */
+  private readonly types = new Map<string, TypeView | null>();
+  /** For tests: the TypeScript to use when the project has none of its own. */
+  fallbackTypeScript: ReturnType<typeof loadTypeScript> = undefined;
+
+  /** The project's types, built on first use; undefined when it has no TypeScript (usage-based shapes then). */
+  typesOf(root: string): TypeView | undefined {
+    if (!this.types.has(root)) {
+      const ts = loadTypeScript(root) ?? this.fallbackTypeScript;
+      this.types.set(root, ts ? new TypeView(ts, root) : null);
+    }
+    return this.types.get(root) ?? undefined;
+  }
+
+  /** Example replies: each reply's TypeScript type where it has one, merged with what the code uses. */
+  private rulesFor(root: string, known: Known): ReplyRule[] {
+    if (known.rules) return known.rules;
+    const view = this.typesOf(root);
+    if (!view) return (known.rules = known.replies);
+    const typed = new Map<string, Shape>();
+    for (const b of known.bindings) {
+      const type = view.typeAt(b.path, b.start);
+      let shape = type ? view.shapeOf(type) : undefined;
+      // A React Query result kept whole (const q = useQuery…): the reply is its .data.
+      if (shape && b.query && shape.fields?.data && shape.fields?.isLoading) shape = shape.fields.data;
+      if (!shape) continue;
+      // The variable holds part of the reply (data.items): put it back in place.
+      for (const part of [...b.at].reverse()) shape = { kind: 'object', fields: { [part]: shape } };
+      const key = `${b.method} ${b.match}`;
+      typed.set(key, mergeShapes(typed.get(key), shape));
+    }
+    const merged = known.used.map((u) => ({ ...u, shape: mergeShapes(typed.get(`${u.method} ${u.match}`), u.shape) }));
+    return (known.rules = replyRules(merged));
+  }
+
+  /** Example props: from the component's props type when there is one, else from names. */
+  private propsFor(root: string, c: FeComponent, types: ReturnType<typeof typesFrom>): Record<string, unknown> {
+    const view = this.typesOf(root);
+    const type = view?.propsOf(c.path, c.name);
+    const shape = type ? view!.shapeOf(type) : undefined;
+    if (!shape?.fields) return exampleProps(c, types);
+    return Object.fromEntries(Object.entries(shape.fields).map(([name, s]) => [name, s.kind === 'function' ? { [CALLBACK]: name } : exampleOf(s, name)]));
+  }
   /** Whether the folder is trusted in VS Code (set by the extension): previews run the project's own code. */
   trusted: () => boolean = () => true;
   /** Whether previews may call the developer's real dev backend in this project (asks the first time). */
@@ -40,7 +90,9 @@ export class ReactPreviews {
   /** What the reader found in a project, kept for previews. */
   remember(root: string, model: FeModel, files: SourceFile[]) {
     const code = files.filter((f) => /\.[cm]?[jt]sx?$/.test(f.path));
-    this.known.set(root, { model, replies: replyRules(readShapes(code)), texts: new Map(files.map((f) => [f.path, f.text])) });
+    const { replies: used, bindings } = readShapesAndBindings(code);
+    this.known.set(root, { model, used, bindings, replies: replyRules(used), texts: new Map(files.map((f) => [f.path, f.text])) });
+    this.types.get(root)?.invalidate();
   }
 
   /** The React projects read so far (their folders). */
@@ -106,7 +158,7 @@ export class ReactPreviews {
     const dexie = findDexie(known.texts);
     const seed = dexie ? seedFor(dexie, route, types) : undefined;
     const key = createHash('sha256').update(`${c.path}#${c.name}`).digest('hex').slice(0, 16);
-    writeIfChanged(join(root, PREVIEW_DIR, 'cards', `${key}.json`), JSON.stringify({ path: c.path, export: c.name, props: exampleProps(c, types), ...(route ? { route } : {}), ...(seed ? { seed } : {}), requests: withRecordings(root, known.replies), ...(login ? { login } : {}) }, null, 2));
+    writeIfChanged(join(root, PREVIEW_DIR, 'cards', `${key}.json`), JSON.stringify({ path: c.path, export: c.name, props: this.propsFor(root, c, types), ...(route ? { route } : {}), ...(seed ? { seed } : {}), requests: withRecordings(root, this.rulesFor(root, known)), ...(login ? { login } : {}) }, null, 2));
 
     let server = this.servers.get(root);
     if (!server) {

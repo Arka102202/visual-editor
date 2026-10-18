@@ -9,9 +9,23 @@ import { parseSource, walk, type SourceFile } from './ast';
 
 /** What a value looks like, as far as the code shows. */
 export interface Shape {
-  kind?: 'string' | 'number' | 'boolean' | 'array' | 'object';
+  kind?: 'string' | 'number' | 'boolean' | 'array' | 'object' | 'date' | 'function';
   fields?: Record<string, Shape>;
   item?: Shape;
+  /** The only values it can have ('admin' | 'user', an enum's values), when the type says. */
+  values?: (string | number)[];
+}
+
+/** Where a variable holding (part of) a reply is declared: the type reader asks TypeScript about it there. */
+export interface Binding {
+  path: string;
+  /** The declared name's position in the file's text. */
+  start: number;
+  match: string;
+  method: string;
+  /** Where the variable's value sits in the reply ([] = the whole reply), and whether it's a React Query result. */
+  at: string[];
+  query: boolean;
 }
 
 /** An example reply for requests whose address (or React Query key) contains `match`. */
@@ -73,6 +87,8 @@ function methodOf(options: N | undefined): string {
 
 class Scope {
   readonly values = new Map<string, Source>();
+  /** Where each name is declared (its position), for asking TypeScript its type. */
+  readonly declared = new Map<string, number>();
   constructor(readonly parent?: Scope) {}
   get(name: string): Source | undefined {
     return this.values.get(name) ?? this.parent?.get(name);
@@ -82,19 +98,33 @@ class Scope {
 export class ShapeReader {
   /** API helpers: `api.getOrders` / `getOrders` → what calling them gives. */
   private readonly helpers = new Map<string, Source>();
+  /**
+   * Helpers that take the address as a parameter (`getJson<T>(url)`, `request(path, …)`): which parameter, any fixed
+   * start they add (`${BASE}${path}` keeps only the path), and what calling them gives.
+   */
+  private readonly addressHelpers = new Map<string, { param: number; as: Source['as']; method: string }>();
+  /** While indexing a helper: its parameter names, so a request using one is recognised. */
+  private params: string[] = [];
   /** Custom hooks: `useProduct` → what each returned name holds. */
   private readonly hooks = new Map<string, Map<string, Source>>();
   /** Components by name (capitalised functions), to follow data passed down as props. */
   private readonly components = new Map<string, t.Function>();
+  /** Where data variables are declared (for exact types). */
+  readonly bindings: Binding[] = [];
+  /** The file being read now. */
+  private file = '';
   /** The shapes found so far, by match. */
   private readonly replies = new Map<string, ReplyShape>();
 
   /** Reads all files. Helpers and hooks first, so components that use them are understood. */
   read(files: SourceFile[]): ReplyShape[] {
-    const asts = files.map((f) => parseSource(f)).filter((a): a is t.File => !!a);
+    const asts = files.map((f) => ({ path: f.path, ast: parseSource(f) })).filter((a): a is { path: string; ast: t.File } => !!a.ast);
     // Twice: a hook may use a helper defined in a file read later.
-    for (let pass = 0; pass < 2; pass++) for (const ast of asts) this.index(ast);
-    for (const ast of asts) this.collect(ast);
+    for (let pass = 0; pass < 2; pass++) for (const { ast } of asts) this.index(ast);
+    for (const { path, ast } of asts) {
+      this.file = path;
+      this.collect(ast);
+    }
     return [...this.replies.values()].sort((a, b) => b.match.length - a.match.length);
   }
 
@@ -138,6 +168,8 @@ export class ShapeReader {
     const [first, second] = c.arguments as N[];
     // fetch(url, options)
     if (callee.type === 'Identifier' && callee.name === 'fetch') {
+      const param = this.paramOf(first);
+      if (param !== undefined) return { match: `\u0000${param}`, method: methodOf(second), as: 'response', at: [] };
       const match = matchOf(addressOf(first) ?? '');
       return match ? { match, method: methodOf(second), as: 'response', at: [] } : undefined;
     }
@@ -165,6 +197,8 @@ export class ShapeReader {
       if (name === 'then' && first?.type === 'Identifier') return undefined;
       // axios.get(url) / http.get(url) / api.post(url): any client with HTTP verbs and an address.
       if (name && HTTP_VERBS.has(name)) {
+        const param = this.paramOf(first);
+        if (param !== undefined) return { match: `\u0000${param}`, method: name === 'request' ? 'GET' : name.toUpperCase(), as: 'axios', at: [] };
         const match = matchOf(addressOf(first) ?? '');
         if (match && (match.startsWith('/') || /^https?:/.test(addressOf(first) ?? ''))) return { match, method: name === 'request' ? 'GET' : name.toUpperCase(), as: 'axios', at: [] };
       }
@@ -180,6 +214,13 @@ export class ShapeReader {
     }
     // getOrders()
     if (callee.type === 'Identifier' && this.helpers.has(callee.name)) return this.helpers.get(callee.name);
+    // getJson<Order[]>('/api/orders') / api.request('/me'): the address comes from the call.
+    const helperKey = callee.type === 'Identifier' ? callee.name : isMember(callee) && callee.object.type === 'Identifier' && propName(callee) ? `${callee.object.name}.${propName(callee)}` : undefined;
+    const helper = helperKey ? this.addressHelpers.get(helperKey) : undefined;
+    if (helper) {
+      const match = matchOf(addressOf(c.arguments[helper.param] as N) ?? '');
+      if (match) return { match, method: helper.method, as: helper.as, at: [] };
+    }
     // useQuery / useSWR: the result's .data is the reply.
     if (callee.type === 'Identifier' && QUERY_HOOKS.has(callee.name)) return this.queryValue(callee.name, c, scope);
     return undefined;
@@ -223,7 +264,10 @@ export class ShapeReader {
       if (prop.type !== 'ObjectProperty' || prop.key.type !== 'Identifier') continue;
       const part = this.part(base, prop.key.name);
       const target = prop.value.type === 'AssignmentPattern' ? prop.value.left : prop.value;
-      if (part && target.type === 'Identifier') scope.values.set(target.name, part);
+      if (part && target.type === 'Identifier') {
+        scope.values.set(target.name, part);
+        if (target.start != null) scope.declared.set(target.name, target.start);
+      }
       if (part && target.type === 'ObjectPattern') this.bindPattern(target, part, scope);
     }
   }
@@ -247,7 +291,7 @@ export class ShapeReader {
           if (p.key.type !== 'Identifier') continue;
           const fn = p.type === 'ObjectMethod' ? p : isFn(p.value) ? p.value : undefined;
           const made = fn && this.returned(fn);
-          if (made) this.helpers.set(`${n.id.name}.${p.key.name}`, made);
+          if (made) this.keep(`${n.id.name}.${p.key.name}`, made);
         }
       }
       // export function getOrders() / export const getOrders = () => …
@@ -257,13 +301,38 @@ export class ShapeReader {
       if (/^use[A-Z]/.test(named.name)) this.indexHook(named.name, named.fn);
       else {
         const made = this.returned(named.fn);
-        if (made) this.helpers.set(named.name, made);
+        if (made) this.keep(named.name, made);
       }
     });
   }
 
+  /** Which of the helper's parameters an address expression uses (`url`, `${BASE}${path}`), while indexing it. */
+  private paramOf(e: N | undefined): number | undefined {
+    if (!e || !this.params.length) return undefined;
+    if (e.type === 'Identifier') {
+      const i = this.params.indexOf(e.name);
+      return i >= 0 ? i : undefined;
+    }
+    if (e.type === 'TemplateLiteral') {
+      // `${BASE}${path}` or `${API}/v1${path}`: the last part is the parameter.
+      const last = e.expressions[e.expressions.length - 1];
+      return last && e.quasis[e.quasis.length - 1]?.value.raw === '' ? this.paramOf(last as N) : undefined;
+    }
+    if (e.type === 'BinaryExpression' && e.operator === '+') return this.paramOf(e.right as N);
+    return undefined;
+  }
+
   /** What a function returns, when it's a request's reply (or a response that leads to one). */
   private returned(fn: t.Function): Source | undefined {
+    this.params = fn.params.map((p) => (p.type === 'Identifier' ? p.name : p.type === 'AssignmentPattern' && p.left.type === 'Identifier' ? p.left.name : ''));
+    try {
+      return this.returnedNow(fn);
+    } finally {
+      this.params = [];
+    }
+  }
+
+  private returnedNow(fn: t.Function): Source | undefined {
     const scope = this.scopeFor(fn);
     if (fn.body.type !== 'BlockStatement') return this.valueOf(fn.body, scope);
     let found: Source | undefined;
@@ -271,6 +340,15 @@ export class ShapeReader {
       if (!found && n.type === 'ReturnStatement') found = this.valueOf(n.argument, scope);
     });
     return found;
+  }
+
+  /** A helper with a fixed address, or one whose address comes from a parameter. */
+  private keep(name: string, made: Source) {
+    if (made.match.startsWith('\u0000')) {
+      // A raw response from fetch still needs .json(); helpers that return it are rarely used for data.
+      if (made.as === 'response') return;
+      this.addressHelpers.set(name, { param: Number(made.match.slice(1)), as: made.as, method: made.method });
+    } else this.helpers.set(name, made);
   }
 
   /** A custom hook: what each name it returns holds (`return { product, isLoading }`, or `return useQuery(…)`). */
@@ -310,7 +388,10 @@ export class ShapeReader {
           // const [orders, setOrders] = useState(...)
           if (n.id.type === 'ArrayPattern' && n.init && isCall(n.init) && n.init.callee.type === 'Identifier' && /^use(State|Reducer)$/.test(n.init.callee.name)) {
             const [v, s] = n.id.elements;
-            if (v?.type === 'Identifier' && s?.type === 'Identifier') setters.set(s.name, v.name);
+            if (v?.type === 'Identifier' && s?.type === 'Identifier') {
+              setters.set(s.name, v.name);
+              if (v.start != null) scope.declared.set(v.name, v.start);
+            }
             return;
           }
           // const { product } = useProduct(id) / const x = useProduct()
@@ -321,14 +402,20 @@ export class ShapeReader {
                 if (p.type !== 'ObjectProperty' || p.key.type !== 'Identifier') continue;
                 const target = p.value.type === 'AssignmentPattern' ? p.value.left : p.value;
                 const v = hook.get(p.key.name);
-                if (v && target.type === 'Identifier') scope.values.set(target.name, v);
+                if (v && target.type === 'Identifier') {
+                  scope.values.set(target.name, v);
+                  if (target.start != null) scope.declared.set(target.name, target.start);
+                }
               }
             } else if (n.id.type === 'Identifier' && hook.get('')) scope.values.set(n.id.name, hook.get('')!);
             return;
           }
           const v = this.valueOf(n.init, scope);
           if (!v) return;
-          if (n.id.type === 'Identifier') scope.values.set(n.id.name, v);
+          if (n.id.type === 'Identifier') {
+            scope.values.set(n.id.name, v);
+            if (n.id.start != null) scope.declared.set(n.id.name, n.id.start);
+          }
           if (n.id.type === 'ObjectPattern') this.bindPattern(n.id, v, scope);
         }
         if (!isCall(n)) return;
@@ -371,6 +458,10 @@ export class ShapeReader {
       const scope = this.scopeFor(n);
       for (const [name, source] of scope.values) {
         if (source.as === 'response') continue;
+        const at = scope.declared.get(name);
+        if (at !== undefined && (source.as === 'body' || source.as === 'query')) {
+          this.bindings.push({ path: this.file, start: at, match: source.match, method: source.method, at: source.at, query: source.as === 'query' });
+        }
         // React Query / axios results hold the reply under .data.
         this.usesOf(n.body, new Map([[name, source.as === 'body' ? [] : ['data']]]), source);
       }
@@ -532,4 +623,11 @@ export class ShapeReader {
 /** The data shapes of a project's replies, from its files. */
 export function readShapes(files: SourceFile[]): ReplyShape[] {
   return new ShapeReader().read(files);
+}
+
+/** The shapes, and where the variables holding replies are declared (for exact types). */
+export function readShapesAndBindings(files: SourceFile[]): { replies: ReplyShape[]; bindings: Binding[] } {
+  const reader = new ShapeReader();
+  const replies = reader.read(files);
+  return { replies, bindings: reader.bindings };
 }

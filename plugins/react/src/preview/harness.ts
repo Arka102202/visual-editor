@@ -238,7 +238,10 @@ export function previewTsx(s: AppSetup): string {
     `    : installSituations({ id: situation, fixtures: { props: () => revive(c.props), situations: { normal: { requests: c.requests ?? [] } } }, log, win: window${p.reactQuery ? ', QueryClient' : ''} }).props`,
     `  // eslint-disable-next-line @typescript-eslint/no-explicit-any`,
     `  const mod = (await import(/* @vite-ignore */ '/' + c.path)) as Record<string, any>`,
-    `  const View = mod[c.export] ?? mod.default`,
+    `  // Its own export, or the file's default export only when that really is this component (memo/forwardRef too).`,
+    `  const def = mod.default`,
+    `  const defName = def && (def.displayName ?? def.name ?? def.type?.name ?? def.render?.name)`,
+    `  const View = mod[c.export] ?? (defName === c.export ? def : undefined)`,
     `  if (typeof View !== 'function' && typeof View !== 'object') throw new Error(c.export + ' is not exported from ' + c.path + ', so it cannot be shown on its own.')`,
     `  // A page fills the frame; a single component gets some room around it.`,
     `  if (!c.route) rootEl.style.padding = '24px'`,
@@ -333,12 +336,12 @@ function numberFor(n: string): number {
 
 function stringFor(n: string): string {
   // Text fields that usually hold JSON (data, config, payload…): valid JSON, so the app can read them back.
-  if (/^(data|json|payload|config|settings|meta|metadata|snapshot|value|state)$/.test(n)) return '{}';
+  if (/^(data|json|payload|config|settings|meta|metadata|snapshot)$/.test(n)) return '{}';
   if (n === 'id' || n.endsWith('id')) return 'id-1042';
   if (/email/.test(n)) return 'ada@example.com';
   if (/(^|_)(name|title|label|heading)$/.test(n) || n === 'name' || n === 'title') return 'Order dashboard';
   if (/desc|summary|subtitle|bio|text|content|message|body/.test(n)) return 'A short description, long enough to wrap onto a second line in narrow cards.';
-  if (/colou?r|accent/.test(n)) return '#6366f1';
+  if (/colou?r|accent|bg$|background|fg$|foreground|fill$|stroke$|tint$|shade$/.test(n)) return /fg$|foreground|text/.test(n) ? '#ffffff' : '#6366f1';
   if (/avatar|image|img|src|photo|picture|cover|thumbnail|logo/.test(n)) return PLACEHOLDER_IMAGE;
   if (/url|link|href/.test(n)) return '/';
   if (/status|state/.test(n)) return 'active';

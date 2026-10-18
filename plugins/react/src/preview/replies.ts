@@ -27,6 +27,10 @@ export function exampleOf(shape: Shape, name: string, i = 0): unknown {
   if (shape.kind === 'object' || shape.fields) {
     return Object.fromEntries(Object.entries(shape.fields ?? {}).map(([k, s]) => [k, exampleOf(s, k, i)]));
   }
+  // The type says exactly which values it can have ('admin' | 'user', an enum): one of those, varied across a list.
+  if (shape.values?.length) return shape.values[i % shape.values.length];
+  if (shape.kind === 'date') return new Date(Date.now() - i * 86_400_000).toISOString();
+  if (shape.kind === 'function') return { __visualEditorCallback: name };
   const kind = shape.kind ?? (NUMBERISH.test(name) ? 'number' : undefined);
   const value = sample(name, kind, 0);
   // Items in a list differ a little: ids, names and numbers.
