@@ -27,8 +27,13 @@ See your project as maps, review every change before it happens, and keep a memo
    **Approve and apply** changes the files (all or none), **Undo** puts them back, **Send back** and **Reject** keep a
    note. Edit a file by hand and its cards turn blue: changed outside review.
 
+6. The **Memory** list in the side panel keeps the project's **rules**, **decisions** and **recent changes** (every
+   approved, sent back, rejected or undone proposal, with its reason and your note). Click a card on the map to see
+   its notes and history, and **Add a note**.
+
 Proposals are files in the project's `.visual-editor/proposals/` folder, so assistants, agents and plugins all
-propose the same way, and nothing changes the code without review.
+propose the same way, and nothing changes the code without review. Memory lives in `.visual-editor/memory/entries/`,
+one small file per entry, so it can go into git and the team shares it.
 
 ## Work on it
 

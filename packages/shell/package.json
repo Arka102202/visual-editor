@@ -34,6 +34,10 @@
           "name": "Projects"
         },
         {
+          "id": "visualEditor.memory",
+          "name": "Memory"
+        },
+        {
           "id": "visualEditor.plugins",
           "name": "Plugins"
         }
@@ -67,6 +71,30 @@
         "command": "visualEditor.showPlugins",
         "title": "Show Plugins",
         "category": "Visual Editor"
+      },
+      {
+        "command": "visualEditor.addRule",
+        "title": "Add a Rule",
+        "category": "Visual Editor",
+        "icon": "$(law)"
+      },
+      {
+        "command": "visualEditor.addDecision",
+        "title": "Add a Decision",
+        "category": "Visual Editor",
+        "icon": "$(milestone)"
+      },
+      {
+        "command": "visualEditor.editMemory",
+        "title": "Edit",
+        "category": "Visual Editor",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "visualEditor.removeMemory",
+        "title": "Forget",
+        "category": "Visual Editor",
+        "icon": "$(trash)"
       }
     ],
     "menus": {
@@ -85,6 +113,48 @@
           "command": "visualEditor.chooseProject",
           "when": "view == visualEditor.projects",
           "group": "navigation@3"
+        },
+        {
+          "command": "visualEditor.addRule",
+          "when": "view == visualEditor.memory",
+          "group": "navigation@1"
+        },
+        {
+          "command": "visualEditor.addDecision",
+          "when": "view == visualEditor.memory",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "visualEditor.addRule",
+          "when": "view == visualEditor.memory && viewItem == group-rule",
+          "group": "inline"
+        },
+        {
+          "command": "visualEditor.addDecision",
+          "when": "view == visualEditor.memory && viewItem == group-decision",
+          "group": "inline"
+        },
+        {
+          "command": "visualEditor.editMemory",
+          "when": "view == visualEditor.memory && viewItem =~ /^entry-(rule|decision|note)$/",
+          "group": "inline@1"
+        },
+        {
+          "command": "visualEditor.removeMemory",
+          "when": "view == visualEditor.memory && viewItem =~ /^entry-/",
+          "group": "inline@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "visualEditor.editMemory",
+          "when": "false"
+        },
+        {
+          "command": "visualEditor.removeMemory",
+          "when": "false"
         }
       ]
     }

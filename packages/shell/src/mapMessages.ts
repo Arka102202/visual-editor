@@ -2,6 +2,7 @@
 
 import type { Mark } from './changes';
 import type { Layout } from './layout';
+import type { MemoryEntry } from './memory';
 
 export interface MapProject {
   root: string;
@@ -11,8 +12,17 @@ export interface MapProject {
   cards: number;
 }
 
-/** Shell → map page. */
-export type ToMap = {
+/** Shell → map page: the map, or what's remembered about the chosen card. */
+export type ToMap = ShowMap | CardMemory | { type: 'focus'; id: string };
+
+export interface CardMemory {
+  type: 'card';
+  id: string;
+  /** Notes, rules and decisions about it, and changes to it, newest first. */
+  entries: MemoryEntry[];
+}
+
+export type ShowMap = {
   type: 'show';
   projects: MapProject[];
   /** The root of the project shown. */
@@ -34,7 +44,10 @@ export type ToMap = {
 export type FromMap =
   | { type: 'ready' }
   | { type: 'choose'; root: string }
-  | { type: 'openReview' }
+  | { type: 'openReview'; proposal?: string }
+  /** A card was chosen (its notes and history are wanted), or none. */
+  | { type: 'card'; id?: string }
+  | { type: 'addNote'; id: string }
   | { type: 'clearChanged' }
   /** Open a card's code: path relative to the shown project's root. */
   | { type: 'open'; path: string; line?: number };

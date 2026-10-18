@@ -10,7 +10,8 @@
     "build": "node scripts/build.mjs",
     "watch": "node scripts/build.mjs --watch",
     "typecheck": "tsc --noEmit -p .",
-    "test": "node scripts/build.mjs --test && node --test \"dist-test/**/*.test.js\""
+    "test": "node scripts/build.mjs --test && node --test \"dist-test/**/*.test.js\"",
+    "test:vscode": "npm run build && node scripts/vscode-test.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

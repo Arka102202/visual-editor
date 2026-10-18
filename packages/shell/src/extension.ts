@@ -13,6 +13,8 @@ import { CurrentProject } from './currentProject';
 import { MapPanel } from './mapPanel';
 import { OutsideChanges } from './changes';
 import { Review } from './review';
+import { askEntry, MemoryView, ProjectMemory } from './memoryView';
+import type { MemoryEntry } from './memory';
 
 export function activate(context: vscode.ExtensionContext): ShellApi {
   const registry = new PluginRegistry();
@@ -31,8 +33,12 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
   });
   // Review: changes wait here for the developer's OK; files changed any other way are marked on the map.
   const changes = new OutsideChanges();
-  const review = new Review(context.extensionUri, index, current, changes);
+  // Memory: why the project is the way it is (reviewed changes, rules, decisions, notes on cards).
+  const memory = new ProjectMemory(index);
+  const memoryView = new MemoryView(memory, current);
+  const review = new Review(context.extensionUri, index, current, changes, memory);
   const projectsView = new ProjectsView(index, current, review);
+  context.subscriptions.push(memoryView, vscode.window.registerTreeDataProvider('visualEditor.memory', memoryView));
   context.subscriptions.push(index, review, projectsView, vscode.window.registerTreeDataProvider('visualEditor.projects', projectsView));
   const folders = () => (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
   const scan = () => {
@@ -82,12 +88,19 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
   // Proposals arrive as files (from the assistant hub, agents, plugins); the main watcher leaves that folder out.
   const proposalWatcher = vscode.workspace.createFileSystemWatcher('**/.visual-editor/proposals/*.json');
   const onProposal = (uri: vscode.Uri) => review.proposalFileChanged(uri.fsPath);
+  // Memory entries can also arrive from outside (a teammate's, through git; an assistant's).
+  const memoryWatcher = vscode.workspace.createFileSystemWatcher('**/.visual-editor/memory/entries/*.json');
+  const onMemory = (uri: vscode.Uri) => memory.fileChanged(uri.fsPath);
   context.subscriptions.push(
     watcher,
     proposalWatcher,
     proposalWatcher.onDidCreate(onProposal),
     proposalWatcher.onDidChange(onProposal),
     proposalWatcher.onDidDelete(onProposal),
+    memoryWatcher,
+    memoryWatcher.onDidCreate(onMemory),
+    memoryWatcher.onDidChange(onMemory),
+    memoryWatcher.onDidDelete(onMemory),
     watcher.onDidCreate(onFile(true)),
     watcher.onDidDelete(onFile(true)),
     watcher.onDidChange(onFile(false)),
@@ -120,12 +133,34 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
   );
 
   // The map, and choosing which project it shows.
-  const map = new MapPanel(context.extensionUri, index, current, review, changes);
+  const map = new MapPanel(context.extensionUri, index, current, review, changes, memory);
   context.subscriptions.push(
     map,
     vscode.commands.registerCommand('visualEditor.openMap', () => map.show()),
-    vscode.commands.registerCommand('visualEditor.openReview', () => review.show()),
+    vscode.commands.registerCommand('visualEditor.openReview', (proposal?: string) => review.show(typeof proposal === 'string' ? proposal : undefined)),
     vscode.commands.registerCommand('visualEditor.tryProposal', () => review.tryExample()),
+    ...(['rule', 'decision'] as const).map((kind) =>
+      vscode.commands.registerCommand(kind === 'rule' ? 'visualEditor.addRule' : 'visualEditor.addDecision', async () => {
+        const root = current.get()?.project.root;
+        if (!root) return void vscode.window.showInformationMessage('Open a folder first.');
+        const answer = await askEntry(kind);
+        if (answer) memory.add(root, kind, answer.text, { detail: answer.detail });
+      }),
+    ),
+    vscode.commands.registerCommand('visualEditor.editMemory', async (node?: { entry?: MemoryEntry }) => {
+      const root = current.get()?.project.root;
+      const e = node?.entry;
+      if (!root || !e || e.kind === 'change') return;
+      const answer = await askEntry(e.kind, e);
+      if (answer) memory.update(root, { ...e, text: answer.text, detail: answer.detail });
+    }),
+    vscode.commands.registerCommand('visualEditor.removeMemory', async (node?: { entry?: MemoryEntry }) => {
+      const root = current.get()?.project.root;
+      const e = node?.entry;
+      if (!root || !e) return;
+      const pick = await vscode.window.showWarningMessage(`Forget “${e.text}”?`, { modal: true }, 'Forget');
+      if (pick) memory.remove(root, e.id);
+    }),
     vscode.commands.registerCommand('visualEditor.chooseProject', async (root?: string) => {
       if (!root) {
         const shown = current.get()?.project.root;
@@ -147,7 +182,7 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
   );
 
   log.appendLine(`Visual Editor started (plugin contract ${CONTRACT_VERSION}).`);
-  return {
+  const api: ShellApi = {
     contract: CONTRACT_VERSION,
     register(plugin: Plugin) {
       try {
@@ -162,6 +197,9 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
       }
     },
   };
+  // The VS Code test (npm run test:vscode) reaches inside; never switched on otherwise.
+  if (process.env.VISUAL_EDITOR_TEST === '1') return Object.assign(api, { _test: { index, current, review, memory, changes, map } });
+  return api;
 }
 
 export function deactivate() {}

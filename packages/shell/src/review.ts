@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import type { Disposable } from '@visual-editor/contract';
 import type { OutsideChanges } from './changes';
 import type { CurrentProject } from './currentProject';
+import type { ProjectMemory } from './memoryView';
 import { counts, hunks } from './diff';
 import { apply, conflicts, newId, ProposalStore, undo, undoConflicts, type Files, type Proposal } from './proposals';
 import type { ProjectIndex } from './projectIndex';
@@ -27,6 +28,7 @@ export class Review implements vscode.Disposable {
     private readonly index: ProjectIndex,
     private readonly current: CurrentProject,
     private readonly changes: OutsideChanges,
+    private readonly memory: ProjectMemory,
   ) {
     // Reading proposals when the projects are known; new ones that arrive later are announced.
     this.subscriptions.push(
@@ -191,10 +193,15 @@ export class Review implements vscode.Disposable {
         const why = await conflicts(p, files);
         if (why.length) {
           const pick = await vscode.window.showWarningMessage(`Can't apply "${p.title}" as it stands`, { modal: true, detail: why.join('\n') }, 'Send back');
-          if (pick) store.mark(p, 'sent-back', `The files changed since it was proposed: ${why.join(' ')}`);
+          if (pick) {
+            const note = `The files changed since it was proposed: ${why.join(' ')}`;
+            store.mark(p, 'sent-back', note);
+            this.memory.recordReview(root, p, 'sent-back', note);
+          }
         } else {
           await apply(p, files);
           store.mark(p, 'applied');
+          this.memory.recordReview(root, p, 'applied');
           void vscode.window.showInformationMessage(`Applied: ${p.title}`, 'Undo').then((pick) => pick && this.receive({ type: 'undo', id: p.id }));
         }
       } else if (m.type === 'undo') {
@@ -206,6 +213,7 @@ export class Review implements vscode.Disposable {
         } else {
           await undo(latest, files);
           store.mark(latest, 'undone');
+          this.memory.recordReview(root, latest, 'undone');
         }
       } else if (m.type === 'sendBack' || m.type === 'reject') {
         if (p.status !== 'proposed') return;
@@ -219,7 +227,9 @@ export class Review implements vscode.Disposable {
           void vscode.window.showInformationMessage('Say what should change, so it can be done better.');
           return;
         }
-        store.mark(p, m.type === 'sendBack' ? 'sent-back' : 'rejected', note.trim() || undefined);
+        const outcome = m.type === 'sendBack' ? 'sent-back' : 'rejected';
+        store.mark(p, outcome, note.trim() || undefined);
+        this.memory.recordReview(root, p, outcome, note.trim() || undefined);
       }
     } catch (e) {
       void vscode.window.showErrorMessage(`${p.title}: ${e instanceof Error ? e.message : String(e)}`);
