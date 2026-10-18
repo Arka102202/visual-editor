@@ -2,11 +2,13 @@
 // and when another project is chosen.
 
 import * as vscode from 'vscode';
+import type { MapDefinition } from '@visual-editor/contract';
 import { webviewPage } from './webviewPage';
 import { join } from 'node:path';
 import { cardMarks, type OutsideChanges } from './changes';
 import type { CurrentProject } from './currentProject';
-import { layoutMap } from './layout';
+import { layoutMap, type Arrange } from './layout';
+import { cardColours, lineColours, usedBy } from './styles';
 import type { FromMap, ShowMap, ToMap } from './mapMessages';
 import type { ProjectIndex } from './projectIndex';
 import type { Review } from './review';
@@ -20,6 +22,14 @@ export class MapPanel {
   private ready = false;
   /** The card whose notes and history the page shows. */
   private card: string | undefined;
+  /** The map shown in each project (by root), when the developer chose one. */
+  private readonly chosenMap = new Map<string, string>();
+  /** A card to focus once its map is drawn. */
+  private pendingFocus: string | undefined;
+  /** Flow or Folders, when the developer chose (per project and map). */
+  private readonly arrangement = new Map<string, Arrange>();
+  /** The map last sent to the page. */
+  private shownMap: string | undefined;
   /** Opens the Preview tab (set once the preview panel exists). */
   openPreview: ((target: PreviewTarget) => void) | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -64,12 +74,15 @@ export class MapPanel {
     this.panel = panel;
   }
 
-  /** Shows the map with one card chosen and in view (its notes and history open). */
+  /** Shows the map with one card chosen and in view (its notes and history open), switching to its map first. */
   focus(id: string) {
+    const state = this.current.get();
+    const item = state?.items.find((i) => i.id === id);
+    if (state && item) this.chosenMap.set(state.project.root, item.map);
+    this.pendingFocus = id;
     this.show();
-    const post = () => void this.panel?.webview.postMessage({ type: 'focus', id } satisfies ToMap);
-    if (this.ready) post();
-    else setTimeout(post, 500);
+    // Sent right after the map it's on; when the page isn't ready yet, its first drawing does it.
+    if (this.ready) this.send();
   }
 
   dispose() {
@@ -84,6 +97,14 @@ export class MapPanel {
       this.send();
     } else if (m.type === 'choose') {
       this.current.choose(m.root);
+    } else if (m.type === 'chooseMap') {
+      const root = this.current.get()?.project.root;
+      if (root) this.chosenMap.set(root, m.id);
+      this.send();
+    } else if (m.type === 'arrange') {
+      const key = this.arrangeKey();
+      if (key) this.arrangement.set(key, m.arrange);
+      this.send();
     } else if (m.type === 'openReview') {
       this.review.show(m.proposal);
     } else if (m.type === 'card') {
@@ -117,6 +138,13 @@ export class MapPanel {
     this.memory.add(state.project.root, 'note', text, { items: [id], ...(item.source ? { paths: [item.source.path] } : {}) });
   }
 
+  /** The project and map shown, for remembering Flow or Folders. */
+  private arrangeKey(): string | undefined {
+    const root = this.current.get()?.project.root;
+    if (!root) return undefined;
+    return `${root}|${this.shownMap}`;
+  }
+
   private sendCard() {
     if (!this.panel || !this.ready || !this.card) return;
     const state = this.current.get();
@@ -140,12 +168,30 @@ export class MapPanel {
     const maps = state?.detected.flatMap((d) => d.plugin.maps ?? []) ?? [];
     const proposals = state ? this.review.proposals(state.project.root) : [];
     const changed = state ? this.changes.get(state.project.root) : new Set<string>();
+    // The project's maps (those its plugins bring, then any a reader used without listing), shown one at a time.
+    const counts = new Map<string, number>();
+    for (const i of state?.items ?? []) counts.set(i.map, (counts.get(i.map) ?? 0) + 1);
+    const tabs = [...maps.filter((m, n, all) => all.findIndex((x) => x.id === m.id) === n && counts.has(m.id)), ...[...counts.keys()].filter((id) => !maps.some((m) => m.id === id)).map((id) => ({ id, title: id }))].map((m) => ({ ...m, cards: counts.get(m.id) ?? 0 }));
+    const chosen = state ? this.chosenMap.get(state.project.root) : undefined;
+    const shownMap = tabs.find((t) => t.id === chosen)?.id ?? tabs[0]?.id;
+    this.shownMap = shownMap;
+    const shownItems = (state?.items ?? []).filter((i) => i.map === shownMap);
+    const shownIds = new Set(shownItems.map((i) => i.id));
+    const shownLinks = (state?.links ?? []).filter((l) => shownIds.has(l.from) && shownIds.has(l.to));
+    // Many cards read better grouped by folder; few read better as a flow. The developer's choice wins.
+    const arrange = this.arrangement.get(`${state?.project.root}|${shownMap}`) ?? (shownItems.length > 30 ? 'folders' : 'flow');
     const message: ShowMap = {
       type: 'show',
       projects: states.map((s) => ({ root: s.project.root, name: s.project.name, group: s.project.group, cards: s.items.length })),
       current: state?.project.root,
       plugins: state?.detected.map((d) => d.plugin.name) ?? [],
-      layout: layoutMap(state?.items ?? [], state?.links ?? [], maps),
+      maps: tabs,
+      map: shownMap,
+      layout: layoutMap(shownItems, shownLinks, maps, arrange),
+      arrange,
+      colours: { cards: cardColours(shownItems), lines: lineColours(shownLinks) },
+      usedBy: usedBy(shownLinks),
+      meanings: meaningsOf(maps.filter((m) => m.id === shownMap)),
       marks: cardMarks(state?.items ?? [], proposals, changed),
       proposed: proposals.filter((p) => p.status === 'proposed').length,
       changed: changed.size,
@@ -159,6 +205,18 @@ export class MapPanel {
     };
     this.panel.title = state ? `Map · ${state.project.name}` : 'Visual Editor';
     void this.panel.webview.postMessage(message);
+    if (this.pendingFocus) {
+      void this.panel.webview.postMessage({ type: 'focus', id: this.pendingFocus } satisfies ToMap);
+      this.pendingFocus = undefined;
+    }
     this.sendCard();
   }
+}
+
+/** What the kinds and lines on a map mean: the plugin's words, merged when several plugins share a map. */
+function meaningsOf(maps: MapDefinition[]): { cards: Record<string, string>; lines: Record<string, string> } {
+  return {
+    cards: Object.assign({}, ...maps.map((m) => m.kinds ?? {})),
+    lines: Object.assign({}, ...maps.map((m) => m.lines ?? {})),
+  };
 }

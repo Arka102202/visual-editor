@@ -1,8 +1,9 @@
 // What the shell and the map page say to each other. Shared by both sides, so they can't drift apart.
 
 import type { Mark } from './changes';
-import type { Layout } from './layout';
+import type { Arrange, Layout } from './layout';
 import type { MemoryEntry } from './memory';
+import type { Tone } from './styles';
 
 export interface MapProject {
   root: string;
@@ -31,7 +32,18 @@ export type ShowMap = {
   current?: string;
   /** Plugins that understand it, by name. */
   plugins: string[];
+  /** The project's maps (tabs), with how many cards each has; one is shown at a time. */
+  maps: { id: string; title: string; description?: string; cards: number }[];
+  /** The map shown. */
+  map?: string;
   layout: Layout;
+  arrange: Arrange;
+  /** Colour of each kind of card, and of each kind of line. */
+  colours: { cards: Record<string, Tone>; lines: Record<string, Tone> };
+  /** How many other cards point at each card. */
+  usedBy: Record<string, number>;
+  /** What each kind of card and line means, in plain words (from the plugin). */
+  meanings: { cards: Record<string, string>; lines: Record<string, string> };
   /** Cards to mark: a waiting proposal would change them, or their code changed outside review. */
   marks: Record<string, Mark>;
   /** Waiting proposals in this project. */
@@ -46,6 +58,9 @@ export type ShowMap = {
 export type FromMap =
   | { type: 'ready' }
   | { type: 'choose'; root: string }
+  /** Show another of the project's maps. */
+  | { type: 'chooseMap'; id: string }
+  | { type: 'arrange'; arrange: Arrange }
   | { type: 'openReview'; proposal?: string }
   /** A card was chosen (its notes and history are wanted), or none. */
   | { type: 'card'; id?: string }

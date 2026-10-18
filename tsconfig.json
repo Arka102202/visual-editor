@@ -16,5 +16,6 @@
       "@visual-editor/contract": ["./packages/contract/src/index.ts"]
     }
   },
+  "exclude": ["**/fixtures/**"],
   "include": ["packages/*/src", "packages/*/test", "plugins/*/src", "plugins/*/test", "test-vscode"]
 }

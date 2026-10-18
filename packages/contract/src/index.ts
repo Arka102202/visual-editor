@@ -4,7 +4,7 @@
 // No VS Code imports here: plugins and the shell's tests use it outside VS Code too.
 
 /** The contract version this package describes. Plugins say which version they were built for. */
-export const CONTRACT_VERSION = 2;
+export const CONTRACT_VERSION = 3;
 
 /** Something that can be stopped or removed (same shape as VS Code's Disposable). */
 export interface Disposable {
@@ -109,6 +109,10 @@ export interface MapDefinition {
   title: string;
   /** One sentence on what it shows. */
   description?: string;
+  /** Contract 3: what each kind of card on it means, in plain words (shown when hovering the legend or a card's kind). */
+  kinds?: Record<string, string>;
+  /** Contract 3: what each kind of line on it means, in plain words. */
+  lines?: Record<string, string>;
 }
 
 // ---------------------------------------------------------------------------

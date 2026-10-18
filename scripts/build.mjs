@@ -4,7 +4,7 @@
 //   node scripts/build.mjs --test    build the tests only
 
 import * as esbuild from 'esbuild';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 const watch = process.argv.includes('--watch');
@@ -41,6 +41,8 @@ const tests = {
 };
 
 if (test) {
+  // Start clean: tests built on another branch (or since deleted) must not run.
+  rmSync('dist-test', { recursive: true, force: true });
   await esbuild.build(tests);
 } else if (watch) {
   for (const options of builds) await (await esbuild.context(options)).watch();

@@ -3,6 +3,8 @@
 //   SHOTS=<folder>   take screenshots (needs permission to record the screen)
 //   CLAUDE=1         also let real Claude Code connect to the hub and propose a change (uses Claude)
 //   VSCODE_PATH=…    VS Code elsewhere
+//   TEST=look PROJECT=<folder> [PLUGINS=react,hello] [CARD=<label>]
+//                    open a real project instead and take screenshots of its map (changes nothing)
 
 import * as esbuild from 'esbuild';
 import { execFileSync, spawn } from 'node:child_process';
@@ -11,14 +13,18 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const repo = resolve('.');
-const out = join(repo, 'dist-test/vscode/smoke.js');
-await esbuild.build({ entryPoints: ['test-vscode/smoke.ts'], bundle: true, platform: 'node', format: 'cjs', target: 'node20', outfile: out, external: ['vscode'], logLevel: 'warning' });
+const which = process.env.TEST ?? 'smoke';
+const out = join(repo, `dist-test/vscode/${which}.js`);
+await esbuild.build({ entryPoints: [`test-vscode/${which}.ts`], bundle: true, platform: 'node', format: 'cjs', target: 'node20', outfile: out, external: ['vscode'], logLevel: 'warning' });
 
 const temp = mkdtempSync(join(tmpdir(), 've-vscode-'));
-const project = join(temp, 'demo');
-mkdirSync(project);
-writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'demo', scripts: { dev: 'next dev' } }, null, 2));
-writeFileSync(join(project, 'README.md'), '# demo\n\nA small project for trying Visual Editor.\n');
+const project = process.env.PROJECT ? resolve(process.env.PROJECT) : join(temp, 'demo');
+if (!process.env.PROJECT) {
+  mkdirSync(project);
+  writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'demo', scripts: { dev: 'next dev' } }, null, 2));
+  writeFileSync(join(project, 'README.md'), '# demo\n\nA small project for trying Visual Editor.\n');
+}
+const plugins = (process.env.PLUGINS ?? 'hello').split(',').filter(Boolean);
 const report = join(temp, 'report.txt');
 const shots = process.env.SHOTS ? resolve(process.env.SHOTS) : undefined;
 if (shots) mkdirSync(shots, { recursive: true });
@@ -42,7 +48,7 @@ const child = spawn(
   [
     project,
     `--extensionDevelopmentPath=${join(repo, 'packages/shell')}`,
-    `--extensionDevelopmentPath=${join(repo, 'plugins/hello')}`,
+    ...plugins.map((p) => `--extensionDevelopmentPath=${join(repo, 'plugins', p)}`),
     `--extensionTestsPath=${out}`,
     `--user-data-dir=${join(temp, 'user')}`,
     `--extensions-dir=${join(temp, 'extensions')}`,
