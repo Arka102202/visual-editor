@@ -52,6 +52,41 @@ export async function run() {
     await shot('look-card');
     say(`card: ${card.label} (${card.kind}) · ${count(card.id)} lines`);
   }
+  // PREVIEW=<label>[,<label>…]: open each card's preview, wait until it's on screen, take pictures in some situations.
+  for (const label of (process.env.PREVIEW ?? '').split(',').filter(Boolean)) {
+    const item = s.items.find((i: any) => i.label === label);
+    if (!item) {
+      say(`preview ${label}: no such card`);
+      continue;
+    }
+    const started = Date.now();
+    t.preview.shownFrames = 0;
+    await t.preview.show({ root: s.project.root, item: item.id });
+    const seen: any[] = [];
+    const post = t.preview.panel.webview.postMessage.bind(t.preview.panel.webview);
+    t.preview.panel.webview.postMessage = (m: any) => (seen.push(m), post(m));
+    const shown = () => seen.filter((m) => m.type === 'show').at(-1);
+    try {
+      await until(() => t.preview.shownFrames >= 1 || !!shown()?.frames[0]?.error, `the preview of ${label}`, 100_000);
+    } catch (e) {
+      say(`preview ${label}: ${e instanceof Error ? e.message : e}`);
+    }
+    const f = shown()?.frames[0];
+    say(`preview ${label}: ${f?.error ? `error: ${f.error}` : `on screen after ${Math.round((Date.now() - started) / 1000)} s · ${f?.url ?? ''}`}`);
+    await wait(9000);
+    const said = t.preview.frameMessages.slice(-6).map((m: any) => `${m.type}${m.outcome ? ` ${m.outcome}` : ''}${m.message ? `: ${String(m.message).slice(0, 160)}` : ''}`);
+    say(`  page said: ${said.join(' · ') || 'nothing'}`);
+    t.preview.frameMessages.length = 0;
+    await shot(`look-preview-${label}`);
+    for (const situation of (process.env.SITUATIONS ?? '').split(',').filter(Boolean)) {
+      t.preview.shownFrames = 0;
+      t.preview.receive({ type: 'situation', name: situation });
+      await until(() => shown()?.situation === situation, situation, 30_000).catch(() => undefined);
+      await wait(3000);
+      await shot(`look-preview-${label}-${situation.replace(/\s+/g, '-')}`);
+    }
+  }
+
   if (process.env.VISUAL_EDITOR_REPORT) writeFileSync(process.env.VISUAL_EDITOR_REPORT, lines.join('\n') + '\n');
   void readFileSync;
 }

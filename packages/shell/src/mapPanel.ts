@@ -30,6 +30,8 @@ export class MapPanel {
   private readonly arrangement = new Map<string, Arrange>();
   /** The map last sent to the page. */
   private shownMap: string | undefined;
+  /** The tab was moved into its own floating window. */
+  private floating = false;
   /** Opens the Preview tab (set once the preview panel exists). */
   openPreview: ((target: PreviewTarget) => void) | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -115,6 +117,8 @@ export class MapPanel {
       if (root) this.openPreview?.({ root, item: m.id });
     } else if (m.type === 'addNote') {
       void this.addNote(m.id);
+    } else if (m.type === 'window') {
+      void this.toggleWindow();
     } else if (m.type === 'clearChanged') {
       const root = this.current.get()?.project.root;
       if (root) this.changes.clear(root);
@@ -127,6 +131,15 @@ export class MapPanel {
         viewColumn: vscode.ViewColumn.Beside,
       });
     }
+  }
+
+  /** Moves the map into a floating window (where it can go full screen), or back into the main window. */
+  private async toggleWindow() {
+    if (!this.panel) return;
+    this.panel.reveal(undefined, false);
+    await vscode.commands.executeCommand(this.floating ? 'workbench.action.restoreEditorsToMainWindow' : 'workbench.action.moveEditorToNewWindow');
+    this.floating = !this.floating;
+    this.send();
   }
 
   private async addNote(id: string) {
@@ -192,6 +205,7 @@ export class MapPanel {
       colours: { cards: cardColours(shownItems), lines: lineColours(shownLinks) },
       usedBy: usedBy(shownLinks),
       meanings: meaningsOf(maps.filter((m) => m.id === shownMap)),
+      floating: this.floating,
       marks: cardMarks(state?.items ?? [], proposals, changed),
       proposed: proposals.filter((p) => p.status === 'proposed').length,
       changed: changed.size,

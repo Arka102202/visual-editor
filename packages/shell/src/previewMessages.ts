@@ -22,6 +22,8 @@ export type ToPreview =
       theme: 'light' | 'dark';
       size: Size;
       frames: Frame[];
+      /** The tab is in its own floating window. */
+      floating: boolean;
     }
   | { type: 'drawing' };
 
@@ -33,5 +35,9 @@ export type FromPreview =
   /** `width`: the frame's width in CSS pixels (for Fit, what fits on screen). */
   | { type: 'size'; size: Size; width: number }
   | { type: 'reload' }
+  /** Move the tab into its own floating window, or back. */
+  | { type: 'window' }
+  /** What a preview page said (ready, an error, a callback, its example data…), passed on as is. */
+  | { type: 'frame'; data: Record<string, unknown> }
   /** Frames now visible on screen (loaded), so the shell knows the preview really shows. */
   | { type: 'shown'; frames: number };

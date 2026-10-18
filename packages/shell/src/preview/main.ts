@@ -43,7 +43,9 @@ const sizes = el('div', 'group');
 const themes = el('div', 'group');
 const reload = el('button', undefined, 'Reload');
 reload.title = 'Draw it again';
-bar.append(title, sub, situationPick, sizes, themes, reload);
+const windowButton = el('button', undefined, '⤢ Pop out');
+windowButton.addEventListener('click', () => vscode.postMessage({ type: 'window' }));
+bar.append(title, sub, situationPick, sizes, themes, reload, windowButton);
 const stage = el('div', 'stage');
 const drawingNote = el('div', 'drawing', 'Drawing…');
 drawingNote.hidden = true;
@@ -118,6 +120,8 @@ function show(m: Extract<ToPreview, { type: 'show' }>) {
   last = m;
   drawingNote.hidden = true;
   title.textContent = m.title;
+  windowButton.textContent = m.floating ? '⤡ Back' : '⤢ Pop out';
+  windowButton.title = m.floating ? 'Back into the main window' : 'Open in its own window: make it full screen there, or move it to another screen';
   sub.textContent = m.sub ?? '';
   situationPick.replaceChildren(...m.situations.map((s) => Object.assign(el('option', undefined, s), { value: s, selected: s === m.situation })));
   situationPick.hidden = m.situations.length < 2;
@@ -160,6 +164,12 @@ new ResizeObserver(() => {
 }).observe(stage);
 
 window.addEventListener('message', (e: MessageEvent<ToPreview>) => {
+  // A preview page talking (from inside a frame): passed on to the shell.
+  const d = e.data as unknown as Record<string, unknown> | undefined;
+  if (d && typeof d === 'object' && d.source === 'visual-editor-preview') {
+    vscode.postMessage({ type: 'frame', data: d });
+    return;
+  }
   if (e.data?.type === 'show') show(e.data);
   else if (e.data?.type === 'drawing') drawingNote.hidden = false;
 });

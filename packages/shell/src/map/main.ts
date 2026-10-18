@@ -143,7 +143,9 @@ for (const [mode, words] of [['flow', 'Flow'], ['folders', 'Folders']] as const)
   arrangeGroup.append(b);
   arrangeButtons.push([b, mode]);
 }
-bar.append(picker, projectName, chips, tabs, find, arrangeGroup, proposedBadge, changedBadge, zoomText, fitButton);
+const windowButton = el('button', undefined, '⤢');
+windowButton.addEventListener('click', () => vscode.postMessage({ type: 'window' }));
+bar.append(picker, projectName, chips, tabs, find, arrangeGroup, proposedBadge, changedBadge, zoomText, fitButton, windowButton);
 const legend = el('div', 'legend');
 const tip = el('div', 'tip');
 tip.hidden = true;
@@ -517,6 +519,8 @@ function show(m: ShowMap) {
   used = m.usedBy;
   linked = new Set(m.layout.links.flatMap((l) => [l.from, l.to]));
   for (const b of arrangeGroup.querySelectorAll('button')) b.classList.toggle('on', b.dataset.mode === m.arrange);
+  windowButton.textContent = m.floating ? '⤡' : '⤢';
+  windowButton.title = m.floating ? 'Back into the main window' : 'Open the map in its own window: make it full screen there, or move it to another screen';
   drawLegend(m);
   proposedBadge.textContent = `${m.proposed} proposed`;
   proposedBadge.hidden = !m.proposed;

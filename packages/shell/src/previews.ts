@@ -6,8 +6,8 @@ import type { Item, Plugin, PreviewOutput, Previewer, PreviewRequest } from '@vi
 import type { ProjectState } from './projectIndex';
 import type { Proposal } from './proposals';
 
-/** How long a preview may take before the frame says so. */
-export const RENDER_TIMEOUT_MS = 15_000;
+/** How long a preview may take before the frame says so (starting a dev server the first time can take a minute). */
+export const RENDER_TIMEOUT_MS = 90_000;
 
 export const SIZES = { mobile: 375, tablet: 768, desktop: 1280 } as const;
 export type Size = keyof typeof SIZES | 'fit';
@@ -92,7 +92,8 @@ export async function render(found: Found, request: PreviewRequest, timeoutMs = 
 export function isLocalUrl(url: string): boolean {
   try {
     const u = new URL(url);
-    return (u.protocol === 'http:' || u.protocol === 'https:') && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
+    // *.localhost names always mean this computer (browsers never look them up elsewhere).
+    return (u.protocol === 'http:' || u.protocol === 'https:') && (['localhost', '127.0.0.1', '[::1]'].includes(u.hostname) || u.hostname.endsWith('.localhost'));
   } catch {
     return false;
   }

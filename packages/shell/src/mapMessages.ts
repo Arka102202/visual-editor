@@ -52,6 +52,8 @@ export type ShowMap = {
   changed: number;
   /** Shown instead of the map when there's nothing to draw. */
   empty?: { title: string; detail: string };
+  /** The tab is in its own floating window. */
+  floating: boolean;
 };
 
 /** Map page → shell. */
@@ -67,5 +69,7 @@ export type FromMap =
   | { type: 'addNote'; id: string }
   | { type: 'preview'; id: string }
   | { type: 'clearChanged' }
+  /** Move the tab into its own floating window, or back. */
+  | { type: 'window' }
   /** Open a card's code: path relative to the shown project's root. */
   | { type: 'open'; path: string; line?: number };

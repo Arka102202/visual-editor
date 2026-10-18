@@ -216,6 +216,22 @@ export async function run() {
     await shot('12-preview-mobile-empty-light');
   });
 
+  await step('the preview and the map pop out into their own window and come back', async () => {
+    const seen = listen(t.preview.panel);
+    t.preview.receive({ type: 'window' });
+    await until(() => seen.some((m) => m.type === 'show' && m.floating === true), 'the preview in its own window');
+    await wait(1000);
+    t.preview.receive({ type: 'window' });
+    await until(() => seen.filter((m) => m.type === 'show').at(-1)?.floating === false, 'the preview back');
+    t.map.show();
+    const mapSeen2 = listen(t.map.panel);
+    t.map.receive({ type: 'window' });
+    await until(() => mapSeen2.some((m) => m.type === 'show' && m.floating === true), 'the map in its own window');
+    await wait(1000);
+    t.map.receive({ type: 'window' });
+    await until(() => mapSeen2.filter((m) => m.type === 'show').at(-1)?.floating === false, 'the map back');
+  });
+
   await step('a proposal is previewed Before and After, side by side, without changing the file', async () => {
     const original = readFileSync(readme, 'utf8');
     await t.review.tryExample();
