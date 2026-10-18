@@ -1,0 +1,21 @@
+{
+  "name": "visual-editor-repo",
+  "private": true,
+  "description": "Visual Editor: a VS Code shell that grows through plugins. See README.md.",
+  "workspaces": [
+    "packages/*",
+    "plugins/*"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "watch": "node scripts/build.mjs --watch",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "node scripts/build.mjs --test && node --test \"dist-test/**/*.test.js\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  }
+}
