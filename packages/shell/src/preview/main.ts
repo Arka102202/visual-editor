@@ -11,18 +11,52 @@ const vscode = acquireVsCodeApi();
 
 const WIDTHS: Record<Exclude<Size, 'fit'>, number> = { mobile: 375, tablet: 768, desktop: 1280 };
 const SIZE_WORDS: Record<Size, string> = { mobile: 'Mobile', tablet: 'Tablet', desktop: 'Desktop', fit: 'Fit' };
+
+/** Line icons (24×24, drawn with the text colour), so the bar stays small; each button names itself on hover. */
+const ICONS = {
+  mobile: '<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>',
+  tablet: '<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M11 18h2"/>',
+  desktop: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
+  fit: '<path d="M3 12h18M7 8l-4 4 4 4M17 8l4 4-4 4"/>',
+  light: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  dark: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
+  reload: '<path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/>',
+  popOut: '<path d="M15 3h6v6M10 14L21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  back: '<path d="M4 14h6v6M3 21l7-7M14 4v6h6M21 3l-7 7"/>',
+} as const;
+
+/** An icon-only button with a name (shown on hover, read out by screen readers). */
+function iconButton(icon: keyof typeof ICONS, name: string): HTMLButtonElement {
+  const b = el('button', 'icon');
+  setIcon(b, icon, name);
+  return b;
+}
+
+function setIcon(b: HTMLElement, icon: keyof typeof ICONS, name: string) {
+  b.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[icon]}</svg>`;
+  b.setAttribute('aria-label', name);
+  b.dataset.tip = name;
+}
 const GAP = 16;
 const LABEL = 24;
 
 addStyles(`
   body { display: flex; flex-direction: column; }
-  .bar { display: flex; align-items: center; gap: 8px; padding: 0 12px; height: 44px; flex: none; border-bottom: 1px solid var(--vscode-panel-border, #8883); overflow: hidden; }
-  .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .sub { font-size: 12px; opacity: .65; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
-  .group { display: flex; border-radius: 5px; overflow: hidden; flex: none; }
-  .group button { border-radius: 0; padding: 3px 9px; }
+  /* One line always: when the space is too small the bar scrolls sideways; nothing in it changes shape. */
+  .bar { display: flex; align-items: center; gap: 8px; padding: 0 12px; height: 44px; flex: none; border-bottom: 1px solid var(--vscode-panel-border, #8883); overflow-x: auto; overflow-y: hidden; white-space: nowrap; scrollbar-width: thin; }
+  .bar::-webkit-scrollbar { height: 4px; }
+  .bar::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, #8886); border-radius: 2px; }
+  .bar > * { flex: none; }
+  .title { font-weight: 600; }
+  .bar > .sub { font-size: 12px; opacity: .65; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 40px; max-width: 280px; }
+  .bar > .spacer { flex: 1 0 0; min-width: 0; }
+  .group { display: flex; border-radius: 5px; overflow: hidden; }
+  .group button { border-radius: 0; }
+  button.icon { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 26px; padding: 0; flex: none; }
+  button.icon svg { display: block; }
   .group button.on { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
-  select { color: var(--vscode-dropdown-foreground); background: var(--vscode-dropdown-background); border: 1px solid var(--vscode-dropdown-border, #8884); border-radius: 4px; padding: 3px 6px; }
+  select { color: var(--vscode-dropdown-foreground); background: var(--vscode-dropdown-background); border: 1px solid var(--vscode-dropdown-border, #8884); border-radius: 4px; padding: 3px 6px; height: 26px; }
+  .tip { position: fixed; z-index: 10; pointer-events: none; padding: 3px 7px; border-radius: 4px; font-size: 12px; white-space: nowrap; color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground)); background: var(--vscode-editorHoverWidget-background, #252526); border: 1px solid var(--vscode-editorHoverWidget-border, #8886); box-shadow: 0 2px 8px #0004; }
   .stage { flex: 1; position: relative; overflow: hidden; padding: ${GAP}px; display: flex; gap: ${GAP}px; justify-content: center; }
   .frame { display: flex; flex-direction: column; min-width: 0; }
   .frame .label { height: ${LABEL}px; font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; opacity: .65; }
@@ -38,14 +72,29 @@ const bar = el('div', 'bar');
 const title = el('span', 'title');
 const sub = el('span', 'sub');
 const situationPick = el('select');
-situationPick.title = 'Situation';
+situationPick.dataset.tip = 'Situation';
 const sizes = el('div', 'group');
 const themes = el('div', 'group');
-const reload = el('button', undefined, 'Reload');
-reload.title = 'Draw it again';
-const windowButton = el('button', undefined, '⤢ Pop out');
+const reload = iconButton('reload', 'Reload: draw it again');
+const windowButton = iconButton('popOut', 'Pop out');
 windowButton.addEventListener('click', () => vscode.postMessage({ type: 'window' }));
-bar.append(title, sub, situationPick, sizes, themes, reload, windowButton);
+bar.append(title, sub, el('span', 'spacer'), situationPick, sizes, themes, reload, windowButton);
+
+// Hover names: right away, below the button, kept on screen (a title tooltip is slow and the bar would clip one).
+const tip = el('div', 'tip');
+tip.hidden = true;
+document.body.append(tip);
+bar.addEventListener('mouseover', (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLElement>('[data-tip]');
+  if (!b) return void (tip.hidden = true);
+  tip.textContent = b.dataset.tip ?? '';
+  tip.hidden = false;
+  const r = b.getBoundingClientRect();
+  tip.style.top = `${r.bottom + 6}px`;
+  tip.style.left = `${Math.max(4, Math.min(window.innerWidth - tip.offsetWidth - 4, r.left + r.width / 2 - tip.offsetWidth / 2))}px`;
+});
+bar.addEventListener('mouseleave', () => (tip.hidden = true));
+bar.addEventListener('scroll', () => (tip.hidden = true));
 const stage = el('div', 'stage');
 const drawingNote = el('div', 'drawing', 'Drawing…');
 drawingNote.hidden = true;
@@ -56,14 +105,13 @@ let boxes: { box: HTMLElement; frame: Frame }[] = [];
 let sentWidth = 0;
 
 for (const size of ['mobile', 'tablet', 'desktop', 'fit'] as Size[]) {
-  const b = el('button', undefined, SIZE_WORDS[size]);
+  const b = iconButton(size, size === 'fit' ? 'Fit: as wide as the space here' : `${SIZE_WORDS[size]}: ${WIDTHS[size as Exclude<Size, 'fit'>]} px wide`);
   b.dataset.size = size;
-  b.title = size === 'fit' ? 'As wide as the space here' : `${WIDTHS[size as Exclude<Size, 'fit'>]} px wide`;
   b.addEventListener('click', () => vscode.postMessage({ type: 'size', size, width: fitWidth() }));
   sizes.append(b);
 }
 for (const theme of ['light', 'dark'] as const) {
-  const b = el('button', undefined, theme === 'light' ? 'Light' : 'Dark');
+  const b = iconButton(theme, theme === 'light' ? 'Light' : 'Dark');
   b.dataset.theme = theme;
   b.addEventListener('click', () => vscode.postMessage({ type: 'theme', theme }));
   themes.append(b);
@@ -120,8 +168,7 @@ function show(m: Extract<ToPreview, { type: 'show' }>) {
   last = m;
   drawingNote.hidden = true;
   title.textContent = m.title;
-  windowButton.textContent = m.floating ? '⤡ Back' : '⤢ Pop out';
-  windowButton.title = m.floating ? 'Back into the main window' : 'Open in its own window: make it full screen there, or move it to another screen';
+  setIcon(windowButton, m.floating ? 'back' : 'popOut', m.floating ? 'Back into the main window' : 'Pop out: its own window (full screen, or another screen)');
   sub.textContent = m.sub ?? '';
   situationPick.replaceChildren(...m.situations.map((s) => Object.assign(el('option', undefined, s), { value: s, selected: s === m.situation })));
   situationPick.hidden = m.situations.length < 2;
