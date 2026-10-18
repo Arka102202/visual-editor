@@ -14,6 +14,8 @@
     "test:vscode": "npm run build && node scripts/vscode-test.mjs"
   },
   "devDependencies": {
+    "@babel/parser": "^7.29.9",
+    "@babel/types": "^7.29.8",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@types/node": "^22.10.0",
     "@types/vscode": "^1.90.0",

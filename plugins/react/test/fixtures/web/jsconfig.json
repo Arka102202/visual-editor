@@ -1,0 +1,7 @@
+{
+  // messy projects still have aliases
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": { "@/*": ["src/*"], },
+  },
+}
