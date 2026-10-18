@@ -14,12 +14,17 @@ import { readShapesAndBindings, type Binding, type ReplyShape, type Shape } from
 import { loadTypeScript, mergeShapes, TypeView } from '../read/types';
 import { exampleOf, replyRules, type ReplyRule } from './replies';
 import { CALLBACK } from './harness';
+import { appProviders, noProviders, routeElementModule, standInsModule } from './providers';
 import { record, withRecordings } from './recordings';
 
 /** Situations every component can be shown in. "live backend" calls the developer's real dev backend. */
 export const LIVE = 'live backend';
-export const SITUATIONS = ['normal', 'loading', 'empty', 'error', 'long text', LIVE];
-const SITUATION_IDS: Record<string, string> = { 'long text': 'long', [LIVE]: 'live' };
+export const SITUATIONS = ['normal', 'loading', 'empty', 'error', 'long text', 'logged out', 'session expired', LIVE];
+const SITUATION_IDS: Record<string, string> = { 'long text': 'long', 'logged out': 'loggedOut', 'session expired': 'expired', [LIVE]: 'live' };
+/** Fields whose values change what a person may see: each value the types allow becomes a situation ("role: admin"). */
+const ACCESS_FIELD = /^(role|roles|plan|tier|subscription|accessLevel|access|level|membership)$/;
+/** Storage keys that hold a login (a token, a session), found in the code: set when logged in, cleared when not. */
+const AUTH_KEY = /token|auth|session|jwt|credential/i;
 
 interface Known {
   model: FeModel;
@@ -28,6 +33,10 @@ interface Known {
   bindings: Binding[];
   /** Example replies (types first, then usage), worked out when first needed. */
   rules?: ReplyRule[];
+  /** Values of access fields (role, plan…) the types allow, each offered as a situation. */
+  choices?: Map<string, (string | number)[]>;
+  /** Storage keys the code reads that hold a login. */
+  authKeys: string[];
   /** Reply matches the code makes, for filing recordings. */
   replies: ReplyRule[];
   /** File texts, to read the TypeScript types of props for example values. */
@@ -69,7 +78,22 @@ export class ReactPreviews {
       typed.set(key, mergeShapes(typed.get(key), shape));
     }
     const merged = known.used.map((u) => ({ ...u, shape: mergeShapes(typed.get(`${u.method} ${u.match}`), u.shape) }));
+    // Typed replies the code doesn't read field by field still count (a "who am I" reply kept whole).
+    for (const [key, shape] of typed) if (!merged.some((m) => `${m.method} ${m.match}` === key)) merged.push({ method: key.split(' ')[0], match: key.slice(key.indexOf(' ') + 1), shape });
+    known.choices = new Map();
+    for (const m of merged) collectChoices(m.shape, known.choices);
     return (known.rules = replyRules(merged));
+  }
+
+  /** The situations for a card: the usual ones, plus one per role or plan value the types allow. */
+  private situationsFor(item: Item): string[] {
+    for (const [root, known] of this.known) {
+      if (!known.model.components.some((c) => item.id === `react:component:${c.id}`) && !known.model.routes.some((r) => item.id === `react:route:${r.path}`)) continue;
+      this.rulesFor(root, known);
+      const extra = [...(known.choices ?? [])].flatMap(([field, values]) => values.map((v) => `${field}: ${v}`));
+      return [...SITUATIONS.slice(0, -1), ...extra, LIVE];
+    }
+    return SITUATIONS;
   }
 
   /** Example props: from the component's props type when there is one, else from names. */
@@ -91,7 +115,8 @@ export class ReactPreviews {
   remember(root: string, model: FeModel, files: SourceFile[]) {
     const code = files.filter((f) => /\.[cm]?[jt]sx?$/.test(f.path));
     const { replies: used, bindings } = readShapesAndBindings(code);
-    this.known.set(root, { model, used, bindings, replies: replyRules(used), texts: new Map(files.map((f) => [f.path, f.text])) });
+    const texts = new Map(files.map((f) => [f.path, f.text]));
+    this.known.set(root, { model, used, bindings, replies: replyRules(used), texts, authKeys: authKeysIn(texts) });
     this.types.get(root)?.invalidate();
   }
 
@@ -120,7 +145,7 @@ export class ReactPreviews {
   readonly previewer: Previewer = {
     id: 'react',
     wants: (item) => item.id.startsWith('react:component:') || item.id.startsWith('react:route:'),
-    situations: () => SITUATIONS,
+    situations: (item) => this.situationsFor(item),
     render: (request) => this.render(request),
     heard: (message, context) => this.heard(message, context.project.root),
   };
@@ -158,7 +183,12 @@ export class ReactPreviews {
     const dexie = findDexie(known.texts);
     const seed = dexie ? seedFor(dexie, route, types) : undefined;
     const key = createHash('sha256').update(`${c.path}#${c.name}`).digest('hex').slice(0, 16);
-    writeIfChanged(join(root, PREVIEW_DIR, 'cards', `${key}.json`), JSON.stringify({ path: c.path, export: c.name, props: this.propsFor(root, c, types), ...(route ? { route } : {}), ...(seed ? { seed } : {}), requests: withRecordings(root, this.rulesFor(root, known)), ...(login ? { login } : {}) }, null, 2));
+    // A page shown the way its route shows it (with its guard), when the route wraps it.
+    const routeDef = known.model.routes.find((r) => r.target === c.id);
+    const routeText = routeDef ? known.texts.get(routeDef.file) : undefined;
+    const element = routeDef && routeText ? routeElementModule(routeDef.file, routeText, routeDef.path, PREVIEW_DIR) : undefined;
+    if (element) writeIfChanged(join(root, PREVIEW_DIR, 'routes', `${key}.tsx`), element);
+    writeIfChanged(join(root, PREVIEW_DIR, 'cards', `${key}.json`), JSON.stringify({ path: c.path, export: c.name, props: this.propsFor(root, c, types), ...(route ? { route } : {}), ...(seed ? { seed } : {}), requests: withRecordings(root, this.rulesFor(root, known)), ...(login ? { login } : {}), authKeys: known.authKeys, ...(element ? { element: `routes/${key}.tsx` } : {}) }, null, 2));
 
     let server = this.servers.get(root);
     if (!server) {
@@ -166,7 +196,7 @@ export class ReactPreviews {
       this.servers.set(root, server);
     }
     const base = await server.ensure();
-    const situation = SITUATION_IDS[req.situation] ?? req.situation;
+    const situation = SITUATION_IDS[req.situation] ?? (req.situation.includes(': ') ? req.situation.replace(': ', '=') : req.situation);
     // A dev token travels in the address's #fragment: browsers never send that part to any server or log it.
     const token = live ? await this.token(root) : undefined;
     return { url: `${base}/${PREVIEW_DIR}/index.html?c=${key}&s=${encodeURIComponent(situation)}&theme=${req.theme}&w=${req.width}&t=${Date.now()}${token ? `#token=${encodeURIComponent(token)}` : ''}` };
@@ -192,9 +222,39 @@ function writeIfChanged(path: string, text: string) {
 export function writeHarness(root: string) {
   const dir = join(root, PREVIEW_DIR);
   const setup = appSetup(root);
+  // The app's own providers (from its entry), and stand-ins for the login providers among them.
+  const entryText = setup.entry ? readText(join(root, setup.entry)) : undefined;
+  const providers = setup.entry && entryText ? appProviders(setup.entry, entryText, PREVIEW_DIR) : noProviders();
+  setup.appHasRouter = providers.hasRouter;
+  writeIfChanged(join(dir, 'app-providers.tsx'), providers.module);
+  writeIfChanged(join(dir, 'stand-ins.tsx'), standInsModule(providers.standIns));
   writeIfChanged(join(dir, '.gitignore'), '# Visual Editor previews: made on this computer, never committed.\n*\n');
   writeIfChanged(join(dir, 'index.html'), previewHtml(setup.index));
   writeIfChanged(join(dir, 'preview.tsx'), previewTsx(setup));
   writeIfChanged(join(dir, 'situations.js'), situationsModule());
   if (!existsSync(join(dir, 'cards'))) mkdirSync(join(dir, 'cards'), { recursive: true });
+}
+
+/** Values the types allow for access fields (role, plan…), anywhere in a reply. */
+function collectChoices(shape: Shape, out: Map<string, (string | number)[]>, depth = 0) {
+  if (depth > 5) return;
+  for (const [name, field] of Object.entries(shape.fields ?? {})) {
+    if (ACCESS_FIELD.test(name) && field.values && field.values.length > 1 && field.values.length <= 8) out.set(name, field.values);
+    collectChoices(field, out, depth + 1);
+  }
+  if (shape.item) collectChoices(shape.item, out, depth + 1);
+}
+
+/** Storage keys that hold a login: `localStorage.getItem('token')`, or a constant holding the key. */
+function authKeysIn(texts: Map<string, string>): string[] {
+  const keys = new Set<string>();
+  for (const text of texts.values()) {
+    if (!/(local|session)Storage/.test(text)) continue;
+    const constants = new Map([...text.matchAll(/const\s+(\w+)\s*=\s*(['"`])([^'"`]+)\2/g)].map((m) => [m[1], m[3]]));
+    for (const m of text.matchAll(/(?:local|session)Storage\.(?:getItem|setItem|removeItem)\(\s*(?:(['"`])([^'"`]+)\1|(\w+))/g)) {
+      const key = m[2] ?? constants.get(m[3]);
+      if (key && AUTH_KEY.test(key)) keys.add(key);
+    }
+  }
+  return [...keys];
 }

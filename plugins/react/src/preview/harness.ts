@@ -19,12 +19,16 @@ export const PLACEHOLDER_IMAGE =
 export const CALLBACK = '__visualEditorCallback';
 
 export interface AppSetup {
+  /** The app's entry file (relative to the project), from its index.html. */
+  entry?: string;
   /** The app's index.html, when it has one (its <head>: fonts, meta). */
   index?: string;
   /** Global stylesheets the app's entry imports, as import paths from the preview folder (or package names). */
   css: string[];
   /** Wrappers the app's components expect. */
   providers: { reactQuery: boolean; router?: 'react-router-dom' | 'react-router'; reactFlow?: '@xyflow/react' | 'reactflow' };
+  /** The app's entry puts its router among its own providers (the preview passes its router in there). */
+  appHasRouter?: boolean;
 }
 
 const read = (p: string) => {
@@ -60,6 +64,7 @@ export function appSetup(root: string): AppSetup {
   }
   return {
     ...(index ? { index } : {}),
+    ...(entrySrc ? { entry: entrySrc } : {}),
     css,
     providers: {
       reactQuery: !!deps['@tanstack/react-query'],
@@ -87,17 +92,34 @@ export function previewTsx(s: AppSetup): string {
   const p = s.providers;
   return [
     GENERATED,
-    `import { Component, type ReactNode } from 'react'`,
+    `import { Component, useEffect, type ReactNode } from 'react'`,
     `import { createRoot } from 'react-dom/client'`,
     ...s.css.map((c) => `import '${c}'`),
     ...(p.reactQuery ? [`import { QueryClient, QueryClientProvider } from '@tanstack/react-query'`] : []),
-    ...(p.router ? [`import { MemoryRouter, Routes, Route } from '${p.router}'`] : []),
+    ...(p.router ? [`import { MemoryRouter, Routes, Route, useLocation } from '${p.router}'`] : []),
     ...(p.reactFlow ? [`import { ReactFlowProvider } from '${p.reactFlow}'`] : []),
     `import { installSituations } from './situations.js'`,
+    `import { AppProviders } from './app-providers'`,
     ``,
+    `// CAPTCHAs (Turnstile, reCAPTCHA, hCaptcha) look solved: their scripts can't load at the preview's address.`,
+    `const solved = (name: string) => ({`,
+    `  render: (el: HTMLElement | string, o?: { callback?: (t: string) => void }) => { const box = typeof el === 'string' ? document.querySelector(el) : el; if (box instanceof HTMLElement) box.innerHTML = '<div style="font:12px system-ui;padding:8px 10px;border:1px dashed #8888;border-radius:6px;display:inline-block">' + name + ' · solved in the preview</div>'; setTimeout(() => o?.callback?.('preview-captcha-token'), 50); return 'preview' },`,
+    `  execute: () => Promise.resolve('preview-captcha-token'), ready: (fn: () => void) => fn(), reset: () => {}, getResponse: () => 'preview-captcha-token', remove: () => {},`,
+    `})`,
+    `for (const [key, name] of [['turnstile', 'CAPTCHA (Turnstile)'], ['grecaptcha', 'CAPTCHA (reCAPTCHA)'], ['hcaptcha', 'CAPTCHA (hCaptcha)']] as const) Object.defineProperty(window, key, { value: solved(name), writable: false })`,
     `const params = new URLSearchParams(location.search)`,
     `const card = params.get('c') ?? ''`,
-    `const situation = params.get('s') ?? 'normal'`,
+    `// "role=admin", "plan=pro": normal data, with that field set to that value everywhere.`,
+    `const asked = params.get('s') ?? 'normal'`,
+    `const override = asked.includes('=') ? (asked.split('=') as [string, string]) : undefined`,
+    `const situation = override ? 'normal' : asked`,
+    `const APP_HAS_ROUTER = ${s.appHasRouter ? 'true' : 'false'}`,
+    `const setEverywhere = (v: unknown): unknown => {`,
+    `  if (!override) return v`,
+    `  if (Array.isArray(v)) return v.map(setEverywhere)`,
+    `  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, k === override[0] ? (typeof x === 'number' ? Number(override[1]) : override[1]) : setEverywhere(x)]))`,
+    `  return v`,
+    `}`,
     `const theme = params.get('theme') === 'light' ? 'light' : 'dark'`,
     `// Light or dark the common ways apps read it: a data attribute, Tailwind's "dark" class, and the colour scheme.`,
     `document.documentElement.setAttribute('data-theme', theme)`,
@@ -122,7 +144,7 @@ export function previewTsx(s: AppSetup): string {
     `  return <pre style={{ color: '#ff5a5f', background: '#1e1f22', padding: 14, margin: 0, whiteSpace: 'pre-wrap', font: '12px/1.5 ui-monospace, monospace', minHeight: '100vh', boxSizing: 'border-box' }}>{text}</pre>`,
     `}`,
     `// A crash in plain words: what failed, in which situation, and in which component and file (not a stack dump).`,
-    `const SITUATION_WORDS: Record<string, string> = { normal: 'with normal data', loading: 'while loading', empty: 'when there is no data', error: 'when the server fails', long: 'with long text', live: 'with your live backend' }`,
+    `const SITUATION_WORDS: Record<string, string> = { normal: 'with normal data', loading: 'while loading', empty: 'when there is no data', error: 'when the server fails', long: 'with long text', live: 'with your live backend', loggedOut: 'when logged out', expired: 'when the session has expired' }`,
     `function explain(error: Error) {`,
     `  const at = /at (\\w+) \\([^)]*?\\/(src\\/[^?:)]+)/.exec(String(error.stack ?? ''))`,
     `  const where = at ? '\\n\\nWhere: ' + at[1] + ' (' + at[2] + ')' : ''`,
@@ -135,20 +157,29 @@ export function previewTsx(s: AppSetup): string {
     `  componentDidCatch(error: Error) { say({ type: 'error', message: String(error?.message ?? error) }) }`,
     `  render() { return this.state.error ? <Problem text={explain(this.state.error)} /> : this.props.children }`,
     `}`,
+    `/** Shown when the page sends you somewhere else (a login page, home): where, in plain words. */`,
+    `function Redirected() {`,
+    ...(p.router ? [`  const to = useLocation().pathname`] : [`  const to = location.pathname`]),
+    `  useEffect(() => say({ type: 'redirected', to }), [to])`,
+    `  return <Problem text={'This page sent you to ' + to + (situation === 'loggedOut' || situation === 'expired' ? ' (not logged in).' : '.') + '\\n\\nIt usually means it needs a login, a role or some data it did not get. The other situations show it logged in.'} />`,
+    `}`,
     ...(p.reactQuery ? [`const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })`] : []),
     `const Wrap = ({ children, route }: { children: ReactNode; route?: string }) => {`,
     `  let out = <>{children}</>`,
+    ...(p.reactQuery ? [`  out = <QueryClientProvider client={client}>{out}</QueryClientProvider>`] : []),
     ...(p.reactFlow ? [`  out = <ReactFlowProvider>{out}</ReactFlowProvider>`] : []),
     ...(p.router
       ? [
-          `  // A page is shown at its own address (with example values), so useParams and links work.`,
-          `  const at = route && route.startsWith('/') ? route : '/'`,
-          `  const address = at.replace(/:(\\w+)/g, 'example').replace(/\\*\\w*$/, '')`,
-          `  out = <MemoryRouter initialEntries={[address]}><Routes><Route path={route && route.startsWith('/') ? route : '*'} element={out} /></Routes></MemoryRouter>`,
+          `  // A page is shown at its own address (with example values), so useParams and links work; any other address`,
+          `  // it goes to (a redirect) says so.`,
+          `  const path = route && route.startsWith('/') ? route : '/'`,
+          `  const address = path.replace(/:(\\w+)/g, 'example').replace(/\\*\\w*$/, '')`,
+          `  const inner = out`,
+          `  const Routed = ({ children: c }: { children: ReactNode }) => <MemoryRouter initialEntries={[address]}><Routes><Route path={path} element={c} /><Route path="*" element={<Redirected />} /></Routes></MemoryRouter>`,
+          `  // The app's own providers (auth, theme…) go around it; where the app had its router, the preview's goes.`,
+          `  return APP_HAS_ROUTER ? <AppProviders Router={Routed}>{inner}</AppProviders> : <AppProviders><Routed>{inner}</Routed></AppProviders>`,
         ]
-      : []),
-    ...(p.reactQuery ? [`  out = <QueryClientProvider client={client}>{out}</QueryClientProvider>`] : []),
-    `  return out`,
+      : [`  return <AppProviders>{out}</AppProviders>`]),
     `}`,
     ``,
     `/** Requests that stay on this computer: the only ones a dev token is ever added to. */`,
@@ -208,7 +239,16 @@ export function previewTsx(s: AppSetup): string {
     `async function main() {`,
     `  const res = await fetch('./cards/' + encodeURIComponent(card) + '.json?t=' + Date.now())`,
     `  if (!res.ok) throw new Error('This preview is out of date. Reload it.')`,
-    `  const c = (await res.json()) as { path: string; export: string; props: unknown; route?: string; seed?: { module: string; export: string; tables: Record<string, unknown[]> }; requests?: { match: string; reply: unknown }[]; login?: string }`,
+    `  const raw = (await res.json()) as { path: string; export: string; props: unknown; route?: string; seed?: { module: string; export: string; tables: Record<string, unknown[]> }; requests?: { match: string; reply: unknown }[]; login?: string; authKeys?: string[]; element?: string }`,
+    `  const c = setEverywhere(raw) as typeof raw`,
+    `  // Login tokens the app keeps in storage: there when logged in, gone when logged out, stale when expired.`,
+    `  for (const key of c.authKeys ?? []) {`,
+    `    for (const store of [localStorage, sessionStorage]) {`,
+    `      if (situation === 'loggedOut') store.removeItem(key)`,
+    `      else if (situation === 'expired') store.setItem(key, 'expired-preview-token')`,
+    `      else if (store === localStorage && !store.getItem(key)) store.setItem(key, 'preview-token')`,
+    `    }`,
+    `  }`,
     `  // Stand-in data: the app's own browser database (Dexie) gets example rows first ("empty": none).`,
     `  // Only ever at the preview's own address (an IP), never at localhost where the app itself keeps its real data.`,
     `  if (c.seed && location.hostname !== 'localhost') {`,
@@ -236,8 +276,10 @@ export function previewTsx(s: AppSetup): string {
     `  const props = situation === 'live'`,
     `    ? (goLive(c.login), revive(c.props) as Record<string, unknown>)`,
     `    : installSituations({ id: situation, fixtures: { props: () => revive(c.props), situations: { normal: { requests: c.requests ?? [] } } }, log, win: window${p.reactQuery ? ', QueryClient' : ''} }).props`,
+    `  // A page whose route wraps it (a login guard): shown with that wrapper, like in the app.`,
     `  // eslint-disable-next-line @typescript-eslint/no-explicit-any`,
-    `  const mod = (await import(/* @vite-ignore */ '/' + c.path)) as Record<string, any>`,
+    `  const loaded = (await import(/* @vite-ignore */ c.element ? './' + c.element : '/' + c.path)) as Record<string, any>`,
+    `  const mod = c.element ? { [c.export]: loaded.default } : loaded`,
     `  // Its own export, or the file's default export only when that really is this component (memo/forwardRef too).`,
     `  const def = mod.default`,
     `  const defName = def && (def.displayName ?? def.name ?? def.type?.name ?? def.render?.name)`,
@@ -247,8 +289,18 @@ export function previewTsx(s: AppSetup): string {
     `  if (!c.route) rootEl.style.padding = '24px'`,
     `  createRoot(rootEl).render(<Boundary><Wrap route={c.route}><View {...(props as object)} /></Wrap></Boundary>)`,
     `  say({ type: 'ready' })`,
-    `  // What's on screen once data has arrived (for checks and for assistants): its visible text.`,
-    `  setTimeout(() => say({ type: 'text', text: (rootEl.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 400) }), 1500)`,
+    `  // What's on screen once data has arrived (for checks and for assistants): its visible text, sent again when it`,
+    `  // changes (slow data, a redirect), for the first 10 seconds.`,
+    `  let last = ''`,
+    `  let quiet: ReturnType<typeof setTimeout> | undefined`,
+    `  const report = () => {`,
+    `    const text = (rootEl.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 400)`,
+    `    if (text && text !== last) say({ type: 'text', text: (last = text) })`,
+    `  }`,
+    `  const watch = new MutationObserver(() => { clearTimeout(quiet); quiet = setTimeout(report, 300) })`,
+    `  watch.observe(rootEl, { childList: true, subtree: true, characterData: true })`,
+    `  setTimeout(report, 1500)`,
+    `  setTimeout(() => { watch.disconnect(); report() }, 10_000)`,
     `}`,
     `main().catch((e) => {`,
     `  say({ type: 'error', message: String(e?.message ?? e) })`,
@@ -303,7 +355,7 @@ export function sample(name: string, type: string | undefined, depth: number, ty
   const t = (type ?? '').replace(/\s+/g, '');
   const bare = t.replace(/\|null|\|undefined|\?/g, '');
   if (/=>/.test(t)) return { [CALLBACK]: name };
-  if (/\[\]$|^Array</.test(t) || n.endsWith('list') || (n.endsWith('s') && /items|children|rows|list/.test(n))) {
+  if (/\[\]$|^Array</.test(t) || n.endsWith('list') || (!t && n.endsWith('s') && /items|children|rows|list/.test(n))) {
     const inner = t.replace(/\[\]$/, '').replace(/^Array<(.*)>$/, '$1');
     const one = inner && inner !== t ? sample(name.replace(/s$/, ''), inner, depth + 1, types) : undefined;
     return one !== undefined && depth < 2 && !(one && typeof one === 'object' && !Object.keys(one).length) ? [one, one] : [];

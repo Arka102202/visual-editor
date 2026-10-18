@@ -24,8 +24,8 @@ export interface Situation {
   props?: unknown;
   /** Fake replies for this situation, checked in order. */
   requests?: RequestRule[];
-  /** What every other request does: stay loading, fail, or reply with an empty list. Without it, Normal's replies apply. */
-  all?: 'loading' | 'error' | 'empty';
+  /** What every other request does: stay loading, fail, refuse (401), or reply with an empty list. Without it, Normal's replies apply. */
+  all?: 'loading' | 'error' | 'empty' | 'unauthorized';
 }
 
 export interface SituationsResult {
@@ -80,18 +80,20 @@ export function installSituations(opts: {
     return v;
   };
 
-  const builtIn: Record<string, { label: string; props?: unknown; all?: 'loading' | 'error' | 'empty'; requests?: RequestRule[] }> = {
+  const builtIn: Record<string, { label: string; props?: unknown; all?: 'loading' | 'error' | 'empty' | 'unauthorized'; requests?: RequestRule[] }> = {
     normal: { label: 'Normal' },
     loading: { label: 'Loading', all: 'loading' },
     empty: { label: 'Empty', all: 'empty', props: emptied(base) },
     error: { label: 'Error', all: 'error' },
     long: { label: 'Long text', props: lengthened(base) },
+    loggedOut: { label: 'Logged out', all: 'unauthorized' },
+    expired: { label: 'Session expired', all: 'unauthorized' },
   };
   // The user's own situations add to these, or change them (same name).
   const own = (fixtures.situations ?? fixtures.scenarios ?? {}) as Record<string, unknown>;
-  const all: Record<string, { label: string; props?: unknown; all?: 'loading' | 'error' | 'empty'; requests?: RequestRule[] }> = { ...builtIn };
+  const all: Record<string, { label: string; props?: unknown; all?: 'loading' | 'error' | 'empty' | 'unauthorized'; requests?: RequestRule[] }> = { ...builtIn };
   for (const [key, value] of Object.entries(own)) {
-    const s = (typeof value === 'function' ? { props: value } : (value ?? {})) as { label?: string; props?: unknown; all?: 'loading' | 'error' | 'empty'; requests?: RequestRule[] };
+    const s = (typeof value === 'function' ? { props: value } : (value ?? {})) as { label?: string; props?: unknown; all?: 'loading' | 'error' | 'empty' | 'unauthorized'; requests?: RequestRule[] };
     const label = s.label ?? builtIn[key]?.label ?? key.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[-_]+/g, ' ').replace(/^./, (c) => c.toUpperCase());
     all[key] = { ...builtIn[key], ...s, label };
   }
@@ -107,6 +109,7 @@ export function installSituations(opts: {
     if (rule) return { body: rule.reply ?? null, status: rule.status ?? 200, wait: rule.wait ?? 300 };
     if (chosen.all === 'loading') return { body: null, status: 200, wait: 'forever' };
     if (chosen.all === 'error') return { body: { error: 'Server error (made up by Visual Editor)' }, status: 500, wait: 300 };
+    if (chosen.all === 'unauthorized') return { body: { error: 'Not logged in (made up by Visual Editor)' }, status: 401, wait: 200 };
     // Empty: the normal reply's shape with every list emptied (a detail page still gets its object); else [].
     if (chosen.all === 'empty') {
       const n = find(all.normal.requests);

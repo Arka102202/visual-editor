@@ -1,0 +1,13 @@
+:root { font-family: system-ui, sans-serif; color-scheme: light dark; }
+body { margin: 0; }
+.dark body { background: #16171a; color: #eee; }
+main { padding: 20px; max-width: 860px; }
+nav { display: flex; gap: 14px; padding: 12px 20px; border-bottom: 1px solid #8884; align-items: center; flex-wrap: wrap; }
+nav .spacer { flex: 1; }
+.card { border: 1px solid #8884; border-radius: 10px; padding: 12px 16px; margin: 10px 0; }
+.muted { opacity: .65; font-size: 13px; }
+.badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #22e0d044; }
+.error { color: #ff5a5f; }
+button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid #8886; cursor: pointer; }
+input { font: inherit; padding: 6px 10px; border-radius: 6px; border: 1px solid #8886; }
+dialog { border-radius: 10px; border: 1px solid #8886; }

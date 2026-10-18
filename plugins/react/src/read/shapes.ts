@@ -119,8 +119,8 @@ export class ShapeReader {
   /** Reads all files. Helpers and hooks first, so components that use them are understood. */
   read(files: SourceFile[]): ReplyShape[] {
     const asts = files.map((f) => ({ path: f.path, ast: parseSource(f) })).filter((a): a is { path: string; ast: t.File } => !!a.ast);
-    // Twice: a hook may use a helper defined in a file read later.
-    for (let pass = 0; pass < 2; pass++) for (const { ast } of asts) this.index(ast);
+    // Three times: a hook may use a helper defined in a file read later, and helpers may call helpers.
+    for (let pass = 0; pass < 3; pass++) for (const { ast } of asts) this.index(ast);
     for (const { path, ast } of asts) {
       this.file = path;
       this.collect(ast);
@@ -146,6 +146,9 @@ export class ShapeReader {
         return this.valueOf(e.expression, scope);
       case 'LogicalExpression':
         return this.valueOf(e.left, scope) ?? this.valueOf(e.right, scope);
+      // r.ok ? r.json() : null
+      case 'ConditionalExpression':
+        return this.valueOf(e.consequent, scope) ?? this.valueOf(e.alternate, scope);
       case 'MemberExpression':
       case 'OptionalMemberExpression': {
         const base = this.valueOf(e.object, scope);
@@ -218,6 +221,9 @@ export class ShapeReader {
     const helperKey = callee.type === 'Identifier' ? callee.name : isMember(callee) && callee.object.type === 'Identifier' && propName(callee) ? `${callee.object.name}.${propName(callee)}` : undefined;
     const helper = helperKey ? this.addressHelpers.get(helperKey) : undefined;
     if (helper) {
+      // A helper calling another with its own parameter (getJson(path) → request(path)) passes the address on.
+      const passed = this.paramOf(c.arguments[helper.param] as N);
+      if (passed !== undefined) return { match: `\u0000${passed}`, method: helper.method, as: helper.as, at: [] };
       const match = matchOf(addressOf(c.arguments[helper.param] as N) ?? '');
       if (match) return { match, method: helper.method, as: helper.as, at: [] };
     }
