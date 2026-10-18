@@ -16,5 +16,5 @@
       "@visual-editor/contract": ["./packages/contract/src/index.ts"]
     }
   },
-  "include": ["packages/*/src", "packages/*/test", "plugins/*/src", "plugins/*/test"]
+  "include": ["packages/*/src", "packages/*/test", "plugins/*/src", "plugins/*/test", "test-vscode"]
 }

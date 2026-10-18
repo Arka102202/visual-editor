@@ -1,0 +1,208 @@
+{
+  "name": "visual-editor",
+  "displayName": "Visual Editor",
+  "description": "See your project as maps, review every change, and grow the editor with plugins for your stack.",
+  "version": "0.1.0",
+  "publisher": "arka102202",
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "visualEditor",
+          "title": "Visual Editor",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "visualEditor": [
+        {
+          "id": "visualEditor.projects",
+          "name": "Projects"
+        },
+        {
+          "id": "visualEditor.assistants",
+          "name": "Assistants"
+        },
+        {
+          "id": "visualEditor.memory",
+          "name": "Memory"
+        },
+        {
+          "id": "visualEditor.plugins",
+          "name": "Plugins"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "visualEditor.openMap",
+        "title": "Open the Map",
+        "category": "Visual Editor",
+        "icon": "$(type-hierarchy-sub)"
+      },
+      {
+        "command": "visualEditor.openReview",
+        "title": "Open Review",
+        "category": "Visual Editor",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "visualEditor.tryProposal",
+        "title": "Try Review with an Example Proposal",
+        "category": "Visual Editor"
+      },
+      {
+        "command": "visualEditor.chooseProject",
+        "title": "Choose Project",
+        "category": "Visual Editor",
+        "icon": "$(folder-library)"
+      },
+      {
+        "command": "visualEditor.showPlugins",
+        "title": "Show Plugins",
+        "category": "Visual Editor"
+      },
+      {
+        "command": "visualEditor.addRule",
+        "title": "Add a Rule",
+        "category": "Visual Editor",
+        "icon": "$(law)"
+      },
+      {
+        "command": "visualEditor.addDecision",
+        "title": "Add a Decision",
+        "category": "Visual Editor",
+        "icon": "$(milestone)"
+      },
+      {
+        "command": "visualEditor.editMemory",
+        "title": "Edit",
+        "category": "Visual Editor",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "visualEditor.removeMemory",
+        "title": "Forget",
+        "category": "Visual Editor",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "visualEditor.connectClaudeCode",
+        "title": "Connect Claude Code",
+        "category": "Visual Editor",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "visualEditor.chooseAssistant",
+        "title": "Assistants",
+        "category": "Visual Editor",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "visualEditor.connectAssistant",
+        "title": "Connect",
+        "category": "Visual Editor",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "visualEditor.disconnectAssistant",
+        "title": "Disconnect",
+        "category": "Visual Editor",
+        "icon": "$(debug-disconnect)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "visualEditor.openMap",
+          "when": "view == visualEditor.projects",
+          "group": "navigation@1"
+        },
+        {
+          "command": "visualEditor.openReview",
+          "when": "view == visualEditor.projects",
+          "group": "navigation@2"
+        },
+        {
+          "command": "visualEditor.chooseProject",
+          "when": "view == visualEditor.projects",
+          "group": "navigation@3"
+        },
+        {
+          "command": "visualEditor.addRule",
+          "when": "view == visualEditor.memory",
+          "group": "navigation@1"
+        },
+        {
+          "command": "visualEditor.addDecision",
+          "when": "view == visualEditor.memory",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "visualEditor.addRule",
+          "when": "view == visualEditor.memory && viewItem == group-rule",
+          "group": "inline"
+        },
+        {
+          "command": "visualEditor.addDecision",
+          "when": "view == visualEditor.memory && viewItem == group-decision",
+          "group": "inline"
+        },
+        {
+          "command": "visualEditor.editMemory",
+          "when": "view == visualEditor.memory && viewItem =~ /^entry-(rule|decision|note)$/",
+          "group": "inline@1"
+        },
+        {
+          "command": "visualEditor.removeMemory",
+          "when": "view == visualEditor.memory && viewItem =~ /^entry-/",
+          "group": "inline@2"
+        },
+        {
+          "command": "visualEditor.connectAssistant",
+          "when": "view == visualEditor.assistants && viewItem == assistant-off",
+          "group": "inline"
+        },
+        {
+          "command": "visualEditor.disconnectAssistant",
+          "when": "view == visualEditor.assistants && viewItem == assistant-on",
+          "group": "inline"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "visualEditor.editMemory",
+          "when": "false"
+        },
+        {
+          "command": "visualEditor.removeMemory",
+          "when": "false"
+        },
+        {
+          "command": "visualEditor.connectAssistant",
+          "when": "false"
+        },
+        {
+          "command": "visualEditor.disconnectAssistant",
+          "when": "false"
+        }
+      ]
+    }
+  }
+}
