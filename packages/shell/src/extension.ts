@@ -15,6 +15,9 @@ import { OutsideChanges } from './changes';
 import { Review } from './review';
 import { askEntry, MemoryView, ProjectMemory } from './memoryView';
 import type { MemoryEntry } from './memory';
+import { Hub } from './hub/hub';
+import { AssistantsView, chooseAssistant } from './hub/assistantsView';
+import { vscodeFiles } from './vscodeFiles';
 
 export function activate(context: vscode.ExtensionContext): ShellApi {
   const registry = new PluginRegistry();
@@ -181,6 +184,33 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     }),
   );
 
+  // The assistant hub: Claude Code reads the map, rules and memory, and proposes changes into Review.
+  const hub = new Hub(context, {
+    projects: () => index.snapshot(),
+    current: () => current.get(),
+    whenReady: (ms) => Promise.race([index.idle(), new Promise<void>((r) => setTimeout(r, ms))]),
+    proposals: (root) => review.proposals(root),
+    memory: (root) => memory.entries(root),
+    readFile: (root, path) => vscodeFiles(root, changes).read(path),
+    propose: (root, p) => review.receiveProposal(root, p),
+    remember: (root, e) => memory.update(root, e),
+  }, log);
+  void hub.start();
+  const assistantsView = new AssistantsView(hub);
+  context.subscriptions.push(
+    hub,
+    assistantsView,
+    vscode.window.registerTreeDataProvider('visualEditor.assistants', assistantsView),
+    hub.onChange(updateStatus),
+    vscode.commands.registerCommand('visualEditor.chooseAssistant', () => chooseAssistant(hub)),
+    vscode.commands.registerCommand('visualEditor.connectAssistant', () => hub.connectClaudeCode()),
+    vscode.commands.registerCommand('visualEditor.disconnectAssistant', async () => {
+      const pick = await vscode.window.showWarningMessage('Disconnect Claude Code from Visual Editor for this folder?', { modal: true }, 'Disconnect');
+      if (pick) await hub.disconnectClaudeCode();
+    }),
+    vscode.commands.registerCommand('visualEditor.connectClaudeCode', () => hub.connectClaudeCode()),
+  );
+
   log.appendLine(`Visual Editor started (plugin contract ${CONTRACT_VERSION}).`);
   const api: ShellApi = {
     contract: CONTRACT_VERSION,
@@ -198,7 +228,7 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     },
   };
   // The VS Code test (npm run test:vscode) reaches inside; never switched on otherwise.
-  if (process.env.VISUAL_EDITOR_TEST === '1') return Object.assign(api, { _test: { index, current, review, memory, changes, map } });
+  if (process.env.VISUAL_EDITOR_TEST === '1') return Object.assign(api, { _test: { index, current, review, memory, changes, map, hub } });
   return api;
 }
 

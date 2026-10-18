@@ -23,13 +23,18 @@ async function until(check: () => boolean, what: string, ms = 10_000) {
   throw new Error(`waited too long for: ${what}`);
 }
 
-/** Asks the launcher (which may capture the screen) for a screenshot, and waits for it. */
+/** Asks the launcher for something only it can do (capture the screen, run Claude Code), and waits until it's done. */
+async function ask(name: string, payload: unknown, ms: number) {
+  const dir = process.env.VISUAL_EDITOR_REQUESTS!;
+  writeFileSync(join(dir, `${name}.ask`), JSON.stringify(payload ?? {}));
+  await until(() => existsSync(join(dir, `${name}.done`)), name, ms);
+  return readFileSync(join(dir, `${name}.done`), 'utf8');
+}
+
 async function shot(name: string) {
-  const dir = process.env.VISUAL_EDITOR_SHOTS;
-  if (!dir) return;
-  writeFileSync(join(dir, `${name}.want`), '');
+  if (!process.env.VISUAL_EDITOR_SHOTS) return;
   try {
-    await until(() => existsSync(join(dir, `${name}.png`)), `screenshot ${name}`, 8000);
+    await ask(`shot-${name}`, {}, 8000);
   } catch {
     say(`  (no screenshot for ${name})`);
   }
@@ -144,6 +149,68 @@ export async function run() {
     await shot('5-outside-change');
     writeFileSync(readme, original);
   });
+
+  await step('an assistant reads the map and proposes through the hub', async () => {
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { StreamableHTTPClientTransport } = await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
+    await until(() => !!t.hub.url, 'the hub to start');
+    const client = new Client({ name: 'claude-code', version: '1' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(t.hub.url), { requestInit: { headers: { Authorization: `Bearer ${t.hub.token}` } } }));
+    const text = async (name: string, args: Record<string, unknown> = {}) => ((await client.callTool({ name, arguments: args })) as any).content[0].text as string;
+    const overview = await text('overview');
+    if (!overview.includes('Plugins: Hello') || !overview.includes('Use the theme colours')) throw new Error(`overview: ${overview}`);
+    const before = t.review.proposals(root).length;
+    const now = readFileSync(readme, 'utf8');
+    await text('propose_change', { title: 'Say hello in the README', why: 'A friendly start', changes: [{ path: 'README.md', content: now + '\nHello from the hub.\n' }], cards: ['hello:card'] });
+    await client.close();
+    const p = t.review.proposals(root)[0];
+    if (t.review.proposals(root).length !== before + 1 || p.by.name !== 'Claude Code' || p.changes[0].before !== now) throw new Error(`proposal: ${JSON.stringify(p)}`);
+    if (readFileSync(readme, 'utf8') !== now) throw new Error('the file changed before review');
+    // Rejecting asks for a reason in an input box; mark it directly so the test doesn't wait on one.
+    t.review.store(root).mark(p, 'rejected', 'only a test');
+    t.review.reload(root, false);
+  });
+
+  await step('one status bar button; assistants in their own section and behind the plug button', async () => {
+    const list = t.hub.assistants();
+    if (list.length !== 1 || list[0].name !== 'Claude Code' || !list[0].talking) throw new Error(JSON.stringify(list));
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    await vscode.commands.executeCommand('visualEditor.assistants.focus');
+    await wait(1200);
+    await shot('8-assistants-section');
+    void vscode.commands.executeCommand('visualEditor.chooseAssistant');
+    await wait(1200);
+    await shot('9-assistants-dropdown');
+    await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
+  });
+
+  await step('Connect finds claude (even off the PATH), the list says connected, and Disconnect removes it', async () => {
+    await t.hub.connectClaudeCode();
+    await until(() => t.hub.claudeState() === 'on', 'Claude Code settings to have the hub', 15_000);
+    await vscode.commands.executeCommand('visualEditor.assistants.focus');
+    await wait(1500);
+    await shot('10-assistant-connected');
+    await t.hub.disconnectClaudeCode();
+    await until(() => t.hub.claudeState() === 'off', 'the hub to be gone from Claude Code settings', 15_000);
+  });
+
+  if (process.env.VISUAL_EDITOR_CLAUDE === '1') {
+    await step('real Claude Code proposes a change through the hub, and approving applies it', async () => {
+      const before = t.review.proposals(root).length;
+      const out = await ask('claude', { url: t.hub.url, token: t.hub.token, cwd: root }, 240_000);
+      say(`  Claude Code said: ${out.trim().split('\n').slice(-3).join(' / ').slice(0, 300)}`);
+      await until(() => t.review.proposals(root).length > before, 'the proposal from Claude Code', 5000);
+      const p = t.review.proposals(root)[0];
+      if (p.by.name !== 'Claude Code') throw new Error(`proposed by ${p.by.name}`);
+      t.review.show(p.id);
+      await wait(1500);
+      await shot('6-claude-proposal');
+      await t.review.receive({ type: 'approve', id: p.id });
+      if (!readFileSync(readme, 'utf8').includes('Made with Visual Editor')) throw new Error('README does not have the line');
+      await wait(1200);
+      await shot('7-claude-applied');
+    });
+  }
 
   if (process.env.VISUAL_EDITOR_REPORT) writeFileSync(process.env.VISUAL_EDITOR_REPORT, lines.join('\n') + '\n');
   if (failed) throw new Error(`${failed} step(s) failed`);

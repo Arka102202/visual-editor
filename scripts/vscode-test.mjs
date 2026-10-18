@@ -1,5 +1,8 @@
 // Starts a real VS Code with the shell and the Hello plugin on a throwaway project, and runs test-vscode/smoke.ts
-// inside it.  npm run test:vscode   (screenshots: SHOTS=<folder>; VS Code elsewhere: VSCODE_PATH=<binary>)
+// inside it.  npm run test:vscode
+//   SHOTS=<folder>   take screenshots (needs permission to record the screen)
+//   CLAUDE=1         also let real Claude Code connect to the hub and propose a change (uses Claude)
+//   VSCODE_PATH=…    VS Code elsewhere
 
 import * as esbuild from 'esbuild';
 import { execFileSync, spawn } from 'node:child_process';
@@ -21,8 +24,19 @@ const shots = process.env.SHOTS ? resolve(process.env.SHOTS) : undefined;
 if (shots) mkdirSync(shots, { recursive: true });
 
 const code = process.env.VSCODE_PATH ?? '/Applications/Visual Studio Code.app/Contents/MacOS/Electron';
-const env = { ...process.env, VISUAL_EDITOR_TEST: '1', VISUAL_EDITOR_REPORT: report, ...(shots ? { VISUAL_EDITOR_SHOTS: shots } : {}) };
+const requests = join(temp, 'requests');
+mkdirSync(requests);
+const env = {
+  ...process.env,
+  VISUAL_EDITOR_TEST: '1',
+  VISUAL_EDITOR_REPORT: report,
+  VISUAL_EDITOR_REQUESTS: requests,
+  ...(shots ? { VISUAL_EDITOR_SHOTS: shots } : {}),
+  ...(process.env.CLAUDE === '1' ? { VISUAL_EDITOR_CLAUDE: '1' } : {}),
+};
 delete env.ELECTRON_RUN_AS_NODE;
+// Like VS Code opened from the Dock: without the folder where `claude` is usually installed on its PATH.
+env.PATH = (env.PATH ?? '').split(':').filter((p) => !p.endsWith('/.local/bin')).join(':');
 const child = spawn(
   code,
   [
@@ -40,23 +54,40 @@ const child = spawn(
   ],
   { env, stdio: ['ignore', 'pipe', 'pipe'] },
 );
-// The test asks for screenshots with <name>.want files; this process takes them (it may capture the screen).
-const shooter = shots
-  ? setInterval(() => {
-      for (const f of readdirSync(shots).filter((n) => n.endsWith('.want'))) {
-        rmSync(join(shots, f));
-        try {
-          execFileSync('screencapture', ['-x', join(shots, f.replace(/\.want$/, '.png'))]);
-        } catch (e) {
-          console.error(`screenshot failed: ${e.message}`);
-        }
+// The test asks for what only this process can do with <name>.ask files, and waits for <name>.done.
+const CLAUDE_PROMPT = `Use the visual-editor MCP tools. Call overview, then memory. Read README.md, then call propose_change to add the
+line "Made with Visual Editor." at the end of README.md (give the whole new file). Never edit files yourself. Then reply in one line.`;
+let busy = false;
+const shooter = setInterval(() => {
+  if (busy) return;
+  for (const f of readdirSync(requests).filter((n) => n.endsWith('.ask'))) {
+    const name = f.slice(0, -4);
+    const payload = JSON.parse(readFileSync(join(requests, f), 'utf8') || '{}');
+    rmSync(join(requests, f));
+    let out = '';
+    busy = true;
+    try {
+      if (name.startsWith('shot-') && shots) execFileSync('screencapture', ['-x', join(shots, `${name.slice(5)}.png`)]);
+      if (name === 'claude') {
+        const config = JSON.stringify({ mcpServers: { 'visual-editor': { type: 'http', url: payload.url, headers: { Authorization: `Bearer ${payload.token}` } } } });
+        out = execFileSync(
+          'claude',
+          ['-p', '--strict-mcp-config', '--mcp-config', config, '--allowedTools', 'Read mcp__visual-editor__overview mcp__visual-editor__memory mcp__visual-editor__propose_change mcp__visual-editor__list_cards mcp__visual-editor__card', '--disallowedTools', 'Edit Write Bash'],
+          // The prompt goes in on stdin: the tool lists above would swallow it as one more name.
+          { cwd: payload.cwd, encoding: 'utf8', timeout: 220_000, input: CLAUDE_PROMPT },
+        );
       }
-    }, 200)
-  : undefined;
+    } catch (e) {
+      out = `failed: ${e.message}`;
+    }
+    busy = false;
+    writeFileSync(join(requests, `${name}.done`), out);
+  }
+}, 200);
 child.stdout.on('data', () => {});
 child.stderr.on('data', () => {});
 child.on('exit', (status) => {
-  if (shooter) clearInterval(shooter);
+  clearInterval(shooter);
   let text = '';
   try {
     text = readFileSync(report, 'utf8');

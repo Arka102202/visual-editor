@@ -34,6 +34,10 @@
           "name": "Projects"
         },
         {
+          "id": "visualEditor.assistants",
+          "name": "Assistants"
+        },
+        {
           "id": "visualEditor.memory",
           "name": "Memory"
         },
@@ -95,6 +99,30 @@
         "title": "Forget",
         "category": "Visual Editor",
         "icon": "$(trash)"
+      },
+      {
+        "command": "visualEditor.connectClaudeCode",
+        "title": "Connect Claude Code",
+        "category": "Visual Editor",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "visualEditor.chooseAssistant",
+        "title": "Assistants",
+        "category": "Visual Editor",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "visualEditor.connectAssistant",
+        "title": "Connect",
+        "category": "Visual Editor",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "visualEditor.disconnectAssistant",
+        "title": "Disconnect",
+        "category": "Visual Editor",
+        "icon": "$(debug-disconnect)"
       }
     ],
     "menus": {
@@ -145,6 +173,16 @@
           "command": "visualEditor.removeMemory",
           "when": "view == visualEditor.memory && viewItem =~ /^entry-/",
           "group": "inline@2"
+        },
+        {
+          "command": "visualEditor.connectAssistant",
+          "when": "view == visualEditor.assistants && viewItem == assistant-off",
+          "group": "inline"
+        },
+        {
+          "command": "visualEditor.disconnectAssistant",
+          "when": "view == visualEditor.assistants && viewItem == assistant-on",
+          "group": "inline"
         }
       ],
       "commandPalette": [
@@ -154,6 +192,14 @@
         },
         {
           "command": "visualEditor.removeMemory",
+          "when": "false"
+        },
+        {
+          "command": "visualEditor.connectAssistant",
+          "when": "false"
+        },
+        {
+          "command": "visualEditor.disconnectAssistant",
           "when": "false"
         }
       ]

@@ -4,6 +4,7 @@
 
 import * as vscode from 'vscode';
 import { webviewPage } from './webviewPage';
+import { vscodeFiles } from './vscodeFiles';
 import { join } from 'node:path';
 import type { Disposable } from '@visual-editor/contract';
 import type { OutsideChanges } from './changes';
@@ -83,6 +84,12 @@ export class Review implements vscode.Disposable {
       this.ready = false;
     });
     this.panel = panel;
+  }
+
+  /** A proposal from the assistant hub: saved, shown in Review, and announced. */
+  receiveProposal(root: string, p: Proposal) {
+    this.store(root).save(p);
+    this.reload(root, true);
   }
 
   /** Makes an example proposal in the shown project, to try review without an assistant. */
@@ -268,46 +275,7 @@ export class Review implements vscode.Disposable {
     void this.panel.webview.postMessage(message);
   }
 
-  /** File access through VS Code: open files are read as shown and edited in place, so editor undo works too. */
   private files(root: string): Files {
-    const uri = (path: string) => vscode.Uri.file(join(root, path));
-    const exists = async (u: vscode.Uri) => {
-      try {
-        await vscode.workspace.fs.stat(u);
-        return true;
-      } catch {
-        return false;
-      }
-    };
-    return {
-      read: async (path) => {
-        const u = uri(path);
-        const open = vscode.workspace.textDocuments.find((d) => d.uri.fsPath === u.fsPath);
-        if (open) return open.getText();
-        try {
-          return new TextDecoder().decode(await vscode.workspace.fs.readFile(u));
-        } catch {
-          return undefined;
-        }
-      },
-      write: async (path, text) => {
-        const u = uri(path);
-        this.changes.expectWrite(u.fsPath);
-        if (!(await exists(u))) {
-          await vscode.workspace.fs.writeFile(u, new TextEncoder().encode(text));
-          return;
-        }
-        const doc = await vscode.workspace.openTextDocument(u);
-        const edit = new vscode.WorkspaceEdit();
-        edit.replace(u, new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length)), text);
-        if (!(await vscode.workspace.applyEdit(edit))) throw new Error(`Couldn't change ${path}.`);
-        if (!(await doc.save())) throw new Error(`Couldn't save ${path}.`);
-      },
-      remove: async (path) => {
-        const u = uri(path);
-        this.changes.expectWrite(u.fsPath);
-        await vscode.workspace.fs.delete(u, { useTrash: true });
-      },
-    };
+    return vscodeFiles(root, this.changes);
   }
 }
