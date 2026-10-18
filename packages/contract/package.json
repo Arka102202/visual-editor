@@ -1,0 +1,8 @@
+{
+  "name": "@visual-editor/contract",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The plugin contract of Visual Editor: what plugins give the shell and what the shell gives back.",
+  "main": "src/index.ts",
+  "types": "src/index.ts"
+}

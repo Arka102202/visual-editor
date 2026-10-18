@@ -1,0 +1,19 @@
+{
+  "name": "visual-editor-hello",
+  "displayName": "Visual Editor: Hello",
+  "description": "An example plugin for Visual Editor: adds one card to show that plugins work.",
+  "version": "0.1.0",
+  "publisher": "arka102202",
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "extensionDependencies": [
+    "arka102202.visual-editor"
+  ]
+}

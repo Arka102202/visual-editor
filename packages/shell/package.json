@@ -1,0 +1,45 @@
+{
+  "name": "visual-editor",
+  "displayName": "Visual Editor",
+  "description": "See your project as maps, review every change, and grow the editor with plugins for your stack.",
+  "version": "0.1.0",
+  "publisher": "arka102202",
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "visualEditor",
+          "title": "Visual Editor",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "visualEditor": [
+        {
+          "id": "visualEditor.plugins",
+          "name": "Plugins"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "visualEditor.showPlugins",
+        "title": "Visual Editor: Show Plugins"
+      }
+    ]
+  }
+}
