@@ -4,7 +4,7 @@
 // No VS Code imports here: plugins and the shell's tests use it outside VS Code too.
 
 /** The contract version this package describes. Plugins say which version they were built for. */
-export const CONTRACT_VERSION = 3;
+export const CONTRACT_VERSION = 4;
 
 /** Something that can be stopped or removed (same shape as VS Code's Disposable). */
 export interface Disposable {
@@ -145,6 +145,11 @@ export interface Previewer {
   /** Named situations to choose from, e.g. ["normal", "empty", "loading"]. */
   situations?(item: Item): string[];
   render(request: PreviewRequest): PreviewOutput | Promise<PreviewOutput>;
+  /**
+   * Contract 4: what a page this previewer drew said (its own messages, e.g. a reply it recorded). Optional; called
+   * for messages a page posts to its parent with `source: 'visual-editor-preview'`.
+   */
+  heard?(message: Record<string, unknown>, context: { item: Item; project: ProjectInfo }): void;
 }
 
 /** A Visual Editor plugin. Fill only the slots you need; more slots come in later contract versions. */
