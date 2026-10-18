@@ -9,6 +9,8 @@ import { ProjectIndex } from './projectIndex';
 import { ProjectsView } from './projectsView';
 import { findWorkspace, isIgnoredPath, isProjectFile } from './projects';
 import { basename, relative, sep } from 'node:path';
+import { CurrentProject } from './currentProject';
+import { MapPanel } from './mapPanel';
 
 export function activate(context: vscode.ExtensionContext): ShellApi {
   const registry = new PluginRegistry();
@@ -20,7 +22,12 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
 
   // The project index: the projects in the opened folders, and what each plugin found in them.
   const index = new ProjectIndex(registry);
-  const projectsView = new ProjectsView(index);
+  // With several projects, one is shown at a time; the choice is remembered for this workspace.
+  const current = new CurrentProject(() => index.snapshot(), {
+    get: () => context.workspaceState.get<string>('visualEditor.currentProject'),
+    set: (root) => void context.workspaceState.update('visualEditor.currentProject', root),
+  });
+  const projectsView = new ProjectsView(index, current);
   context.subscriptions.push(index, projectsView, vscode.window.registerTreeDataProvider('visualEditor.projects', projectsView));
   const folders = () => (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
   const scan = () => {
@@ -53,6 +60,8 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     // A project file added or removed changes which projects there are.
     if (addedOrRemoved && isProjectFile(basename(uri.fsPath))) rescan = true;
     if (basename(uri.fsPath) === 'pnpm-workspace.yaml') rescan = true;
+    // A new file outside every project known so far may be loose code that makes a new project.
+    if (addedOrRemoved && !index.snapshot().some((s) => uri.fsPath.startsWith(s.project.root + sep))) rescan = true;
     pending.add(uri.fsPath);
     if (timer) clearTimeout(timer);
     timer = setTimeout(flush, 300);
@@ -69,12 +78,13 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
 
   // One status bar button for everything.
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  status.command = 'visualEditor.showPlugins';
+  status.command = 'visualEditor.openMap';
   const updateStatus = () => {
     const n = registry.list().length;
     const projects = index.snapshot().length;
-    status.text = `$(symbol-structure) Visual Editor${projects > 1 ? ` · ${projects} projects` : ''}${n ? ` · ${n} plugin${n === 1 ? '' : 's'}` : ''}`;
-    status.tooltip = n ? `Plugins: ${registry.list().map((p) => p.name).join(', ')}` : 'No plugins yet: add one for your project (React, Express…)';
+    const shown = current.get();
+    status.text = `$(symbol-structure) Visual Editor${projects > 1 && shown ? ` · ${shown.project.name}` : ''}${n ? ` · ${n} plugin${n === 1 ? '' : 's'}` : ''}`;
+    status.tooltip = `Open the map${n ? `\nPlugins: ${registry.list().map((p) => p.name).join(', ')}` : '\nNo plugins yet: add one for your project (React, Express…)'}`;
   };
   updateStatus();
   status.show();
@@ -82,7 +92,33 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     status,
     registry.onChange(updateStatus),
     index.onChange(updateStatus),
+    current.onChange(updateStatus),
     vscode.commands.registerCommand('visualEditor.showPlugins', () => vscode.commands.executeCommand('visualEditor.plugins.focus')),
+  );
+
+  // The map, and choosing which project it shows.
+  const map = new MapPanel(context.extensionUri, index, current);
+  context.subscriptions.push(
+    map,
+    vscode.commands.registerCommand('visualEditor.openMap', () => map.show()),
+    vscode.commands.registerCommand('visualEditor.chooseProject', async (root?: string) => {
+      if (!root) {
+        const shown = current.get()?.project.root;
+        const pick = await vscode.window.showQuickPick(
+          index.snapshot().map((s) => ({
+            label: s.project.name,
+            description: [s.project.group && s.project.group !== s.project.name ? `in ${s.project.group}` : '', `${s.items.length} cards`, s.project.root === shown ? '· shown' : ''].filter(Boolean).join(' '),
+            detail: s.detected.length ? s.detected.map((d) => d.plugin.name).join(', ') : 'no plugin yet',
+            root: s.project.root,
+          })),
+          { placeHolder: 'Which project should the map show?' },
+        );
+        root = pick?.root;
+      }
+      if (!root) return;
+      current.choose(root);
+      map.show();
+    }),
   );
 
   log.appendLine(`Visual Editor started (plugin contract ${CONTRACT_VERSION}).`);

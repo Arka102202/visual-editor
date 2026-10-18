@@ -41,9 +41,36 @@
     },
     "commands": [
       {
+        "command": "visualEditor.openMap",
+        "title": "Open the Map",
+        "category": "Visual Editor",
+        "icon": "$(type-hierarchy-sub)"
+      },
+      {
+        "command": "visualEditor.chooseProject",
+        "title": "Choose Project",
+        "category": "Visual Editor",
+        "icon": "$(folder-library)"
+      },
+      {
         "command": "visualEditor.showPlugins",
-        "title": "Visual Editor: Show Plugins"
+        "title": "Show Plugins",
+        "category": "Visual Editor"
       }
-    ]
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "visualEditor.openMap",
+          "when": "view == visualEditor.projects",
+          "group": "navigation@1"
+        },
+        {
+          "command": "visualEditor.chooseProject",
+          "when": "view == visualEditor.projects",
+          "group": "navigation@2"
+        }
+      ]
+    }
   }
 }

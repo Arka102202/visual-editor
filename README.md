@@ -19,6 +19,9 @@ See your project as maps, review every change before it happens, and keep a memo
 3. In the new window, the status bar shows **Visual Editor · 1 plugin**, and the Visual Editor side panel lists it.
    Its **Projects** list shows each project found (one, several side by side, or a monorepo's packages), the plugins
    that suit it, and how many cards they found. Add or edit a file and the count follows.
+4. Click **Visual Editor** in the status bar (or the map button on the Projects list) to open the **map**: the shown
+   project's cards and lines. Drag to move, pinch or Ctrl+scroll to zoom, **Fit** to see everything, double-click a
+   card to open its code. With several projects, pick one at the top of the map or click it in the Projects list.
 
 ## Work on it
 

@@ -2,6 +2,7 @@
 // many cards they found. Until the map is drawn, this is where the developer sees what the shell understood.
 
 import * as vscode from 'vscode';
+import type { CurrentProject } from './currentProject';
 import type { ProjectIndex, ProjectState } from './projectIndex';
 
 type Node =
@@ -13,10 +14,13 @@ type Node =
 export class ProjectsView implements vscode.TreeDataProvider<Node>, vscode.Disposable {
   private readonly emitter = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.emitter.event;
-  private readonly off: { dispose(): void };
+  private readonly offs: { dispose(): void }[];
 
-  constructor(private readonly index: ProjectIndex) {
-    this.off = index.onChange(() => this.emitter.fire());
+  constructor(
+    private readonly index: ProjectIndex,
+    private readonly current: CurrentProject,
+  ) {
+    this.offs = [index.onChange(() => this.emitter.fire()), current.onChange(() => this.emitter.fire())];
   }
 
   getChildren(node?: Node): Node[] {
@@ -55,14 +59,16 @@ export class ProjectsView implements vscode.TreeDataProvider<Node>, vscode.Dispo
     }
     const { project, items, links } = node.state;
     const item = new vscode.TreeItem(project.name, vscode.TreeItemCollapsibleState.Expanded);
-    item.description = [project.group && project.group !== project.name ? `in ${project.group}` : '', `${project.files.length} files`].filter(Boolean).join(' · ');
-    item.tooltip = `${project.root}\n${items.length} cards · ${links.length} lines`;
-    item.iconPath = new vscode.ThemeIcon(project.group ? 'repo' : 'folder');
+    const shown = this.index.snapshot().length > 1 && this.current.get()?.project.root === project.root;
+    item.description = [project.group && project.group !== project.name ? `in ${project.group}` : '', `${project.files.length} files`, shown ? 'on the map' : ''].filter(Boolean).join(' · ');
+    item.tooltip = `${project.root}\n${items.length} cards · ${links.length} lines\nClick to show it on the map`;
+    item.iconPath = new vscode.ThemeIcon(shown ? 'eye' : project.group ? 'repo' : 'folder');
+    item.command = { command: 'visualEditor.chooseProject', title: 'Show on the map', arguments: [project.root] };
     return item;
   }
 
   dispose() {
-    this.off.dispose();
+    for (const off of this.offs) off.dispose();
     this.emitter.dispose();
   }
 }

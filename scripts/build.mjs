@@ -18,7 +18,13 @@ const extensions = ['packages', 'plugins'].flatMap((group) =>
 );
 
 const common = { bundle: true, platform: 'node', format: 'cjs', target: 'node20', sourcemap: true, logLevel: 'warning' };
-const builds = extensions.map((dir) => ({ ...common, entryPoints: [join(dir, 'src/extension.ts')], outfile: join(dir, 'dist/extension.js'), external: ['vscode'] }));
+const builds = extensions.flatMap((dir) => [
+  { ...common, entryPoints: [join(dir, 'src/extension.ts')], outfile: join(dir, 'dist/extension.js'), external: ['vscode'] },
+  // Pages shown inside VS Code (src/<page>/main.ts) run in the browser: dist/<page>.js.
+  ...readdirSync(join(dir, 'src'), { withFileTypes: true })
+    .filter((d) => d.isDirectory() && existsSync(join(dir, 'src', d.name, 'main.ts')))
+    .map((d) => ({ ...common, platform: 'browser', format: 'iife', target: 'es2022', entryPoints: [join(dir, 'src', d.name, 'main.ts')], outfile: join(dir, 'dist', `${d.name}.js`) })),
+]);
 
 const tests = {
   ...common,
