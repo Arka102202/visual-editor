@@ -121,11 +121,19 @@ export function previewTsx(s: AppSetup): string {
     `function Problem({ text }: { text: string }) {`,
     `  return <pre style={{ color: '#ff5a5f', background: '#1e1f22', padding: 14, margin: 0, whiteSpace: 'pre-wrap', font: '12px/1.5 ui-monospace, monospace', minHeight: '100vh', boxSizing: 'border-box' }}>{text}</pre>`,
     `}`,
+    `// A crash in plain words: what failed, in which situation, and in which component and file (not a stack dump).`,
+    `const SITUATION_WORDS: Record<string, string> = { normal: 'with normal data', loading: 'while loading', empty: 'when there is no data', error: 'when the server fails', long: 'with long text' }`,
+    `function explain(error: Error) {`,
+    `  const at = /at (\\w+) \\([^)]*?\\/(src\\/[^?:)]+)/.exec(String(error.stack ?? ''))`,
+    `  const where = at ? '\\n\\nWhere: ' + at[1] + ' (' + at[2] + ')' : ''`,
+    `  const advice = situation === 'normal' ? '' : '\\n\\nThe real app would do the same ' + (SITUATION_WORDS[situation] ?? 'in this situation') + ': this is worth fixing (check for missing data before using it).'`,
+    `  return 'This component crashes ' + (SITUATION_WORDS[situation] ?? '') + '.\\n\\n' + String(error.message ?? error) + where + advice`,
+    `}`,
     `class Boundary extends Component<{ children: ReactNode }, { error: Error | null }> {`,
     `  state = { error: null as Error | null }`,
     `  static getDerivedStateFromError(error: Error) { return { error } }`,
     `  componentDidCatch(error: Error) { say({ type: 'error', message: String(error?.message ?? error) }) }`,
-    `  render() { return this.state.error ? <Problem text={'This component failed while drawing:\\n\\n' + String(this.state.error.stack ?? this.state.error)} /> : this.props.children }`,
+    `  render() { return this.state.error ? <Problem text={explain(this.state.error)} /> : this.props.children }`,
     `}`,
     ...(p.reactQuery ? [`const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })`] : []),
     `const Wrap = ({ children, route }: { children: ReactNode; route?: string }) => {`,
@@ -147,7 +155,7 @@ export function previewTsx(s: AppSetup): string {
     `async function main() {`,
     `  const res = await fetch('./cards/' + encodeURIComponent(card) + '.json?t=' + Date.now())`,
     `  if (!res.ok) throw new Error('This preview is out of date. Reload it.')`,
-    `  const c = (await res.json()) as { path: string; export: string; props: unknown; route?: string; seed?: { module: string; export: string; tables: Record<string, unknown[]> } }`,
+    `  const c = (await res.json()) as { path: string; export: string; props: unknown; route?: string; seed?: { module: string; export: string; tables: Record<string, unknown[]> }; requests?: { match: string; reply: unknown }[] }`,
     `  // Stand-in data: the app's own browser database (Dexie) gets example rows first ("empty": none).`,
     `  // Only ever at the preview's own address (an IP), never at localhost where the app itself keeps its real data.`,
     `  if (c.seed && location.hostname !== 'localhost') {`,
@@ -170,7 +178,8 @@ export function previewTsx(s: AppSetup): string {
     `    say({ type: 'seed', outcome })`,
     `    if (outcome !== 'filled') console.warn('Visual Editor: example data could not be prepared (' + outcome + ')')`,
     `  }`,
-    `  const { props } = installSituations({ id: situation, fixtures: { props: () => revive(c.props) }, log, win: window${p.reactQuery ? ', QueryClient' : ''} })`,
+    `  // "Normal" answers the requests the code makes with example replies worked out from how it uses them.`,
+    `  const { props } = installSituations({ id: situation, fixtures: { props: () => revive(c.props), situations: { normal: { requests: c.requests ?? [] } } }, log, win: window${p.reactQuery ? ', QueryClient' : ''} })`,
     `  // eslint-disable-next-line @typescript-eslint/no-explicit-any`,
     `  const mod = (await import(/* @vite-ignore */ '/' + c.path)) as Record<string, any>`,
     `  const View = mod[c.export] ?? mod.default`,
@@ -179,6 +188,8 @@ export function previewTsx(s: AppSetup): string {
     `  if (!c.route) rootEl.style.padding = '24px'`,
     `  createRoot(rootEl).render(<Boundary><Wrap route={c.route}><View {...(props as object)} /></Wrap></Boundary>)`,
     `  say({ type: 'ready' })`,
+    `  // What's on screen once data has arrived (for checks and for assistants): its visible text.`,
+    `  setTimeout(() => say({ type: 'text', text: (rootEl.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 400) }), 1500)`,
     `}`,
     `main().catch((e) => {`,
     `  say({ type: 'error', message: String(e?.message ?? e) })`,
@@ -256,7 +267,8 @@ export function sample(name: string, type: string | undefined, depth: number, ty
 
 function numberFor(n: string): number {
   if (/(at|date|time|timestamp)$/.test(n)) return Date.now() - 3_600_000;
-  if (/price|amount|total|cost/.test(n)) return 1299;
+  if (/price|amount|total|cost|revenue|sales|income|spend|budget|balance|subtotal/.test(n)) return 1299;
+  if (/^(number|num|no)$/.test(n)) return 1042;
   if (/count|qty|quantity|size|length/.test(n)) return 12;
   if (/age/.test(n)) return 34;
   if (/id$/.test(n)) return 1042;

@@ -74,7 +74,7 @@ export async function run() {
     const f = shown()?.frames[0];
     say(`preview ${label}: ${f?.error ? `error: ${f.error}` : `on screen after ${Math.round((Date.now() - started) / 1000)} s · ${f?.url ?? ''}`}`);
     await wait(9000);
-    const said = t.preview.frameMessages.slice(-6).map((m: any) => `${m.type}${m.outcome ? ` ${m.outcome}` : ''}${m.message ? `: ${String(m.message).slice(0, 160)}` : ''}`);
+    const said = t.preview.frameMessages.slice(-6).map((m: any) => `${m.type}${m.outcome ? ` ${m.outcome}` : ''}${m.message ? `: ${String(m.message).slice(0, 160)}` : ''}${m.text ? `: "${m.text}"` : ''}`);
     say(`  page said: ${said.join(' · ') || 'nothing'}`);
     t.preview.frameMessages.length = 0;
     await shot(`look-preview-${label}`);
@@ -82,7 +82,10 @@ export async function run() {
       t.preview.shownFrames = 0;
       t.preview.receive({ type: 'situation', name: situation });
       await until(() => shown()?.situation === situation, situation, 30_000).catch(() => undefined);
-      await wait(3000);
+      await wait(4000);
+      const text = t.preview.frameMessages.filter((m: any) => m.type === 'text').at(-1)?.text;
+      say(`  ${situation}: "${text ?? '(nothing reported)'}"`);
+      t.preview.frameMessages.length = 0;
       await shot(`look-preview-${label}-${situation.replace(/\s+/g, '-')}`);
     }
   }

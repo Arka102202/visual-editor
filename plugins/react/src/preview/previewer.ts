@@ -10,6 +10,8 @@ import { DevServer, devPlan } from './devServer';
 import { appSetup, exampleProps, PREVIEW_DIR, previewHtml, previewTsx } from './harness';
 import { situationsModule } from './situations';
 import { findDexie, seedFor, typesFrom } from './dexie';
+import { readShapes } from '../read/shapes';
+import { replyRules, type ReplyRule } from './replies';
 
 /** Situations every component can be shown in (the page's names in brackets when they differ). */
 export const SITUATIONS = ['normal', 'loading', 'empty', 'error', 'long text'];
@@ -17,6 +19,8 @@ const SITUATION_IDS: Record<string, string> = { 'long text': 'long' };
 
 interface Known {
   model: FeModel;
+  /** Example replies for the requests the code makes, from how it uses them. */
+  replies: ReplyRule[];
   /** File texts, to read the TypeScript types of props for example values. */
   texts: Map<string, string>;
 }
@@ -29,7 +33,8 @@ export class ReactPreviews {
 
   /** What the reader found in a project, kept for previews. */
   remember(root: string, model: FeModel, files: SourceFile[]) {
-    this.known.set(root, { model, texts: new Map(files.map((f) => [f.path, f.text])) });
+    const code = files.filter((f) => /\.[cm]?[jt]sx?$/.test(f.path));
+    this.known.set(root, { model, replies: replyRules(readShapes(code)), texts: new Map(files.map((f) => [f.path, f.text])) });
   }
 
   /** The component a card shows: a component card, or the page a route card opens. */
@@ -76,7 +81,7 @@ export class ReactPreviews {
     const dexie = findDexie(known.texts);
     const seed = dexie ? seedFor(dexie, route, types) : undefined;
     const key = createHash('sha256').update(`${c.path}#${c.name}`).digest('hex').slice(0, 16);
-    writeIfChanged(join(root, PREVIEW_DIR, 'cards', `${key}.json`), JSON.stringify({ path: c.path, export: c.name, props: exampleProps(c, types), ...(route ? { route } : {}), ...(seed ? { seed } : {}) }, null, 2));
+    writeIfChanged(join(root, PREVIEW_DIR, 'cards', `${key}.json`), JSON.stringify({ path: c.path, export: c.name, props: exampleProps(c, types), ...(route ? { route } : {}), ...(seed ? { seed } : {}), requests: known.replies }, null, 2));
 
     let server = this.servers.get(root);
     if (!server) {

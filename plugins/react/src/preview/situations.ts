@@ -107,7 +107,11 @@ export function installSituations(opts: {
     if (rule) return { body: rule.reply ?? null, status: rule.status ?? 200, wait: rule.wait ?? 300 };
     if (chosen.all === 'loading') return { body: null, status: 200, wait: 'forever' };
     if (chosen.all === 'error') return { body: { error: 'Server error (made up by Visual Editor)' }, status: 500, wait: 300 };
-    if (chosen.all === 'empty') return { body: [], status: 200, wait: 300 };
+    // Empty: the normal reply's shape with every list emptied (a detail page still gets its object); else [].
+    if (chosen.all === 'empty') {
+      const n = find(all.normal.requests);
+      return { body: n ? emptied(n.reply ?? null) : [], status: 200, wait: 300 };
+    }
     const normal = id === 'normal' ? undefined : find(all.normal.requests);
     if (normal) return { body: normal.reply ?? null, status: normal.status ?? 200, wait: normal.wait ?? 300 };
     return undefined;
