@@ -9,7 +9,7 @@ import { parseSource, walk, type SourceFile } from './ast';
 
 /** What a value looks like, as far as the code shows. */
 export interface Shape {
-  kind?: 'string' | 'number' | 'boolean' | 'array' | 'object' | 'date' | 'function';
+  kind?: 'string' | 'number' | 'boolean' | 'array' | 'object' | 'date' | 'function' | 'set' | 'map';
   fields?: Record<string, Shape>;
   item?: Shape;
   /** The only values it can have ('admin' | 'user', an enum's values), when the type says. */

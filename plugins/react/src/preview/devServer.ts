@@ -168,8 +168,18 @@ export class DevServer {
     return this.log.slice(-4000);
   }
 
-  /** A running dev server for this project, or a new one. Reports progress through `onLog`. */
-  async ensure(onLog: (text: string) => void = () => {}): Promise<string> {
+  private starting: Promise<string> | undefined;
+
+  /**
+   * A running dev server for this project, or a new one. Reports progress through `onLog`. Asked several times at
+   * once (Before and After, versions side by side), it starts one server and every caller waits for it.
+   */
+  ensure(onLog: (text: string) => void = () => {}): Promise<string> {
+    this.starting ??= this.ensureOnce(onLog).finally(() => (this.starting = undefined));
+    return this.starting;
+  }
+
+  private async ensureOnce(onLog: (text: string) => void): Promise<string> {
     const plan = devPlan(this.root);
     if ('unsupported' in plan) throw new Error(plan.unsupported);
     if (this.url && (await findOn(Number(new URL(this.url).port), this.token, plan))) return this.url;

@@ -2,6 +2,21 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "Visual Editor + React plugin",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/packages/shell",
+        "--extensionDevelopmentPath=${workspaceFolder}/plugins/react",
+        "${input:project}"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/packages/*/dist/**/*.js",
+        "${workspaceFolder}/plugins/*/dist/**/*.js"
+      ],
+      "preLaunchTask": "build"
+    },
+    {
       "name": "Visual Editor + Hello plugin",
       "type": "extensionHost",
       "request": "launch",
@@ -9,16 +24,31 @@
         "--extensionDevelopmentPath=${workspaceFolder}/packages/shell",
         "--extensionDevelopmentPath=${workspaceFolder}/plugins/hello"
       ],
-      "outFiles": ["${workspaceFolder}/packages/*/dist/**/*.js", "${workspaceFolder}/plugins/*/dist/**/*.js"],
+      "outFiles": [
+        "${workspaceFolder}/packages/*/dist/**/*.js",
+        "${workspaceFolder}/plugins/*/dist/**/*.js"
+      ],
       "preLaunchTask": "build"
     },
     {
       "name": "Visual Editor alone (no plugins)",
       "type": "extensionHost",
       "request": "launch",
-      "args": ["--extensionDevelopmentPath=${workspaceFolder}/packages/shell"],
-      "outFiles": ["${workspaceFolder}/packages/*/dist/**/*.js"],
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/packages/shell"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/packages/*/dist/**/*.js"
+      ],
       "preLaunchTask": "build"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "project",
+      "type": "promptString",
+      "description": "The React project to open (a folder)",
+      "default": "${workspaceFolder}/samples/state-shop"
     }
   ]
 }

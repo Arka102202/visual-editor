@@ -2,7 +2,7 @@
 // the map fitted, and one card with its drawer (CARD=<label>, default: the card with most lines). Changes nothing.
 
 import * as vscode from 'vscode';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -125,6 +125,111 @@ export async function run() {
       t.preview.frameMessages.length = 0;
       await shot(`look-preview-${label}-${situation.replace(/\s+/g, '-')}`);
     }
+  }
+
+  // VERSIONS=1 with CARD: the card's versions side by side (labels and checks), then CHOOSE=<version> makes it a
+  // proposal (shown, then rejected: nothing changes).
+  if (process.env.VERSIONS && card) {
+    const root = s.project.root;
+    const seen: any[] = [];
+    t.preview.frameMessages.length = 0;
+    await t.preview.show({ root, item: card.id, versions: true });
+    const post = t.preview.panel.webview.postMessage.bind(t.preview.panel.webview);
+    t.preview.panel.webview.postMessage = (m: any) => (seen.push(m), post(m));
+    await until(() => seen.some((m) => m.type === 'show' && m.comparing && m.frames.every((f: any) => f.url || f.error)), 'versions', 100_000).catch((e) => say(String(e)));
+    await settle(12_000);
+    await wait(2500);
+    const shownMsg = seen.filter((m) => m.type === 'show').at(-1);
+    say(`versions of ${card.label}: ${shownMsg?.versions} · side by side: ${shownMsg?.comparing}`);
+    for (const f of shownMsg?.frames ?? []) {
+      const c = f.url ? new URL(f.url).searchParams.get('c') : undefined;
+      const text = t.preview.frameMessages.filter((m: any) => m.type === 'text' && m.card === c).at(-1)?.text;
+      const problem = t.preview.frameMessages.filter((m: any) => m.type === 'error' && m.card === c).at(-1)?.message;
+      say(`  ${f.label}${f.checks ? ` [${f.checks.summary}]` : ''}: ${f.error ? `error: ${f.error}` : `"${text ?? '(nothing reported)'}"`}${problem ? ` · error: ${String(problem).slice(0, 160)}` : ''}`);
+      for (const i of f.checks?.items ?? []) if (!i.ok) say(`      ⚠ ${i.text}${i.line ? ` (line ${i.line})` : ''}`);
+    }
+    if (process.env.CHOOSE) {
+      const before = t.review.proposals(root).length;
+      const original = readFileSync(join(root, card.source?.path ?? ''), 'utf8');
+      t.preview.receive({ type: 'choose', version: process.env.CHOOSE });
+      await until(() => t.review.proposals(root).length > before, 'the proposal', 30_000).catch((e) => say(String(e)));
+      const p = t.review.proposals(root)[0];
+      say(`chose ${process.env.CHOOSE}: proposal "${p?.title}" by ${p?.by?.name} · ${p?.changes?.map((c: any) => c.path).join(', ')}`);
+      if (p?.why) say(`  why: ${p.why}`);
+      const after = p?.changes?.[0]?.after as string | undefined;
+      if (after) say(`  new code:\n${after.split('\n').map((l: string) => '    | ' + l).join('\n')}`);
+      if (readFileSync(join(root, card.source?.path ?? ''), 'utf8') !== original) say('  the file changed!');
+      if (p && p.by?.kind === 'plugin') {
+        t.review.store(root).mark(p, 'rejected', 'only a look test');
+        t.review.reload(root, false);
+      }
+    }
+  }
+
+  // PICTURES=<situation>[,<situation>…] (or "all") with CARD: pictures of it (and its versions, with VERSIONS=1), saved.
+  if (process.env.PICTURES && card) {
+    const started = Date.now();
+    try {
+      const sits = process.env.PICTURES === 'all' ? 'all' : process.env.PICTURES.split(',');
+      const pics = await t.preview.pictures.take(s.project.root, card.id, { situations: sits, versions: !!process.env.VERSIONS, theme: 'light' });
+      say(`pictures of ${card.label}: ${pics.length} in ${Math.round((Date.now() - started) / 1000)} s`);
+      for (const p of pics) say(`  ${p.label} · ${p.situation} · ${p.size}${p.width ? ` ${p.width}×${p.height}` : ''}${p.file ? ` → ${p.file}` : ''}${p.error ? ` · problem: ${p.error}` : ''}`);
+    } catch (e) {
+      say(`pictures: ${e instanceof Error ? e.message : e}`);
+    }
+    // The camera button in the Preview tab: the same pictures, of what's shown.
+    const dir = join(s.project.root, '.visual-editor', 'pictures');
+    const mark = Date.now();
+    const { readdirSync, statSync } = await import('node:fs');
+    const fresh = () => readdirSync(dir, { recursive: true }).map(String).filter((f) => f.endsWith('.png') && statSync(join(dir, f)).mtimeMs > mark);
+    await t.preview.show({ root: s.project.root, item: card.id });
+    await until(() => t.preview.shownFrames >= 1, 'the preview', 100_000).catch(() => undefined);
+    t.preview.receive({ type: 'pictures' });
+    await until(() => fresh().length >= 3, 'pictures from the camera button', 120_000).catch((e) => say(String(e)));
+    say(`camera button: ${fresh().sort().join(', ')}`);
+    // The hub's pictures tool, called the way Claude Code calls it.
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { StreamableHTTPClientTransport } = await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
+    await until(() => !!t.hub.url, 'the hub to start');
+    const client = new Client({ name: 'claude-code', version: '1' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(t.hub.url), { requestInit: { headers: { Authorization: `Bearer ${t.hub.token}` } } }));
+    const r = (await client.callTool({ name: 'pictures', arguments: { id: card.id, sizes: ['mobile'], versions: !!process.env.VERSIONS } })) as any;
+    const images = r.content.filter((c: any) => c.type === 'image');
+    say(`hub pictures tool: ${r.isError ? 'error: ' : ''}${r.content[0].text.split('\n')[0]} · ${images.length} images (${images.map((i: any) => `${i.mimeType} ${Math.round((i.data.length * 3) / 4 / 1024)} KB`).join(', ')})`);
+    await client.close();
+  }
+
+  // PROPOSE=<file>|<find>|<replace> with CARD: a proposal changing that file, previewed Before and After (then rejected).
+  if (process.env.PROPOSE && card) {
+    const [path, find, replace] = process.env.PROPOSE.split('|');
+    const root = s.project.root;
+    const before = readFileSync(join(root, path), 'utf8');
+    if (!before.includes(find)) say(`propose: "${find}" isn't in ${path}`);
+    const id = `look-${Date.now()}`;
+    const dir = join(root, '.visual-editor', 'proposals');
+    mkdirSync(dir, { recursive: true });
+    const at = new Date().toISOString();
+    writeFileSync(join(dir, `${id}.json`), JSON.stringify({ id, title: 'Look test proposal', by: { kind: 'developer', name: 'look test' }, createdAt: at, status: 'proposed', changes: [{ path, before, after: before.split(find).join(replace) }], history: [{ at, status: 'proposed' }] }, null, 2));
+    t.review.reload(root, false);
+    await until(() => t.review.proposals(root).some((p: any) => p.id === id), 'the proposal', 10_000);
+    t.preview.frameMessages.length = 0;
+    const seen: any[] = [];
+    await t.preview.show({ root, item: card.id, proposal: id });
+    const post = t.preview.panel.webview.postMessage.bind(t.preview.panel.webview);
+    t.preview.panel.webview.postMessage = (m: any) => (seen.push(m), post(m));
+    await until(() => t.preview.shownFrames >= 2 || seen.some((m) => m.type === 'show' && m.frames.some((f: any) => f.error)), 'Before and After', 100_000).catch((e) => say(String(e)));
+    await settle(12_000);
+    await wait(2000);
+    const shownMsg = seen.filter((m) => m.type === 'show').at(-1);
+    for (const f of shownMsg?.frames ?? []) {
+      const c = f.url ? new URL(f.url).searchParams.get('c') : undefined;
+      const text = t.preview.frameMessages.filter((m: any) => m.type === 'text' && m.card === c).at(-1)?.text;
+      const problem = t.preview.frameMessages.filter((m: any) => m.type === 'error' && m.card === c).at(-1)?.message;
+      say(`  ${f.label}: ${f.error ? `error: ${f.error}` : `"${text ?? '(nothing reported)'}"`}${problem ? ` · error: ${problem}` : ''}`);
+    }
+    if (readFileSync(join(root, path), 'utf8') !== before) say('  the file changed!');
+    t.review.store(root).mark(t.review.proposals(root).find((p: any) => p.id === id), 'rejected', 'only a look test');
+    t.review.reload(root, false);
   }
 
   if (labels.length) {

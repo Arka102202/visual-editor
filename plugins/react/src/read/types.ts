@@ -21,10 +21,16 @@ export function loadTypeScript(root: string): Ts | undefined {
   }
 }
 
-/** One project's types, built when first needed and rebuilt (reusing what didn't change) after edits. */
+/**
+ * One project's types, built when first needed and rebuilt (reusing what didn't change) after edits. Only the files
+ * asked about (and what they import) are read, never the whole project: a preview of one component in a project of
+ * 10,000 reads a few hundred.
+ */
 export class TypeView {
   private program: TS.Program | undefined;
   private stale = true;
+  /** The files asked about so far (absolute paths). */
+  private readonly wanted = new Set<string>();
 
   constructor(
     private readonly ts: Ts,
@@ -40,10 +46,23 @@ export class TypeView {
     return this.build().getTypeChecker();
   }
 
+  /** Files about to be asked about, added together (one rebuild instead of one per file). */
+  want(paths: string[]) {
+    for (const p of paths) {
+      const abs = resolve(this.root, p);
+      if (!this.wanted.has(abs)) {
+        this.wanted.add(abs);
+        this.stale = true;
+      }
+    }
+  }
+
   private build(): TS.Program {
     if (this.program && !this.stale) return this.program;
     const { files, options } = this.config();
-    this.program = this.ts.createProgram({ rootNames: files, options: { ...options, noEmit: true }, oldProgram: this.program });
+    // The project's own declarations (vite-env.d.ts, *.svg modules…) and the files asked about.
+    const rootNames = [...files.filter((f) => /\.d\.ts$/.test(f)), ...this.wanted];
+    this.program = this.ts.createProgram({ rootNames, options: { ...options, noEmit: true }, oldProgram: this.program });
     this.stale = false;
     return this.program;
   }
@@ -69,6 +88,7 @@ export class TypeView {
   }
 
   private source(path: string): TS.SourceFile | undefined {
+    this.want([path]);
     return this.build().getSourceFile(resolve(this.root, path));
   }
 
@@ -112,6 +132,24 @@ export class TypeView {
     return this.checker.getTypeAtLocation(param);
   }
 
+  /**
+   * Type errors in one file that isn't among the project's own (a playground version), checked with the project's
+   * settings and global declarations. Lines are 1-based.
+   */
+  errorsIn(path: string): { line: number; message: string }[] {
+    const ts = this.ts;
+    const { files, options } = this.config();
+    const abs = resolve(this.root, path);
+    const globals = files.filter((f) => /\.d\.ts$/.test(f));
+    const program = ts.createProgram({ rootNames: [...globals, abs], options: { ...options, noEmit: true } });
+    const file = program.getSourceFile(abs);
+    if (!file) return [];
+    return [...program.getSyntacticDiagnostics(file), ...program.getSemanticDiagnostics(file)].map((d) => ({
+      line: d.start !== undefined ? file.getLineAndCharacterOfPosition(d.start).line + 1 : 0,
+      message: ts.flattenDiagnosticMessageText(d.messageText, ' '),
+    }));
+  }
+
   /** The type of a member (`store.init`). */
   memberType(type: TS.Type, name: string): TS.Type | undefined {
     const p = type.getProperty(name);
@@ -151,6 +189,13 @@ export class TypeView {
     if (seen.has(type) || depth > 5) return {};
     const name = type.getSymbol()?.getName() ?? type.aliasSymbol?.getName();
     if (name === 'Date') return { kind: 'date' };
+    // A Set or a Map: their items (a Map's values, keyed by text).
+    if (name === 'Set' || name === 'ReadonlySet' || name === 'Map' || name === 'ReadonlyMap') {
+      const args = checker.getTypeArguments(type as TS.TypeReference);
+      const item = args[name.endsWith('Set') ? 0 : 1];
+      const inner = item ? this.shapeOf(item, depth + 1, new Set([...seen, type])) : undefined;
+      return { kind: name.endsWith('Set') ? 'set' : 'map', item: inner ?? {} };
+    }
     if (name && /^(ReactNode|ReactElement|Element)$/.test(name)) return { kind: 'string' };
     if (name === 'Promise') {
       const inner = (type as TS.TypeReference).typeArguments?.[0] ?? checker.getAwaitedType(type);

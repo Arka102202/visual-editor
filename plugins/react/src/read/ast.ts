@@ -17,15 +17,27 @@ type N = t.Node;
  * parse the same files, and a save changes only a few. Nothing changes the parsed trees, so they can be shared.
  */
 const parsed = new Map<string, { text: string; ast: t.File | undefined }>();
-const MAX_KEPT = 8000;
+/**
+ * How much code (characters) is kept parsed. A parsed file takes far more memory than its text (about 60 times), so
+ * a very big project keeps only part of it parsed: the first files read stay (no cycling, which would keep nothing),
+ * the rest are parsed again when needed.
+ */
+const KEPT_CHARS = 6_000_000;
+let keptChars = 0;
 
 /** Parses JS/TS/JSX. Tolerates broken files; returns undefined only if nothing can be read. */
 export function parseSource(source: SourceFile): t.File | undefined {
   const kept = parsed.get(source.path);
   if (kept && kept.text === source.text) return kept.ast;
   const ast = parseFresh(source);
-  if (parsed.size >= MAX_KEPT) parsed.delete(parsed.keys().next().value!);
-  parsed.set(source.path, { text: source.text, ast });
+  if (kept) {
+    // The file changed: its new version takes the old one's place.
+    keptChars += source.text.length - kept.text.length;
+    parsed.set(source.path, { text: source.text, ast });
+  } else if (keptChars + source.text.length <= KEPT_CHARS) {
+    keptChars += source.text.length;
+    parsed.set(source.path, { text: source.text, ast });
+  }
   return ast;
 }
 

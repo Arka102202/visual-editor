@@ -46,6 +46,9 @@ const singular = (name: string) => name.replace(/(ies)$/, 'y').replace(/s$/, '')
  * `owner` the object it belongs to (so a person's name is a name, and a product's is "Product 2").
  */
 export function exampleOf(shape: Shape, name: string, i = 0, owner?: { name: string; person: boolean; page?: boolean }): unknown {
+  // A Set or a Map: written so the page can turn it back into one (JSON has neither).
+  if (shape.kind === 'set') return { __visualEditorSet: exampleOf({ kind: 'array', item: shape.item ?? {} }, name, i, owner) };
+  if (shape.kind === 'map') return { __visualEditorMap: (exampleOf({ kind: 'array', item: shape.item ?? {} }, name, i, owner) as unknown[]).map((v, k) => [`${singular(name)}-${k + 1}`, v]) };
   if (shape.kind === 'array' || shape.item) {
     const one = singular(name);
     return Array.from({ length: LIST_LENGTH }, (_v, k) => exampleOf(shape.item ?? {}, one, k, owner));

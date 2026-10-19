@@ -420,7 +420,7 @@ export function standInsModule(standIns: string[]): string {
  * its job first (waits for the login check, sends logged-out people to /login), like in the app. `line` (0-based) is
  * where the page's route is written. Undefined when the page is shown bare (nothing wraps it).
  */
-export function routeElementModule(routeFile: string, text: string, line: number, previewDir: string, router = 'react-router-dom'): string | undefined {
+export function routeElementModule(routeFile: string, text: string, line: number, previewDir: string, router = 'react-router-dom', replace: Record<string, string> = {}): string | undefined {
   const ast = parseSource({ path: routeFile, text });
   if (!ast) return undefined;
   /** A route's element: `<Route element={…}>`, or `{ element: … }` in a route object. */
@@ -461,7 +461,7 @@ export function routeElementModule(routeFile: string, text: string, line: number
   if (wrappers.length) {
     body = `<__VeRoutes>${wrappers.map((w) => `<__VeRoute element={${exact(text, w)}}>`).join('')}<__VeRoute index element={${body}} />${wrappers.map(() => '</__VeRoute>').join('')}</__VeRoutes>`;
   }
-  const lines = neededCode(ast, text, names, posix.dirname(routeFile), posix.join(previewDir, 'routes'));
+  const lines = neededCode(ast, text, names, posix.dirname(routeFile), posix.join(previewDir, 'routes'), replace);
   return [
     `// Written by Visual Editor (React plugin): the page as the app's routes show it (with their guards and layouts).`,
     '// @ts-nocheck',
@@ -492,7 +492,7 @@ function namesIn(node: t.Node, into: Set<string>) {
  * `queryClient`, which uses `QueryClient`, which is imported). Imports keep only the names used, re-pointed from
  * `toDir`; declarations lose `export`; nothing else from the file comes along (no side effects).
  */
-function neededCode(ast: t.File, text: string, nodes: t.Node[], fromDir: string, toDir: string): string[] {
+function neededCode(ast: t.File, text: string, nodes: t.Node[], fromDir: string, toDir: string, replace: Record<string, string> = {}): string[] {
   const declared = new Map<string, t.Statement>();
   const imported = new Map<string, { decl: t.ImportDeclaration; spec: t.ImportDeclaration['specifiers'][number] }>();
   for (const s of ast.program.body) {
@@ -528,7 +528,8 @@ function neededCode(ast: t.File, text: string, nodes: t.Node[], fromDir: string,
   const lines: string[] = [];
   for (const [decl, used] of specs) {
     const from = decl.source.value;
-    const moved = from.startsWith('.') ? relativeFrom(toDir, posix.join(fromDir, from)) : from;
+    // `replace`: imports to point elsewhere (a proposed copy of the page), as project paths.
+    const moved = replace[from] ? relativeFrom(toDir, replace[from]) : from.startsWith('.') ? relativeFrom(toDir, posix.join(fromDir, from)) : from;
     const parts = [...used];
     const def = parts.find((p) => p.type === 'ImportDefaultSpecifier');
     const ns = parts.find((p) => p.type === 'ImportNamespaceSpecifier');

@@ -4,6 +4,7 @@ import * as vscode from 'vscode';
 import { SHELL_EXTENSION_ID, type ShellApi } from '@visual-editor/contract';
 import { previews, reactPlugin } from './plugin';
 import { forgetRecordings } from './preview/recordings';
+import { readingWorker } from './workerClient';
 
 const LIVE_KEY = (root: string) => `visualEditor.react.live:${root}`;
 const TOKEN_KEY = (root: string) => `visualEditor.react.devToken:${root}`;
@@ -77,5 +78,6 @@ export async function activate(context: vscode.ExtensionContext) {
 
 /** The dev servers Visual Editor started for previews stop with it. */
 export function deactivate() {
+  readingWorker.stop();
   return previews.stopAll();
 }
