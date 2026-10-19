@@ -8,7 +8,6 @@ import { Worker } from 'node:worker_threads';
 import type { ReadResult, SourceFile } from '@visual-editor/contract';
 import { readModel, toMaps } from './cards';
 import type { FeModel } from './read/model';
-import { computeExtras, type Extras } from './preview/extras';
 
 /** Most memory the reading worker may use. */
 const WORKER_MEMORY_MB = 2048;
@@ -29,12 +28,7 @@ export class ReadingWorker {
       const model = readModel(files);
       return Promise.resolve({ model, result: toMaps(model) });
     }
-    return this.ask('read', files) as Promise<{ model: FeModel; result: ReadResult }>;
-  }
-
-  extras(files: SourceFile[]): Promise<Extras> {
-    if (!this.available) return Promise.resolve(computeExtras(files));
-    return this.ask('extras', files) as Promise<Extras>;
+    return this.ask(files) as Promise<{ model: FeModel; result: ReadResult }>;
   }
 
   stop() {
@@ -42,12 +36,12 @@ export class ReadingWorker {
     this.worker = undefined;
   }
 
-  private ask(type: 'read' | 'extras', files: SourceFile[]): Promise<unknown> {
+  private ask(files: SourceFile[]): Promise<unknown> {
     const worker = this.start();
     const id = this.next++;
     return new Promise((resolve, reject) => {
       this.waiting.set(id, { resolve, reject });
-      worker.postMessage({ id, type, files });
+      worker.postMessage({ id, files });
     });
   }
 

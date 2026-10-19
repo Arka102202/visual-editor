@@ -2,14 +2,10 @@
 // components, pages and API calls, and gives the shell three maps.
 
 import { CONTRACT_VERSION, type MapDefinition, type Plugin } from '@visual-editor/contract';
-import { ReactPreviews } from './preview/previewer';
 import { reactPackage, SHARED_FROM_WORDS, wantsFile } from './cards';
 import { readingWorker } from './workerClient';
 
 export * from './cards';
-
-/** Previews of components (one per window: it keeps the dev servers it started). */
-export const previews = new ReactPreviews();
 
 export const MAPS: MapDefinition[] = [
   {
@@ -59,12 +55,7 @@ export const reactPlugin: Plugin = {
       id: 'react',
       wants: wantsFile,
       // Read in a worker thread (in VS Code), so a big project never freezes the editor.
-      read: async (files, project) => {
-        const { model, result } = await readingWorker.read(files);
-        previews.remember(project.root, model, files);
-        return result;
-      },
+      read: async (files) => (await readingWorker.read(files)).result,
     },
   ],
-  previews: [previews.previewer],
 };

@@ -1,5 +1,5 @@
 // How Visual Editor performs on a big project (PROJECT=<folder>, PLUGINS=react): reading it, drawing each map and
-// moving around it (frame times), noticing a saved change, previews, and the assistant hub. Changes nothing (the
+// moving around it (frame times), noticing a saved change, and the assistant hub. Changes nothing (the
 // one file it edits is put back).
 
 import * as vscode from 'vscode';
@@ -80,29 +80,13 @@ export async function run() {
   await wait(1500);
   await t.index.idle();
 
-  // 4. Previews: the first (starts the dev server, reads the types), then others.
-  const preview = async (label: string) => {
-    const item = s.items.find((i: any) => i.label === label);
-    if (!item) return say(`preview ${label}: no such card`);
-    t.preview.frameMessages.length = 0;
-    t.preview.shownFrames = 0;
-    const at = Date.now();
-    await t.preview.show({ root: s.project.root, item: item.id });
-    await until(() => t.preview.frameMessages.some((m: any) => m.type === 'text' || m.type === 'error'), `preview ${label}`, 5 * 60_000).catch((e) => say(String(e)));
-    const text = t.preview.frameMessages.find((m: any) => m.type === 'text')?.text ?? t.preview.frameMessages.find((m: any) => m.type === 'error')?.message;
-    say(`preview ${label}: ${s1(Date.now() - at)} until it shows · "${String(text ?? '').slice(0, 90)}"`);
-  };
-  const components = s.items.filter((i: any) => i.id.startsWith('react:component:'));
-  const pick = (re: RegExp) => components.find((i: any) => re.test(i.label))?.label;
-  for (const label of [pick(/Card0$/), pick(/List51$/), pick(/^Page250$/), pick(/Banner9998$/) ?? pick(/9998$/)].filter(Boolean)) await preview(label as string);
-
-  // 5. The assistant hub, as Claude Code calls it.
+  // 4. The assistant hub, as Claude Code calls it.
   const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
   const { StreamableHTTPClientTransport } = await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
   await until(() => !!t.hub.url, 'the hub to start');
   const client = new Client({ name: 'claude-code', version: '1' });
   await client.connect(new StreamableHTTPClientTransport(new URL(t.hub.url), { requestInit: { headers: { Authorization: `Bearer ${t.hub.token}` } } }));
-  for (const [name, args] of [['overview', {}], ['list_cards', {}], ['list_cards', { search: 'Order' }], ['card', { id: components[0]?.id }]] as const) {
+  for (const [name, args] of [['overview', {}], ['list_cards', {}], ['list_cards', { search: 'Order' }], ['card', { id: s.items.find((i: any) => i.id.startsWith('react:component:'))?.id }]] as const) {
     const at = Date.now();
     const r = (await client.callTool({ name, arguments: args as Record<string, unknown> })) as any;
     const text = String(r.content?.[0]?.text ?? '');
