@@ -55,7 +55,7 @@ test('hub: a real MCP client reads the map, the rules and a card', async () => {
   const hub = await connect(host);
   try {
     const tools = (await hub.client.listTools()).tools.map((t) => t.name).sort();
-    assert.deepEqual(tools, ['card', 'list_cards', 'memory', 'overview', 'proposal_status', 'propose_change', 'remember']);
+    assert.deepEqual(tools, ['card', 'list_cards', 'memory', 'overview', 'pictures', 'proposal_status', 'propose_change', 'remember']);
     const overview = await hub.call('overview');
     assert.match(overview.text, /## shop \(on the map\)/);
     assert.match(overview.text, /Plugins: React \(react is in package.json\)/);
@@ -120,5 +120,50 @@ test('hub: refuses requests without the key', async () => {
     assert.equal(res.status, 401);
   } finally {
     await http.close();
+  }
+});
+
+test('hub: pictures come back as images an assistant can look at, with where they were saved', async () => {
+  const { host } = fakeHost();
+  const asked: unknown[] = [];
+  // A 1×1 PNG.
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  host.pictures = async (_root, id, opts) => {
+    asked.push({ id, ...opts });
+    return [
+      { label: 'Card', situation: 'normal', size: 'mobile', png, width: 1, height: 1, file: '.visual-editor/pictures/card/card-normal-mobile.png' },
+      { label: 'Card', situation: 'normal', size: 'tablet', error: 'Example took too long' },
+    ];
+  };
+  const hub = await connect(host);
+  try {
+    const r = (await hub.client.callTool({ name: 'pictures', arguments: { id: 'react:Card', sizes: ['mobile', 'tablet'], versions: true } })) as { content: { type: string; text?: string; data?: string; mimeType?: string }[] };
+    assert.deepEqual(asked, [{ id: 'react:Card', situations: undefined, sizes: ['mobile', 'tablet'], versions: true, theme: undefined }]);
+    assert.match(r.content[0].text!, /Card · normal · mobile \(1×1\) → \.visual-editor\/pictures\/card\/card-normal-mobile\.png/);
+    assert.match(r.content[0].text!, /tablet · problem: Example took too long/);
+    assert.equal(r.content[1].type, 'image');
+    assert.equal(r.content[1].mimeType, 'image/png');
+    assert.equal(r.content[1].data, png.toString('base64'));
+    const missing = await hub.call('pictures', { id: 'nope' });
+    assert.equal(missing.error, true);
+  } finally {
+    await hub.close();
+  }
+});
+
+test('hub: a big project lists its cards a page at a time', async () => {
+  const { host } = fakeHost();
+  const many = { ...state, items: Array.from({ length: 450 }, (_, i) => ({ id: `react:C${i}`, map: 'react', kind: 'component', label: `Card${i}` })) };
+  host.projects = () => [many];
+  host.current = () => many;
+  const hub = await connect(host);
+  try {
+    const first = await hub.call('list_cards');
+    assert.match(first.text, /^450 card\(s\), page 1 of 3 \(1–200\)\. Narrow it with search/);
+    assert.equal(first.text.split('\n').length, 201);
+    const last = await hub.call('list_cards', { page: 3 });
+    assert.match(last.text, /^450 card\(s\), page 3 of 3 \(401–450\):\nreact:C400 /);
+  } finally {
+    await hub.close();
   }
 });

@@ -23,6 +23,9 @@ const ICONS = {
   reload: '<path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/>',
   popOut: '<path d="M15 3h6v6M10 14L21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
   back: '<path d="M4 14h6v6M3 21l7-7M14 4v6h6M21 3l-7 7"/>',
+  versions: '<rect x="3" y="7" width="13" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-3"/>',
+  choose: '<path d="M20 6L9 17l-5-5"/>',
+  pictures: '<path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/>',
 } as const;
 
 /** An icon-only button with a name (shown on hover, read out by screen readers). */
@@ -54,12 +57,17 @@ addStyles(`
   .group button { border-radius: 0; }
   button.icon { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 26px; padding: 0; flex: none; }
   button.icon svg { display: block; }
-  .group button.on { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
+  .group button.on, button.icon.on { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
   select { color: var(--vscode-dropdown-foreground); background: var(--vscode-dropdown-background); border: 1px solid var(--vscode-dropdown-border, #8884); border-radius: 4px; padding: 3px 6px; height: 26px; }
   .tip { position: fixed; z-index: 10; pointer-events: none; padding: 3px 7px; border-radius: 4px; font-size: 12px; white-space: nowrap; color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground)); background: var(--vscode-editorHoverWidget-background, #252526); border: 1px solid var(--vscode-editorHoverWidget-border, #8886); box-shadow: 0 2px 8px #0004; }
   .stage { flex: 1; position: relative; overflow: hidden; padding: ${GAP}px; display: flex; gap: ${GAP}px; justify-content: center; }
-  .frame { display: flex; flex-direction: column; min-width: 0; }
-  .frame .label { height: ${LABEL}px; font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; opacity: .65; }
+  .frame { display: flex; flex-direction: column; min-width: 0; flex: none; }
+  .frame .label { height: ${LABEL}px; display: flex; align-items: center; gap: 8px; font-size: 11px; white-space: nowrap; overflow: hidden; }
+  .frame .label .name { font-weight: 600; letter-spacing: .05em; text-transform: uppercase; opacity: .65; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 40px; max-width: 60%; }
+  .frame .label .checks { opacity: .8; overflow: hidden; text-overflow: ellipsis; cursor: help; flex: 1 1 0; min-width: 0; }
+  .frame .label .checks.bad { color: var(--vscode-editorWarning-foreground, #d9a400); }
+  .frame .label button.icon { width: 24px; height: 20px; margin-left: auto; flex: none; }
+  .tip { white-space: pre-line; max-width: 360px; }
   .box { position: relative; overflow: hidden; border-radius: 6px; border: 1px solid var(--vscode-panel-border, #8884); background: #fff; }
   .box.dark { background: #1e1e1e; }
   .box iframe { position: absolute; left: 0; top: 0; border: 0; transform-origin: 0 0; background: transparent; }
@@ -75,16 +83,21 @@ const situationPick = el('select');
 situationPick.dataset.tip = 'Situation';
 const sizes = el('div', 'group');
 const themes = el('div', 'group');
+const versionsButton = iconButton('versions', 'Versions: show the other versions side by side');
+versionsButton.hidden = true;
+versionsButton.addEventListener('click', () => vscode.postMessage({ type: 'versions', on: !last?.comparing }));
+const picturesButton = iconButton('pictures', 'Pictures: save what is shown at mobile, tablet and desktop size');
+picturesButton.addEventListener('click', () => vscode.postMessage({ type: 'pictures' }));
 const reload = iconButton('reload', 'Reload: draw it again');
 const windowButton = iconButton('popOut', 'Pop out');
 windowButton.addEventListener('click', () => vscode.postMessage({ type: 'window' }));
-bar.append(title, sub, el('span', 'spacer'), situationPick, sizes, themes, reload, windowButton);
+bar.append(title, sub, el('span', 'spacer'), situationPick, versionsButton, sizes, themes, picturesButton, reload, windowButton);
 
 // Hover names: right away, below the button, kept on screen (a title tooltip is slow and the bar would clip one).
 const tip = el('div', 'tip');
 tip.hidden = true;
 document.body.append(tip);
-bar.addEventListener('mouseover', (e) => {
+document.addEventListener('mouseover', (e) => {
   const b = (e.target as HTMLElement).closest<HTMLElement>('[data-tip]');
   if (!b) return void (tip.hidden = true);
   tip.textContent = b.dataset.tip ?? '';
@@ -93,7 +106,7 @@ bar.addEventListener('mouseover', (e) => {
   tip.style.top = `${r.bottom + 6}px`;
   tip.style.left = `${Math.max(4, Math.min(window.innerWidth - tip.offsetWidth - 4, r.left + r.width / 2 - tip.offsetWidth / 2))}px`;
 });
-bar.addEventListener('mouseleave', () => (tip.hidden = true));
+document.addEventListener('mouseleave', () => (tip.hidden = true));
 bar.addEventListener('scroll', () => (tip.hidden = true));
 const stage = el('div', 'stage');
 const drawingNote = el('div', 'drawing', 'Drawing…');
@@ -134,6 +147,8 @@ function layout() {
   const scale = Math.min(1, avail / width);
   for (const { box } of boxes) {
     box.style.width = `${Math.round(width * scale)}px`;
+    // The frame (and its label) exactly as wide as its box, so long labels never push frames into each other.
+    if (box.parentElement) box.parentElement.style.width = box.style.width;
     box.style.height = `${height}px`;
     for (const f of box.querySelectorAll('iframe')) {
       f.style.width = `${width}px`;
@@ -172,6 +187,9 @@ function show(m: Extract<ToPreview, { type: 'show' }>) {
   sub.textContent = m.sub ?? '';
   situationPick.replaceChildren(...m.situations.map((s) => Object.assign(el('option', undefined, s), { value: s, selected: s === m.situation })));
   situationPick.hidden = m.situations.length < 2;
+  versionsButton.hidden = !m.versions;
+  versionsButton.classList.toggle('on', m.comparing);
+  versionsButton.dataset.tip = m.comparing ? 'Versions: back to just this card' : `Versions: show the ${m.versions} other version${m.versions === 1 ? '' : 's'} side by side`;
   for (const b of sizes.querySelectorAll('button')) b.classList.toggle('on', b.dataset.size === m.size);
   for (const b of themes.querySelectorAll('button')) b.classList.toggle('on', b.dataset.theme === m.theme);
   // Keep the boxes (and their frames) when only the content changed, so the swap is smooth.
@@ -179,7 +197,7 @@ function show(m: Extract<ToPreview, { type: 'show' }>) {
     stage.replaceChildren();
     boxes = m.frames.map((frame) => {
       const wrap = el('div', 'frame');
-      if (frame.label) wrap.append(el('div', 'label', frame.label));
+      if (frame.label) wrap.append(el('div', 'label'));
       const box = el('div', 'box');
       wrap.append(box);
       stage.append(wrap);
@@ -188,6 +206,23 @@ function show(m: Extract<ToPreview, { type: 'show' }>) {
   }
   m.frames.forEach((frame, i) => {
     const { box } = boxes[i];
+    // Its label: the name, what the checks found (hover for each), and for a version, a button to choose it.
+    const label = box.parentElement?.querySelector<HTMLElement>('.label');
+    if (label) {
+      const name = el('span', 'name', frame.label ?? '');
+      if (frame.notes) name.dataset.tip = frame.notes;
+      label.replaceChildren(name);
+      if (frame.checks) {
+        const c = el('span', `checks${frame.checks.problems ? ' bad' : ''}`, frame.checks.summary);
+        c.dataset.tip = frame.checks.items.map((x) => `${x.ok ? '✓' : '⚠'} ${x.text}${x.line ? ` (line ${x.line})` : ''}`).join('\n') || frame.checks.summary;
+        label.append(c);
+      }
+      if (frame.version) {
+        const pick = iconButton('choose', `Choose ${frame.label}: make it the real one (shown in Review first)`);
+        pick.addEventListener('click', () => vscode.postMessage({ type: 'choose', version: frame.version! }));
+        label.append(pick);
+      }
+    }
     boxes[i].frame = frame;
     box.classList.toggle('dark', m.theme === 'dark');
     box.querySelector('.error')?.remove();

@@ -14,7 +14,29 @@ export interface MapProject {
 }
 
 /** Shell → map page: the map, or what's remembered about the chosen card. */
-export type ToMap = ShowMap | CardMemory | { type: 'focus'; id: string };
+export type ToMap = ShowMap | CardMemory | { type: 'focus'; id: string } | { type: 'measure' };
+
+/** How the map performs (for the performance test): drawing time, and frame times while moving around. */
+export interface MapMeasure {
+  type: 'measured';
+  /** Drawing the last map shown, in ms. */
+  drawMs: number;
+  /** Frame times in ms while panning and while zooming: average, 95th percentile, worst. */
+  pan: { avg: number; p95: number; max: number };
+  zoom: { avg: number; p95: number; max: number };
+  /** Time spent painting each step (the map's own work, before the screen shows it). */
+  paintPan?: { avg: number; p95: number; max: number };
+  paintZoom?: { avg: number; p95: number; max: number };
+  /** Frame times panning while zoomed in (cards as elements), and how many card elements that took. */
+  nearPan?: { avg: number; p95: number; max: number };
+  nearCards?: number;
+  /** Sent first, before the frame times (which need the screen). */
+  partial?: boolean;
+  cards: number;
+  lines: number;
+  /** Elements on the page. */
+  elements: number;
+}
 
 export interface CardMemory {
   type: 'card';
@@ -23,6 +45,8 @@ export interface CardMemory {
   entries: MemoryEntry[];
   /** A plugin can show how it looks. */
   canPreview: boolean;
+  /** How many other versions of it there are to compare (contract 5). */
+  versions: number;
 }
 
 export type ShowMap = {
@@ -59,6 +83,7 @@ export type ShowMap = {
 /** Map page → shell. */
 export type FromMap =
   | { type: 'ready' }
+  | MapMeasure
   | { type: 'choose'; root: string }
   /** Show another of the project's maps. */
   | { type: 'chooseMap'; id: string }
@@ -67,7 +92,7 @@ export type FromMap =
   /** A card was chosen (its notes and history are wanted), or none. */
   | { type: 'card'; id?: string }
   | { type: 'addNote'; id: string }
-  | { type: 'preview'; id: string }
+  | { type: 'preview'; id: string; versions?: boolean }
   | { type: 'clearChanged' }
   /** Move the tab into its own floating window, or back. */
   | { type: 'window' }

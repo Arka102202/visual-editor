@@ -2,9 +2,9 @@
 // they'd be before and after a proposal, so Review can show both without changing anything.
 // No VS Code APIs here, so it can be tested on its own.
 
-import type { Item, Plugin, PreviewOutput, Previewer, PreviewRequest } from '@visual-editor/contract';
+import type { Choice, Item, Plugin, PreviewOutput, Previewer, PreviewRequest, ProjectInfo, Version } from '@visual-editor/contract';
+import { newId, type Proposal } from './proposals';
 import type { ProjectState } from './projectIndex';
-import type { Proposal } from './proposals';
 
 /** How long a preview may take before the frame says so (starting a dev server the first time can take a minute). */
 export const RENDER_TIMEOUT_MS = 90_000;
@@ -44,6 +44,38 @@ export function situations(found: Found, item: Item): string[] {
   } catch {
     return ['normal'];
   }
+}
+
+/** The other versions of a card its previewer offers (none when it offers none, or fails to answer). */
+export async function versionsOf(found: Found, item: Item, project: ProjectInfo): Promise<Version[]> {
+  try {
+    const list = (await found.previewer.versions?.(item, { project })) ?? [];
+    return list.filter((v) => v && typeof v.id === 'string' && typeof v.label === 'string');
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * A choice as a proposal: each change with the text it's made against, so Review can show the difference, check for
+ * conflicts and undo it. Changes to unsafe places (outside the project, .git…) are refused.
+ */
+export async function choiceProposal(choice: Choice, by: string, item: Item, read: (path: string) => Promise<string | undefined>, safe: (path: string) => boolean): Promise<Proposal> {
+  if (!choice || typeof choice.title !== 'string' || !Array.isArray(choice.changes) || !choice.changes.length) throw new Error(`${by} gave no changes to make.`);
+  const bad = choice.changes.find((c) => typeof c.path !== 'string' || !safe(c.path));
+  if (bad) throw new Error(`${by} wanted to change ${bad.path}, which isn't a place in the project it may change.`);
+  const at = new Date().toISOString();
+  return {
+    id: newId(),
+    title: choice.title,
+    ...(choice.why ? { why: choice.why } : {}),
+    by: { kind: 'plugin', name: by },
+    createdAt: at,
+    status: 'proposed',
+    changes: await Promise.all(choice.changes.map(async (c) => ({ path: c.path, before: (await read(c.path)) ?? null, after: c.after }))),
+    items: [item.id],
+    history: [{ at, status: 'proposed' }],
+  };
 }
 
 /** Reads files through `base`, except those in `overrides` (null: as if removed). */
