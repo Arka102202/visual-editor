@@ -1,5 +1,8 @@
 // The map page inside the editor tab: draws the cards and lines the shell laid out. Drag the background to move
 // around, pinch or Ctrl+scroll to zoom, double-click a card to open its code. Plain DOM, no framework.
+// Built to stay smooth with tens of thousands of cards: only the cards on screen exist as elements (zoomed in);
+// folder boxes, lines and (zoomed out) the cards themselves are painted on one canvas the size of the screen, which
+// the GPU draws. Moving around only paints what's in view.
 
 import type { Layout, PlacedCard } from '../layout';
 import { MAX_FIELDS } from '../layout';
@@ -27,35 +30,17 @@ addStyles(`
   .tabs button.on { opacity: 1; background: var(--vscode-toolbar-activeBackground, #8883); font-weight: 600; }
   .tabs button .n { opacity: .6; font-weight: normal; margin-left: 4px; }
   .bar input.find { width: 150px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, #8884); border-radius: 4px; padding: 3px 8px; font: inherit; }
-  /* Zoomed out: only names, bigger, so the map reads like an outline. */
-  .world.far .card .fields, .world.far .card .sub, .world.far .card .kind, .world.far svg.lines text { display: none; }
-  .world.far .card .head { border-bottom: 0; height: auto; }
-  .world.far .card .label { font-size: var(--far-label, 26px); white-space: normal; line-height: 1.1; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
-  .world.far .section-title { font-size: 30px; }
   /* A card chosen: the cards it has no line to step back. */
   .world.picked .card { opacity: .25; }
   .world.picked .card.near { opacity: 1; }
-  .world.picked svg.lines path { opacity: .15; }
-  .world.picked svg.lines path.on { opacity: 1; }
   .zoom { font-size: 11px; opacity: .7; min-width: 36px; text-align: right; }
   .stage { position: absolute; inset: 40px 0 0 0; overflow: hidden; cursor: grab; touch-action: none; }
   .stage.dragging { cursor: grabbing; }
   .world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
-  svg.lines { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
-  svg.lines path { fill: none; stroke-width: 1.6; opacity: .8; }
-  svg.lines path.on { stroke-width: 3.5; opacity: 1; }
-  /* Line names only on the chosen card's lines, so the map stays calm. */
-  svg.lines text { display: none; font-weight: 600; }
-  svg.lines text.on { display: block; }
-  .area { position: absolute; border-radius: 14px; background: color-mix(in srgb, var(--vscode-foreground) 4%, transparent); border: 1px solid color-mix(in srgb, var(--vscode-foreground) 9%, transparent); }
-  .area-title { position: absolute; font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sky { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   /* Folder names float above the map at reading size, pinned to their box (they don't scale with it). */
   .labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
   .labels .tag { position: absolute; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: color-mix(in srgb, var(--vscode-editor-background) 85%, transparent); transform: translateY(-50%); }
-  /* Zoomed out, a card's whole face takes its kind's colour, so kinds read as patches. */
-  .world.far .card { background: color-mix(in srgb, var(--kind, #8a94a6) 32%, var(--vscode-editorWidget-background, #2a2a2a)); }
-  .world.far svg.lines path { opacity: .3; }
-  .world.far.picked svg.lines path.on { opacity: 1; }
   .card .strip { position: absolute; left: 0; top: 0; bottom: 0; width: 5px; }
   .card .head, .card .field { padding-left: 16px !important; }
   .card .used { font-size: 10px; padding: 0 6px; border-radius: 6px; background: color-mix(in srgb, var(--vscode-foreground) 12%, transparent); white-space: nowrap; }
@@ -75,8 +60,6 @@ addStyles(`
   .arrange { display: flex; border-radius: 5px; overflow: hidden; flex: none; }
   .bar .arrange button { border-radius: 0; padding: 3px 9px; }
   .bar .arrange button.on { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
-  svg.lines text { font-size: 11px; fill: var(--vscode-descriptionForeground, #888); }
-  .section-title { position: absolute; font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; opacity: .65; }
   .card { position: absolute; box-sizing: border-box; border-radius: 8px; background: var(--vscode-editorWidget-background, #2a2a2a); border: 1px solid var(--vscode-editorWidget-border, #8884); box-shadow: 0 1px 3px #0003; cursor: default; overflow: hidden; }
   .card.proposed { border: 2px solid #d9a400; }
   .card.changed { border: 2px solid #2f6fdb; }
@@ -113,8 +96,6 @@ addStyles(`
   .empty h2 { margin: 0; font-size: 16px; font-weight: 600; }
   .empty p { margin: 0; opacity: .7; max-width: 420px; }
 `);
-
-const SVG = 'http://www.w3.org/2000/svg';
 
 // The page: a bar on top, the stage below, and a message for when there's nothing to draw.
 const bar = el('div', 'bar');
@@ -183,9 +164,10 @@ for (const [b, mode] of arrangeButtons) hint(b, { name: mode === 'flow' ? 'Flow'
 const cardMeaning = (kind: string) => meanings.cards[kind] ?? `Cards the plugin calls “${kind}”.`;
 const lineMeaning = (kind: string) => meanings.lines[kind] ?? `Lines the plugin calls “${kind}”.`;
 const stage = el('div', 'stage');
+const sky = el('canvas', 'sky');
 const world = el('div', 'world');
 const labels = el('div', 'labels');
-stage.append(world, labels);
+stage.append(sky, world, labels);
 /** Folder names, with the box each is pinned to. */
 let tags: { el: HTMLElement; x: number; y: number; w: number }[] = [];
 const empty = el('div', 'empty');
@@ -206,8 +188,9 @@ const paint = (t: Tone | undefined) => (t ? (document.body.classList.contains('v
 
 /** Below this zoom, cards show only their names. */
 const FAR = 0.55;
-/** As far out as the map goes: enough for a medium project to fit. */
+/** As far out as the map goes (a very big map may go further, to fit). */
 const MIN_ZOOM = 0.08;
+let minZoom = MIN_ZOOM;
 let selected: string | undefined;
 let marks: ShowMap['marks'] = {};
 let colours: ShowMap['colours'] = { cards: {}, lines: {} };
@@ -216,19 +199,310 @@ let used: ShowMap['usedBy'] = {};
 let linked = new Set<string>();
 /** Used by this many cards or more: the card stands out. */
 const BUSY = 3;
+/** Cards that exist as elements now (the ones on screen, zoomed in). */
 const cardEls = new Map<string, HTMLElement>();
-let lineEls: { from: string; to: string; path: SVGPathElement; text?: SVGTextElement }[] = [];
+/** Every placed card, by id; the lines touching each card; which folder each is in; and a grid to find cards by place. */
+let placedById = new Map<string, PlacedCard>();
+let linksOf = new Map<string, Layout['links']>();
+let sectionOf = new Map<string, number>();
+const CELL = 600;
+let grid = new Map<string, PlacedCard[]>();
+/** Above this many lines, a zoomed-out map joins the lines between two folders into one. */
+const MAX_FAR_LINES = 3000;
+/** Never more card elements than this at once (zoomed in on a huge screen). */
+const MAX_CARD_ELEMENTS = 1500;
 
 function applyView() {
   world.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.k})`;
   world.classList.toggle('far', view.k < FAR);
   for (const t of tags) {
-    Object.assign(t.el.style, { left: `${view.x + t.x * view.k + 8}px`, top: `${view.y + t.y * view.k}px`, maxWidth: `${Math.max(60, t.w * view.k - 16)}px` });
+    // A folder's name shows once its box is big enough on screen to belong to it.
+    t.el.hidden = t.w * view.k < 70;
+    if (!t.el.hidden) Object.assign(t.el.style, { left: `${view.x + t.x * view.k + 8}px`, top: `${view.y + t.y * view.k}px`, maxWidth: `${Math.max(60, t.w * view.k - 16)}px` });
   }
-  // Names grow as the map shrinks, so they stay readable on screen.
-  world.style.setProperty('--far-label', `${Math.min(13 / view.k, 34)}px`);
-  world.style.setProperty('--far-title', `${Math.min(18 / view.k, 110)}px`);
   zoomText.textContent = `${Math.round(view.k * 100)}%`;
+  requestRender();
+}
+
+let renderQueued = false;
+/** Paints once per frame, however many moves came in. */
+function requestRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(() => {
+    renderQueued = false;
+    render();
+  });
+}
+
+/** The part of the map on screen, in map units, with a margin. */
+function inView(margin = 0) {
+  const k = view.k;
+  return { x0: -view.x / k - margin / k, y0: -view.y / k - margin / k, x1: (stage.clientWidth - view.x) / k + margin / k, y1: (stage.clientHeight - view.y) / k + margin / k };
+}
+const meets = (c: { x: number; y: number; w: number; h: number }, r: ReturnType<typeof inView>) => c.x < r.x1 && c.x + c.w > r.x0 && c.y < r.y1 && c.y + c.h > r.y0;
+
+/** Cards in (or near) a part of the map, from the grid. */
+function cardsIn(r: ReturnType<typeof inView>): PlacedCard[] {
+  const out = new Set<PlacedCard>();
+  for (let gx = Math.floor(r.x0 / CELL); gx <= Math.floor(r.x1 / CELL); gx++) {
+    for (let gy = Math.floor(r.y0 / CELL); gy <= Math.floor(r.y1 / CELL); gy++) {
+      for (const c of grid.get(`${gx},${gy}`) ?? []) if (meets(c, r)) out.add(c);
+    }
+  }
+  return [...out];
+}
+
+function render() {
+  const near = view.k >= FAR;
+  syncCards(near ? cardsIn(inView(300)).slice(0, MAX_CARD_ELEMENTS) : []);
+  paintSky(near);
+}
+
+/** Card elements for the cards on screen: the ones that left are removed, the ones that came are made. */
+function syncCards(wanted: PlacedCard[]) {
+  const keep = new Set(wanted.map((c) => c.item.id));
+  for (const [id, card] of cardEls) {
+    if (!keep.has(id)) {
+      card.remove();
+      cardEls.delete(id);
+    }
+  }
+  const nearIds = nearSet();
+  for (const c of wanted) {
+    if (cardEls.has(c.item.id)) continue;
+    const card = drawCard(c);
+    if (c.item.id === selected) card.classList.add('selected');
+    if (nearIds.has(c.item.id)) card.classList.add('near');
+    cardEls.set(c.item.id, card);
+    world.append(card);
+  }
+}
+
+/** The chosen card and the cards it has a line to. */
+function nearSet(): Set<string> {
+  if (!selected) return new Set();
+  return new Set([selected, ...(linksOf.get(selected) ?? []).flatMap((l) => [l.from, l.to])]);
+}
+
+/** Theme colours the canvas needs (read from the page, so they follow VS Code's theme). */
+let ink = { fg: '#ccc', widget: '#2a2a2a', border: '#8884', bg: '#1e1e1e', text: '#ddd' };
+function readInk() {
+  const css = getComputedStyle(document.body);
+  const v = (name: string, fallback: string) => css.getPropertyValue(name).trim() || fallback;
+  ink = { fg: v('--vscode-foreground', '#ccc'), widget: v('--vscode-editorWidget-background', '#2a2a2a'), border: v('--vscode-editorWidget-border', '#8884'), bg: v('--vscode-editor-background', '#1e1e1e'), text: v('--vscode-editor-foreground', '#ddd') };
+}
+
+/** Folder boxes, lines and (zoomed out) the cards, painted for what's on screen. */
+/**
+ * Zoomed out, the whole view is painted once into a picture a bit bigger than the screen; moving around slides that
+ * picture (the GPU's job), and it's painted again only when the view leaves it, the zoom settles at a new level, or
+ * something on it changes. Zoomed in, there's little to paint, so it's painted each frame.
+ */
+let snapshot: { canvas: HTMLCanvasElement; k: number; x0: number; y0: number; x1: number; y1: number; version: number } | undefined;
+/** Bumped whenever what's painted changes (a new map, a card chosen). */
+let paintVersion = 0;
+let lastZoomAt = 0;
+let settleTimer: ReturnType<typeof setTimeout> | undefined;
+
+function paintSky(near: boolean) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = stage.clientWidth;
+  const h = stage.clientHeight;
+  if (sky.width !== Math.round(w * dpr) || sky.height !== Math.round(h * dpr)) {
+    sky.width = Math.round(w * dpr);
+    sky.height = Math.round(h * dpr);
+    snapshot = undefined;
+  }
+  const ctx = sky.getContext('2d');
+  if (!ctx) return;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, sky.width, sky.height);
+  const k = view.k;
+  if (near) {
+    snapshot = undefined;
+    ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * view.x, dpr * view.y);
+    paintContent(ctx, k, inView(40), true);
+    return;
+  }
+  const r = inView(0);
+  const fresh = snapshot && snapshot.version === paintVersion && snapshot.k === k && r.x0 >= snapshot.x0 && r.y0 >= snapshot.y0 && r.x1 <= snapshot.x1 && r.y1 <= snapshot.y1;
+  const zooming = performance.now() - lastZoomAt < 150;
+  if (!fresh && !(zooming && snapshot && snapshot.version === paintVersion)) {
+    // Half a screen of margin on every side, so panning slides the same picture for a while.
+    const rect = inView(Math.max(w, h) / 2);
+    const scale = Math.min(dpr, 1.5) * k;
+    const canvas = snapshot?.canvas ?? document.createElement('canvas');
+    canvas.width = Math.max(1, Math.ceil((rect.x1 - rect.x0) * scale));
+    canvas.height = Math.max(1, Math.ceil((rect.y1 - rect.y0) * scale));
+    const sctx = canvas.getContext('2d');
+    if (!sctx) return;
+    sctx.setTransform(scale, 0, 0, scale, -rect.x0 * scale, -rect.y0 * scale);
+    paintContent(sctx, k, rect, false);
+    snapshot = { canvas, k, ...rect, version: paintVersion };
+  } else if (!fresh) {
+    // Still zooming: the last picture, stretched; painted sharp once the zoom settles.
+    if (settleTimer) clearTimeout(settleTimer);
+    settleTimer = setTimeout(requestRender, 160);
+  }
+  const s = snapshot!;
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(s.canvas, (s.x0 * k + view.x) * dpr, (s.y0 * k + view.y) * dpr, (s.x1 - s.x0) * k * dpr, (s.y1 - s.y0) * k * dpr);
+}
+
+/** Paints the map's boxes, lines and (zoomed out) cards for a part of it, into a canvas already set to map units. */
+function paintContent(ctx: CanvasRenderingContext2D, k: number, r: ReturnType<typeof inView>, near: boolean) {
+  const picked = !!selected;
+  const nearIds = nearSet();
+
+  // Folder boxes (and the titles of sections without a box).
+  for (const s of layout.sections) {
+    if (!meets(s, r)) continue;
+    if (s.box) {
+      const tint = paint(s.tint);
+      ctx.globalAlpha = tint ? 0.09 : 0.04;
+      ctx.fillStyle = tint ?? ink.fg;
+      roundRect(ctx, s.x, s.y, s.w, s.h, 14);
+      ctx.fill();
+      ctx.globalAlpha = tint ? 0.35 : 0.09;
+      ctx.strokeStyle = tint ?? ink.fg;
+      ctx.lineWidth = Math.max(1, 1 / k);
+      ctx.stroke();
+    } else {
+      ctx.globalAlpha = 0.65;
+      ctx.fillStyle = ink.fg;
+      ctx.font = `600 ${near ? 12 : Math.min(30, 18 / k)}px system-ui, sans-serif`;
+      ctx.fillText(s.map.title.toUpperCase(), s.x, s.y + 24);
+    }
+  }
+
+  // Lines: zoomed in, those touching cards on screen; zoomed out, all of them, or one per pair of folders when
+  // there are too many to read.
+  const lw = Math.max(1.6, 0.6 / k);
+  const drawLine = (x1: number, y1: number, x2: number, y2: number, colour: string, alpha: number, width: number, dashed?: boolean) => {
+    const bend = Math.max(40, Math.abs(x2 - x1) / 2);
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = colour;
+    ctx.lineWidth = width;
+    ctx.setLineDash(dashed ? [6, 4] : []);
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.bezierCurveTo(x1 + bend, y1, x2 - bend, y2, x2, y2);
+    ctx.stroke();
+  };
+  const ends = (l: Layout['links'][number]) => {
+    const a = placedById.get(l.from);
+    const b = placedById.get(l.to);
+    return a && b ? { x1: a.x + a.w, y1: a.y + Math.min(a.h / 2, 28), x2: b.x, y2: b.y + Math.min(b.h / 2, 28) } : undefined;
+  };
+  const visibleLinks = near || layout.links.length <= MAX_FAR_LINES;
+  if (visibleLinks) {
+    const list = near ? [...new Set(cardsIn(r).flatMap((c) => linksOf.get(c.item.id) ?? []))] : layout.links;
+    for (const l of list) {
+      const e = ends(l);
+      if (!e) continue;
+      const on = picked && (l.from === selected || l.to === selected);
+      const colour = paint(colours.lines[l.kind]) ?? '#7c8580';
+      drawLine(e.x1, e.y1, e.x2, e.y2, colour, on ? 1 : picked ? 0.15 : near ? 0.8 : 0.3, on ? Math.max(3.5, 1.4 / k) : lw, colours.lines[l.kind]?.dashed);
+      if (on) {
+        // Its arrow head, and its name in the middle.
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = colour;
+        const s = Math.max(6, 6 / k);
+        ctx.beginPath();
+        ctx.moveTo(e.x2, e.y2);
+        ctx.lineTo(e.x2 - s * 1.4, e.y2 - s * 0.7);
+        ctx.lineTo(e.x2 - s * 1.4, e.y2 + s * 0.7);
+        ctx.fill();
+        const label = l.label ?? l.kind;
+        if (label) {
+          ctx.font = `600 ${Math.max(11, 11 / k)}px system-ui, sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.fillText(label, (e.x1 + e.x2) / 2, (e.y1 + e.y2) / 2 - 6 / Math.min(1, k));
+          ctx.textAlign = 'start';
+        }
+      }
+    }
+  } else {
+    // One line per pair of folders, as thick as the lines it stands for.
+    const pairs = new Map<string, { a: number; b: number; n: number; on: boolean }>();
+    for (const l of layout.links) {
+      const a = sectionOf.get(l.from);
+      const b = sectionOf.get(l.to);
+      if (a === undefined || b === undefined || a === b) continue;
+      const key = `${a}|${b}`;
+      const p = pairs.get(key) ?? { a, b, n: 0, on: false };
+      p.n++;
+      if (picked && (l.from === selected || l.to === selected)) p.on = true;
+      pairs.set(key, p);
+    }
+    for (const p of pairs.values()) {
+      const A = layout.sections[p.a];
+      const B = layout.sections[p.b];
+      drawLine(A.x + A.w, A.y + A.h / 2, B.x, B.y + B.h / 2, ink.fg, p.on ? 0.9 : picked ? 0.08 : 0.25, Math.max(lw, (1 + Math.log2(p.n)) / k), false);
+    }
+  }
+  ctx.setLineDash([]);
+
+  // Zoomed out: the cards themselves, as patches of their kind's colour, named when there's room.
+  if (!near) {
+    const cards = cardsIn(r);
+    for (const c of cards) {
+      const colour = paint(colours.cards[c.item.kind]) ?? '#8a94a6';
+      ctx.globalAlpha = picked && !nearIds.has(c.item.id) ? 0.25 : 1;
+      ctx.fillStyle = ink.widget;
+      roundRect(ctx, c.x, c.y, c.w, c.h, 8);
+      ctx.fill();
+      const a = ctx.globalAlpha;
+      ctx.globalAlpha = a * 0.32;
+      ctx.fillStyle = colour;
+      ctx.fill();
+      ctx.globalAlpha = a;
+      const mark = marks[c.item.id];
+      const isSel = c.item.id === selected;
+      ctx.strokeStyle = isSel ? ink.fg : mark === 'proposed' ? '#d9a400' : mark === 'changed' ? '#2f6fdb' : ink.border;
+      ctx.lineWidth = isSel || mark ? Math.max(2, 2 / k) : Math.max(1, 0.5 / k);
+      ctx.stroke();
+      ctx.fillStyle = colour;
+      ctx.fillRect(c.x, c.y, 5, c.h);
+      // A name only when the card is big enough on screen to read it.
+      if (c.w * k >= 40) {
+        const size = Math.min(13 / k, 34);
+        ctx.font = `600 ${size}px system-ui, sans-serif`;
+        ctx.fillStyle = ink.text;
+        fitText(ctx, c.item.label, c.x + 14, c.y + 10 + size, c.w - 22);
+      }
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x, y, w, h, r);
+  else ctx.rect(x, y, w, h);
+}
+
+/** Text cut to a width, with an ellipsis. */
+function fitText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, max: number) {
+  if (ctx.measureText(text).width <= max) return ctx.fillText(text, x, y);
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (ctx.measureText(text.slice(0, mid) + '…').width <= max) lo = mid;
+    else hi = mid - 1;
+  }
+  ctx.fillText(text.slice(0, lo) + '…', x, y);
+}
+
+/** The card at a point on screen (zoomed out, where cards are painted, not elements). */
+function cardAt(clientX: number, clientY: number): PlacedCard | undefined {
+  const b = stage.getBoundingClientRect();
+  const x = (clientX - b.left - view.x) / view.k;
+  const y = (clientY - b.top - view.y) / view.k;
+  return cardsIn({ x0: x, y0: y, x1: x, y1: y }).find((c) => x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h);
 }
 
 function fit() {
@@ -237,7 +511,10 @@ function fit() {
   if (!layout.width || !w || !h) {
     view = { x: 40, y: 40, k: 1 };
   } else {
-    const k = Math.min(1, Math.max(MIN_ZOOM, Math.min((w - 80) / layout.width, (h - 80) / layout.height)));
+    // A very big map may zoom further out than usual, so it always fits.
+    const fits = Math.min((w - 80) / layout.width, (h - 80) / layout.height);
+    minZoom = Math.min(MIN_ZOOM, Math.max(0.005, fits));
+    const k = Math.min(1, Math.max(minZoom, fits));
     view = { k, x: Math.max(40, (w - layout.width * k) / 2), y: Math.max(40, (h - layout.height * k) / 2) };
   }
   applyView();
@@ -249,15 +526,12 @@ function select(id: string | undefined, tell = true) {
   const changed = selected !== id;
   selected = id;
   if (id) cardEls.get(id)?.classList.add('selected');
-  for (const l of lineEls) {
-    const on = !!id && (l.from === id || l.to === id);
-    l.path.classList.toggle('on', on);
-    l.text?.classList.toggle('on', on);
-  }
-  // The chosen card and the cards it has a line to stay bright; the rest step back.
-  const near = new Set(id ? [id, ...lineEls.filter((l) => l.from === id || l.to === id).flatMap((l) => [l.from, l.to])] : []);
+  // The chosen card and the cards it has a line to stay bright; the rest step back (lines are repainted).
+  const near = nearSet();
   for (const [cid, card] of cardEls) card.classList.toggle('near', near.has(cid));
   world.classList.toggle('picked', !!id);
+  paintVersion++;
+  requestRender();
   if (!id) drawer.hidden = true;
   if (tell && changed) vscode.postMessage({ type: 'card', id });
 }
@@ -284,6 +558,12 @@ function showCard(m: CardMemory) {
     const preview = el('button', 'primary', 'Preview');
     preview.title = 'See how it looks';
     preview.addEventListener('click', () => vscode.postMessage({ type: 'preview', id: item.id }));
+    if (m.versions) {
+      const versions = el('button', undefined, `Versions (${m.versions})`);
+      versions.title = 'Its other versions, side by side with it; choose one to make it the real one';
+      versions.addEventListener('click', () => vscode.postMessage({ type: 'preview', id: item.id, versions: true }));
+      buttons.prepend(versions);
+    }
     buttons.prepend(preview);
   }
   const note = el('button', undefined, 'Add a note');
@@ -374,25 +654,13 @@ function draw() {
   labels.replaceChildren();
   tags = [];
   cardEls.clear();
-  lineEls = [];
-  const svg = document.createElementNS(SVG, 'svg');
-  svg.classList.add('lines');
-  svg.setAttribute('width', String(layout.width));
-  svg.setAttribute('height', String(layout.height));
-  // One arrow head per line colour.
-  const heads = Object.entries(colours.lines);
-  svg.innerHTML = `<defs>${heads.map(([, t], i) => [paint(t), i] as const).map(([c, i]) => `<marker id="arrow${i}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: ${c}; stroke: none"/></marker>`).join('')}</defs>`;
-  const headOf = new Map(heads.map(([k], i) => [k, `url(#arrow${i})`]));
-  world.append(svg);
-  const placed = new Map<string, PlacedCard>();
-  for (const s of layout.sections) {
-    if (s.box) {
-      const area = el('div', 'area');
-      Object.assign(area.style, { left: `${s.x}px`, top: `${s.y}px`, width: `${s.w}px`, height: `${s.h}px` });
-      const tint = paint(s.tint);
-      if (tint) Object.assign(area.style, { background: `color-mix(in srgb, ${tint} 9%, transparent)`, borderColor: `color-mix(in srgb, ${tint} 35%, transparent)` });
-      world.insertBefore(area, svg);
-    }
+  readInk();
+  // What the painter and the card elements need: each card by id and by place, its lines, and its folder.
+  placedById = new Map();
+  linksOf = new Map();
+  sectionOf = new Map();
+  grid = new Map();
+  layout.sections.forEach((s, i) => {
     if (s.box) {
       const tag = el('div', 'tag', `${s.map.title}  ·  ${s.cards.length}`);
       const tint = paint(s.tint);
@@ -400,50 +668,32 @@ function draw() {
       if (s.map.description) tag.title = s.map.description;
       labels.append(tag);
       tags.push({ el: tag, x: s.x, y: s.y, w: s.w });
-    } else {
-      const title = el('div', 'section-title', s.map.title);
-      Object.assign(title.style, { left: `${s.x}px`, top: `${s.y + 12}px` });
-      if (s.map.description) title.title = s.map.description;
-      world.append(title);
     }
     for (const c of s.cards) {
-      placed.set(c.item.id, c);
-      const card = drawCard(c);
-      cardEls.set(c.item.id, card);
-      world.append(card);
+      placedById.set(c.item.id, c);
+      sectionOf.set(c.item.id, i);
+      for (let gx = Math.floor(c.x / CELL); gx <= Math.floor((c.x + c.w) / CELL); gx++) {
+        for (let gy = Math.floor(c.y / CELL); gy <= Math.floor((c.y + c.h) / CELL); gy++) {
+          const key = `${gx},${gy}`;
+          const cell = grid.get(key);
+          if (cell) cell.push(c);
+          else grid.set(key, [c]);
+        }
+      }
     }
-  }
+  });
   for (const l of layout.links) {
-    const a = placed.get(l.from);
-    const b = placed.get(l.to);
-    if (!a || !b) continue;
-    const x1 = a.x + a.w;
-    const y1 = a.y + Math.min(a.h / 2, 28);
-    const x2 = b.x;
-    const y2 = b.y + Math.min(b.h / 2, 28);
-    const bend = Math.max(40, Math.abs(x2 - x1) / 2);
-    const path = document.createElementNS(SVG, 'path');
-    path.setAttribute('d', `M${x1},${y1} C${x1 + bend},${y1} ${x2 - bend},${y2} ${x2},${y2}`);
-    path.setAttribute('stroke', paint(colours.lines[l.kind]) ?? '#7c8580');
-    if (colours.lines[l.kind]?.dashed) path.setAttribute('stroke-dasharray', '6 4');
-    path.setAttribute('marker-end', headOf.get(l.kind) ?? '');
-    svg.append(path);
-    const label = l.label ?? l.kind;
-    let text: SVGTextElement | undefined;
-    if (label) {
-      text = document.createElementNS(SVG, 'text');
-      text.setAttribute('x', String((x1 + x2) / 2));
-      text.setAttribute('y', String((y1 + y2) / 2 - 6));
-      text.setAttribute('text-anchor', 'middle');
-      text.setAttribute('fill', paint(colours.lines[l.kind]) ?? '#7c8580');
-      text.textContent = label;
-      svg.append(text);
+    if (!placedById.has(l.from) || !placedById.has(l.to)) continue;
+    for (const id of [l.from, l.to]) {
+      const list = linksOf.get(id);
+      if (list) list.push(l);
+      else linksOf.set(id, [l]);
     }
-    lineEls.push({ from: l.from, to: l.to, path, text });
   }
-  if (selected && cardEls.has(selected)) select(selected, false);
+  paintVersion++;
+  if (selected && placedById.has(selected)) select(selected, false);
   else if (selected) select(undefined);
-  // Pin the new folder names where their boxes are now.
+  // Pin the new folder names where their boxes are now, and paint what's on screen.
   applyView();
 }
 
@@ -485,7 +735,77 @@ function drawLegend(m: ShowMap) {
   legend.hidden = !!m.empty || !legend.childElementCount;
 }
 
+let lastDrawMs = 0;
+
+/** Frame times while something moves the view each frame (for the performance test). */
+async function frames(n: number, step: (i: number) => void) {
+  const times: number[] = [];
+  let prev = performance.now();
+  for (let i = 0; i < n; i++) {
+    step(i);
+    applyView();
+    await new Promise((r) => requestAnimationFrame(r));
+    const now = performance.now();
+    times.push(now - prev);
+    prev = now;
+  }
+  times.sort((a, b) => a - b);
+  const round = (x: number) => Math.round(x * 10) / 10;
+  return { avg: round(times.reduce((a, b) => a + b, 0) / n), p95: round(times[Math.floor(n * 0.95)]), max: round(times[n - 1]) };
+}
+
+async function measure() {
+  const start = { ...view };
+  // Painting alone (no waiting for the screen), for each step of a pan and a zoom.
+  const paintTimes = (n: number, step: (i: number) => void) => {
+    const times: number[] = [];
+    for (let i = 0; i < n; i++) {
+      step(i);
+      applyView();
+      const t = performance.now();
+      render();
+      times.push(performance.now() - t);
+    }
+    times.sort((a, b) => a - b);
+    const round = (x: number) => Math.round(x * 10) / 10;
+    return { avg: round(times.reduce((a, b) => a + b, 0) / n), p95: round(times[Math.floor(n * 0.95)]), max: round(times[n - 1]) };
+  };
+  const paintPan = paintTimes(60, () => {
+    view.x -= 12;
+    view.y -= 4;
+  });
+  view = { ...start };
+  const paintZoom = paintTimes(60, (i) => {
+    lastZoomAt = performance.now();
+    view.k = Math.min(2, Math.max(minZoom, view.k * (i < 30 ? 1.08 : 1 / 1.08)));
+  });
+  view = { ...start };
+  vscode.postMessage({ type: 'measured', partial: true, drawMs: Math.round(lastDrawMs), pan: paintPan, zoom: paintZoom, paintPan, paintZoom, cards: cardEls.size, lines: layout.links.length, elements: document.querySelectorAll('*').length });
+  const pan = await frames(60, () => {
+    view.x -= 12;
+    view.y -= 4;
+  });
+  view = { ...start };
+  const zoom = await frames(60, (i) => {
+    lastZoomAt = performance.now();
+    view.k = Math.min(2, Math.max(minZoom, view.k * (i < 30 ? 1.05 : 1 / 1.05)));
+  });
+  // Zoomed in (cards as elements, made and removed while moving), in the middle of the map.
+  view = { k: 0.9, x: stage.clientWidth / 2 - (layout.width / 2) * 0.9, y: stage.clientHeight / 2 - (layout.height / 2) * 0.9 };
+  applyView();
+  await new Promise((r) => requestAnimationFrame(r));
+  const nearPan = await frames(60, () => {
+    view.x -= 25;
+    view.y -= 8;
+  });
+  const nearCards = cardEls.size;
+  view = start;
+  applyView();
+  vscode.postMessage({ type: 'measured', drawMs: Math.round(lastDrawMs), pan, zoom, paintPan, paintZoom, nearPan, nearCards, cards: cardEls.size, lines: layout.links.length, elements: document.querySelectorAll('*').length });
+}
+
 function show(m: ShowMap) {
+  const started = performance.now();
   picker.replaceChildren(
     ...m.projects.map((p) => {
       const o = el('option', undefined, `${p.group && p.group !== p.name ? `${p.group} › ` : ''}${p.name}${p.cards ? ` (${p.cards})` : ''}`);
@@ -536,6 +856,7 @@ function show(m: ShowMap) {
     shownKey = `${m.current}|${m.map}`;
     fit();
   }
+  lastDrawMs = performance.now() - started;
 }
 
 // Moving around: drag the background, scroll to move, pinch or Ctrl+scroll to zoom.
@@ -552,7 +873,8 @@ stage.addEventListener('pointermove', (e) => {
   applyView();
 });
 const endDrag = (e: PointerEvent) => {
-  if (drag && Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) < 3) select(undefined);
+  // A click (not a drag) on the background: zoomed out, it may be on a painted card.
+  if (drag && Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) < 3) select(view.k < FAR ? cardAt(e.clientX, e.clientY)?.item.id : undefined);
   drag = undefined;
   stage.classList.remove('dragging');
 };
@@ -566,7 +888,8 @@ stage.addEventListener(
       const r = stage.getBoundingClientRect();
       const px = e.clientX - r.left;
       const py = e.clientY - r.top;
-      const k = Math.min(2, Math.max(MIN_ZOOM, view.k * Math.exp(-e.deltaY * 0.01)));
+      const k = Math.min(2, Math.max(minZoom, view.k * Math.exp(-e.deltaY * 0.01)));
+      lastZoomAt = performance.now();
       view = { k, x: px - ((px - view.x) * k) / view.k, y: py - ((py - view.y) * k) / view.k };
     } else {
       view.x -= e.deltaX;
@@ -576,6 +899,11 @@ stage.addEventListener(
   },
   { passive: false },
 );
+stage.addEventListener('dblclick', (e) => {
+  const c = view.k < FAR ? cardAt(e.clientX, e.clientY) : undefined;
+  if (c?.item.source) vscode.postMessage({ type: 'open', path: c.item.source.path, line: c.item.source.line });
+});
+new ResizeObserver(() => requestRender()).observe(stage);
 fitButton.addEventListener('click', fit);
 
 // Find a card by name: each Enter goes to the next match.
@@ -606,6 +934,7 @@ window.addEventListener('message', (e: MessageEvent<ToMap>) => {
   if (e.data?.type === 'show') show(e.data);
   else if (e.data?.type === 'card') showCard(e.data);
   else if (e.data?.type === 'focus') focusCard(e.data.id);
+  else if (e.data?.type === 'measure') void measure();
 });
 applyView();
 vscode.postMessage({ type: 'ready' });

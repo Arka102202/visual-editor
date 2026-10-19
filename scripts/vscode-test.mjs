@@ -90,10 +90,46 @@ const shooter = setInterval(() => {
     writeFileSync(join(requests, `${name}.done`), out);
   }
 }, 200);
+// LIMIT_MB / LIMIT_S: a watchdog for big tests. Every 2 s it adds up the memory of this test's VS Code (its processes
+// are the ones using this test's own profile folder) and stops it, with a clear message, if it goes over the limit or
+// runs too long, so a test can never take the whole computer.
+const limitMb = Number(process.env.LIMIT_MB ?? 0);
+const limitS = Number(process.env.LIMIT_S ?? 0);
+const started = Date.now();
+let peakMb = 0;
+let stoppedBecause = '';
+const watchdog = setInterval(() => {
+  let total = 0;
+  const pids = [];
+  try {
+    for (const line of execFileSync('ps', ['-axo', 'pid=,rss=,command='], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\n')) {
+      if (!line.includes(temp)) continue;
+      const m = /^\s*(\d+)\s+(\d+)\s/.exec(line);
+      if (!m) continue;
+      pids.push(Number(m[1]));
+      total += Number(m[2]) / 1024;
+    }
+  } catch {
+    return;
+  }
+  peakMb = Math.max(peakMb, total);
+  const over = limitMb && total > limitMb ? `memory ${Math.round(total)} MB is over the limit of ${limitMb} MB` : limitS && (Date.now() - started) / 1000 > limitS ? `it ran longer than ${limitS} s` : '';
+  if (over && !stoppedBecause) {
+    stoppedBecause = over;
+    for (const pid of pids) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // already gone
+      }
+    }
+  }
+}, 2000);
 child.stdout.on('data', () => {});
 child.stderr.on('data', () => {});
 child.on('exit', (status) => {
   clearInterval(shooter);
+  clearInterval(watchdog);
   let text = '';
   try {
     text = readFileSync(report, 'utf8');
@@ -101,5 +137,6 @@ child.on('exit', (status) => {
     text = '(no report: the test did not finish)\n';
   }
   process.stdout.write(text);
-  process.exit(status ?? 1);
+  if (limitMb || limitS) process.stdout.write(`watchdog: peak memory of the test's VS Code ${Math.round(peakMb)} MB${stoppedBecause ? ` · STOPPED: ${stoppedBecause}` : ''}\n`);
+  process.exit(stoppedBecause ? 3 : (status ?? 1));
 });

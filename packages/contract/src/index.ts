@@ -4,7 +4,7 @@
 // No VS Code imports here: plugins and the shell's tests use it outside VS Code too.
 
 /** The contract version this package describes. Plugins say which version they were built for. */
-export const CONTRACT_VERSION = 4;
+export const CONTRACT_VERSION = 5;
 
 /** Something that can be stopped or removed (same shape as VS Code's Disposable). */
 export interface Disposable {
@@ -133,6 +133,30 @@ export interface PreviewRequest {
    * for a proposal, it returns the proposed text, so Before and After can be shown without changing anything.
    */
   read(path: string): Promise<string | undefined>;
+  /** Contract 5: which version to draw (one of `versions()`); undefined: the card as it is. */
+  version?: string;
+}
+
+/**
+ * Contract 5: another version of a card (a design to compare with the one in the code), from the plugin's own
+ * playground. The shell draws them side by side with the current one; choosing one makes it a proposal.
+ */
+export interface Version {
+  id: string;
+  /** Shown above it, e.g. "Compact". */
+  label: string;
+  /** What's different about it, in a sentence. */
+  notes?: string;
+  /** What the plugin's checks found (reuse of the project's components, design, types). */
+  checks?: { summary: string; problems: number; items: { kind: string; ok: boolean; text: string; line?: number }[] };
+}
+
+/** Contract 5: the code changes that make a version the real one (the shell turns them into a proposal for review). */
+export interface Choice {
+  title: string;
+  why?: string;
+  /** New text for each file (null: remove it), as project-relative paths. */
+  changes: { path: string; after: string | null }[];
 }
 
 /** What to show: a whole HTML page (scripts allowed, no network beyond this computer), or the address of a dev server page. */
@@ -150,6 +174,10 @@ export interface Previewer {
    * for messages a page posts to its parent with `source: 'visual-editor-preview'`.
    */
   heard?(message: Record<string, unknown>, context: { item: Item; project: ProjectInfo }): void;
+  /** Contract 5: other versions of a card to compare (none: the card has only itself). */
+  versions?(item: Item, context: { project: ProjectInfo }): Version[] | Promise<Version[]>;
+  /** Contract 5: making a version the real one; the shell shows it as a proposal before anything changes. */
+  choose?(item: Item, version: string, context: { project: ProjectInfo; read(path: string): Promise<string | undefined> }): Choice | Promise<Choice>;
 }
 
 /** A Visual Editor plugin. Fill only the slots you need; more slots come in later contract versions. */

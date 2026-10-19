@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CONTRACT_VERSION, type Plugin, type Previewer } from '@visual-editor/contract';
 import { helloPlugin } from '../../../plugins/hello/src/plugin';
-import { isLocalUrl, overlay, previewable, previewableFor, previewerFor, proposalSides, render, situations } from '../src/previews';
+import { choiceProposal, isLocalUrl, overlay, previewable, previewableFor, previewerFor, proposalSides, render, situations, versionsOf } from '../src/previews';
+import { safePath } from '../src/proposals';
 import { PreviewServer } from '../src/previewServer';
 import type { ProjectState } from '../src/projectIndex';
 import type { Proposal } from '../src/proposals';
@@ -68,4 +69,19 @@ test('preview server: pages at unguessable local addresses, nothing else', async
   } finally {
     await server.stop();
   }
+});
+
+test('previews: versions come from the previewer (none when it has none or fails); a choice becomes a proposal', async () => {
+  assert.deepEqual(await versionsOf(found({}), card, state.project), []);
+  assert.deepEqual(await versionsOf(found({ versions: () => { throw new Error('x'); } }), card, state.project), []);
+  const list = await versionsOf(found({ versions: async () => [{ id: 'a', label: 'Compact' }, { id: 7 } as never] }), card, state.project);
+  assert.deepEqual(list, [{ id: 'a', label: 'Compact' }]);
+  const read = async (p: string) => (p === 'README.md' ? '# old' : undefined);
+  const p = await choiceProposal({ title: 'Use Compact', why: 'shorter', changes: [{ path: 'README.md', after: '# new' }, { path: 'NEW.md', after: 'x' }] }, 'Test', card, read, safePath);
+  assert.equal(p.status, 'proposed');
+  assert.deepEqual(p.by, { kind: 'plugin', name: 'Test' });
+  assert.deepEqual(p.changes, [{ path: 'README.md', before: '# old', after: '# new' }, { path: 'NEW.md', before: null, after: 'x' }]);
+  assert.deepEqual(p.items, ['hello:card']);
+  await assert.rejects(choiceProposal({ title: 'x', changes: [{ path: '../outside.txt', after: 'x' }] }, 'Test', card, read, safePath), /isn't a place in the project/);
+  await assert.rejects(choiceProposal({ title: 'x', changes: [] }, 'Test', card, read, safePath), /gave no changes/);
 });

@@ -9,11 +9,11 @@ import { cardMarks, type OutsideChanges } from './changes';
 import type { CurrentProject } from './currentProject';
 import { layoutMap, type Arrange } from './layout';
 import { cardColours, lineColours, usedBy } from './styles';
-import type { FromMap, ShowMap, ToMap } from './mapMessages';
+import type { FromMap, MapMeasure, ShowMap, ToMap } from './mapMessages';
 import type { ProjectIndex } from './projectIndex';
 import type { Review } from './review';
 import { forCard } from './memory';
-import { previewerFor } from './previews';
+import { previewerFor, versionsOf } from './previews';
 import type { PreviewTarget } from './previewPanel';
 import type { ProjectMemory } from './memoryView';
 
@@ -50,7 +50,7 @@ export class MapPanel {
       current.onChange(() => this.update()),
       review.onChange(() => this.update()),
       changes.onChange(() => this.update()),
-      memory.onChange(() => this.sendCard()),
+      memory.onChange(() => void this.sendCard()),
     );
   }
 
@@ -93,7 +93,22 @@ export class MapPanel {
     for (const s of this.subscriptions) s.dispose();
   }
 
+  /** The map's last measurement (for the performance test). */
+  measured: MapMeasure | undefined;
+  /** Time spent working out the last map's layout, in ms. */
+  layoutMs = 0;
+
+  /** Asks the map to measure how it performs (drawing, panning, zooming); the answer lands in `measured`. */
+  measure() {
+    this.measured = undefined;
+    void this.panel?.webview.postMessage({ type: 'measure' } satisfies ToMap);
+  }
+
   private receive(m: FromMap) {
+    if (m.type === 'measured') {
+      if (!m.partial) this.measured = m;
+      return;
+    }
     if (m.type === 'ready') {
       this.ready = true;
       this.send();
@@ -111,10 +126,10 @@ export class MapPanel {
       this.review.show(m.proposal);
     } else if (m.type === 'card') {
       this.card = m.id;
-      this.sendCard();
+      void this.sendCard();
     } else if (m.type === 'preview') {
       const root = this.current.get()?.project.root;
-      if (root) this.openPreview?.({ root, item: m.id });
+      if (root) this.openPreview?.({ root, item: m.id, ...(m.versions ? { versions: true } : {}) });
     } else if (m.type === 'addNote') {
       void this.addNote(m.id);
     } else if (m.type === 'window') {
@@ -158,12 +173,21 @@ export class MapPanel {
     return `${root}|${this.shownMap}`;
   }
 
-  private sendCard() {
+  private async sendCard() {
     if (!this.panel || !this.ready || !this.card) return;
     const state = this.current.get();
     const item = state?.items.find((i) => i.id === this.card);
     if (!state || !item) return;
-    void this.panel.webview.postMessage({ type: 'card', id: item.id, entries: forCard(this.memory.entries(state.project.root), item), canPreview: !!previewerFor(state, item) } satisfies ToMap);
+    const found = previewerFor(state, item);
+    const versions = found ? (await versionsOf(found, item, state.project)).length : 0;
+    void this.panel?.webview.postMessage({ type: 'card', id: item.id, entries: forCard(this.memory.entries(state.project.root), item), canPreview: !!found, versions } satisfies ToMap);
+  }
+
+  private timed<T>(fn: () => T): T {
+    const start = performance.now();
+    const out = fn();
+    this.layoutMs = performance.now() - start;
+    return out;
   }
 
   /** Changes come in bursts; redraw once they settle. */
@@ -200,7 +224,7 @@ export class MapPanel {
       plugins: state?.detected.map((d) => d.plugin.name) ?? [],
       maps: tabs,
       map: shownMap,
-      layout: layoutMap(shownItems, shownLinks, maps, arrange),
+      layout: this.timed(() => layoutMap(shownItems, shownLinks, maps, arrange)),
       arrange,
       colours: { cards: cardColours(shownItems), lines: lineColours(shownLinks) },
       usedBy: usedBy(shownLinks),
@@ -223,7 +247,7 @@ export class MapPanel {
       void this.panel.webview.postMessage({ type: 'focus', id: this.pendingFocus } satisfies ToMap);
       this.pendingFocus = undefined;
     }
-    this.sendCard();
+    void this.sendCard();
   }
 }
 

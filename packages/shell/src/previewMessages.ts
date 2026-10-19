@@ -3,8 +3,12 @@
 import type { Size } from './previews';
 
 export interface Frame {
-  /** "Before" / "After" when comparing; none for a single preview. */
+  /** "Before" / "After" when comparing, a version's name; none for a single preview. */
   label?: string;
+  /** A version (contract 5): which one, what's different, and what the checks found. */
+  version?: string;
+  notes?: string;
+  checks?: { summary: string; problems: number; items: { kind: string; ok: boolean; text: string; line?: number }[] };
   url?: string;
   /** Served by the shell (a plugin's HTML): kept apart in its own origin. Otherwise a plugin's dev server page. */
   own?: boolean;
@@ -24,6 +28,9 @@ export type ToPreview =
       frames: Frame[];
       /** The tab is in its own floating window. */
       floating: boolean;
+      /** How many other versions the card has, and whether they're shown side by side. */
+      versions: number;
+      comparing: boolean;
     }
   | { type: 'drawing' };
 
@@ -40,4 +47,10 @@ export type FromPreview =
   /** What a preview page said (ready, an error, a callback, its example data…), passed on as is. */
   | { type: 'frame'; data: Record<string, unknown> }
   /** Frames now visible on screen (loaded), so the shell knows the preview really shows. */
-  | { type: 'shown'; frames: number };
+  | { type: 'shown'; frames: number }
+  /** Show the card's versions side by side, or just the card. */
+  | { type: 'versions'; on: boolean }
+  /** Make this version the real one (as a proposal). */
+  | { type: 'choose'; version: string }
+  /** Take pictures of what's shown, at each size, and save them. */
+  | { type: 'pictures' };
