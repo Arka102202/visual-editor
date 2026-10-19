@@ -3,3 +3,4 @@ dist/
 dist-test/
 *.vsix
 .DS_Store
+samples/

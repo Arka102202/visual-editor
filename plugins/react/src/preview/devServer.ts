@@ -102,9 +102,19 @@ export async function servesProject(url: string, token: string, idPath = `/${PRE
  */
 async function findOn(port: number, token: string, plan: { idPath: string; checkMs: number }): Promise<string | undefined> {
   for (const host of ['127.0.0.1', '[::1]']) {
-    if (await servesProject(`http://${host}:${port}`, token, plan.idPath, plan.checkMs)) return `http://${PREVIEW_HOST}:${port}`;
+    const url = `http://${host}:${port}`;
+    if ((await servesProject(url, token, plan.idPath, plan.checkMs)) && (await runsReact(url, plan.checkMs))) return `http://${PREVIEW_HOST}:${port}`;
   }
   return undefined;
+}
+
+/**
+ * Whether a server that serves the project's files also runs its React setup (its Vite config with the React
+ * plugin): a server started elsewhere in the folder, or without the config, serves the files but can't run them.
+ */
+export async function runsReact(url: string, ms = 1500): Promise<boolean> {
+  const r = await get(`${url}/${PREVIEW_DIR}/app-shell.tsx`, Math.max(ms, 4000));
+  return !!r && r.status === 200 && /jsx-dev-runtime|jsx-runtime|@react-refresh/.test(r.body);
 }
 
 /**

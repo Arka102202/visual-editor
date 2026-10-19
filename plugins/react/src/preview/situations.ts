@@ -11,6 +11,8 @@ export interface RequestRule {
   match: string;
   /** The data to reply with (sent as JSON). */
   reply?: unknown;
+  /** A GraphQL operation's name: only requests sending that operation get this reply. */
+  operation?: string;
   /** HTTP status; 400 and above is an error. Default 200. */
   status?: number;
   /** Milliseconds before replying, or 'forever' to stay loading. */
@@ -103,8 +105,17 @@ export function installSituations(opts: {
 
   // What a request gets: a fake reply, or undefined to let it through.
   // Its own replies first; then its `all`, or else Normal's replies (so "Long text" gets the same data as Normal).
-  const answer = (address: string): { body: unknown; status: number; wait: number | 'forever' } | undefined => {
-    const find = (rules: RequestRule[] | undefined) => (rules ?? []).find((r) => r && typeof r.match === 'string' && address.includes(r.match));
+  const answer = (address: string, sent?: unknown, viaKey = false): { body: unknown; status: number; wait: number | 'forever' } | undefined => {
+    // A GraphQL request names its operation (in its body, or its address for GET): only rules for it answer.
+    let op: string | undefined;
+    try {
+      const b = typeof sent === 'string' && /^\s*\{/.test(sent) ? JSON.parse(sent) : undefined;
+      if (b && typeof b === 'object' && typeof b.query === 'string') op = b.operationName ?? /\b(?:query|mutation|subscription)\s+(\w+)/.exec(b.query)?.[1] ?? '';
+    } catch {
+      // not JSON
+    }
+    op ??= /[?&]operationName=(\w+)/.exec(address)?.[1];
+    const find = (rules: RequestRule[] | undefined) => (rules ?? []).find((r) => r && typeof r.match === 'string' && address.includes(r.match) && (op === undefined ? !r.operation : r.operation === op));
     const rule = find(chosen.requests);
     if (rule) return { body: rule.reply ?? null, status: rule.status ?? 200, wait: rule.wait ?? 300 };
     if (chosen.all === 'loading') return { body: null, status: 200, wait: 'forever' };
@@ -113,7 +124,9 @@ export function installSituations(opts: {
     // Empty: the normal reply's shape with every list emptied (a detail page still gets its object); else [].
     if (chosen.all === 'empty') {
       const n = find(all.normal.requests);
-      return { body: n ? emptied(n.reply ?? null) : [], status: 200, wait: 300 };
+      // A React Query key no rule knows: its own request runs, and is emptied there (by address).
+      if (!n && viaKey) return undefined;
+      return { body: n ? emptied(n.reply ?? null) : op !== undefined ? { data: null } : [], status: 200, wait: 300 };
     }
     const normal = id === 'normal' ? undefined : find(all.normal.requests);
     if (normal) return { body: normal.reply ?? null, status: normal.status ?? 200, wait: normal.wait ?? 300 };
@@ -126,7 +139,7 @@ export function installSituations(opts: {
   if (realFetch) {
     win.fetch = async (input: unknown, init?: unknown) => {
       const address = typeof input === 'string' ? input : input instanceof win.URL ? String(input) : String((input as { url?: string })?.url ?? input);
-      const a = answer(address);
+      const a = answer(address, (init as { body?: unknown } | undefined)?.body);
       if (!a) return realFetch(input, init);
       await after(a.wait);
       return new win.Response(JSON.stringify(a.body), { status: a.status, headers: { 'Content-Type': 'application/json' } });
@@ -143,7 +156,7 @@ export function installSituations(opts: {
       return open.call(this, method, address, ...rest);
     };
     XHR.prototype.send = function (this: Record<string, unknown> & { __nocode?: string; dispatchEvent(e: unknown): void }, body?: unknown) {
-      const a = this.__nocode ? answer(this.__nocode) : undefined;
+      const a = this.__nocode ? answer(this.__nocode, body) : undefined;
       if (!a) return send.call(this, body);
       const text = JSON.stringify(a.body);
       void after(a.wait).then(() => {
@@ -174,7 +187,7 @@ export function installSituations(opts: {
       } catch {
         key = String(o?.queryKey);
       }
-      const a = answer(key);
+      const a = answer(key, undefined, true);
       if (!a) return o;
       return {
         ...o,

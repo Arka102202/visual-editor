@@ -10,6 +10,8 @@ import { sample } from './harness';
 export interface ReplyRule {
   match: string;
   reply: unknown;
+  /** A GraphQL operation's name: only requests sending it get this reply. */
+  operation?: string;
 }
 
 const LIST_LENGTH = 3;

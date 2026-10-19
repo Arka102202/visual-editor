@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { appProviders, routeElementModule, standInsModule } from '../src/preview/providers';
+import { appProviders, appShell, appShellChain, routeElementModule, shellChain, standInsModule } from '../src/preview/providers';
 import { exampleOf } from '../src/preview/replies';
 
 const DIR = '.visual-editor/preview';
@@ -79,16 +79,53 @@ import { RequireAuth } from './auth/RequireAuth'
 import Admin from './pages/Admin'
 import Home from './pages/Home'
 export default function App() {
-  return <Routes><Route path="/" element={<Home />} /><Route path="/admin" element={<RequireAuth role="admin"><Admin /></RequireAuth>} /></Routes>
+  return <Routes>
+    <Route path="/" element={<Home />} />
+    <Route path="/admin" element={<RequireAuth role="admin"><Admin /></RequireAuth>} />
+  </Routes>
 }`;
-  const m = routeElementModule('src/App.tsx', text, '/admin', DIR);
+  const m = routeElementModule('src/App.tsx', text, 7, DIR);
   assert.ok(m);
   assert.match(m, /import \{ RequireAuth \} from '..\/..\/..\/src\/auth\/RequireAuth'/);
   assert.match(m, /return \(<RequireAuth role="admin"><Admin \/><\/RequireAuth>\)/);
-  assert.equal(routeElementModule('src/App.tsx', text, '/', DIR), undefined);
+  assert.doesNotMatch(m, /Home|__VeRoutes/);
+  assert.equal(routeElementModule('src/App.tsx', text, 6, DIR), undefined);
   // Route objects too.
-  const objects = `import Guard from './Guard'\nimport Admin from './Admin'\nexport const routes = [{ path: '/admin', element: <Guard><Admin /></Guard> }]`;
-  assert.match(routeElementModule('src/routes.tsx', objects, '/admin', DIR) ?? '', /<Guard><Admin \/><\/Guard>/);
+  const objects = `import Guard from './Guard'\nimport Admin from './Admin'\nexport const routes = [\n  { path: '/admin', element: <Guard><Admin /></Guard> },\n]`;
+  assert.match(routeElementModule('src/routes.tsx', objects, 3, DIR) ?? '', /<Guard><Admin \/><\/Guard>/);
+});
+
+test('providers: routes around a page (a guard, a layout) show it in their Outlet', () => {
+  const text = `import { Route, Routes } from 'react-router-dom'
+import { RequireAuth } from './RequireAuth'
+import { Shell } from './Shell'
+import { Orders } from './Orders'
+import { Login } from './Login'
+export const App = () => (
+  <Routes>
+    <Route path="/login" element={<Login />} />
+    <Route element={<RequireAuth />}>
+      <Route element={<Shell />}>
+        <Route path="/orders" element={<Orders />} />
+      </Route>
+    </Route>
+  </Routes>
+)`;
+  const m = routeElementModule('src/App.tsx', text, 10, DIR, 'react-router');
+  assert.ok(m);
+  assert.match(m, /import \{ Routes as __VeRoutes, Route as __VeRoute \} from 'react-router'/);
+  assert.match(m, /<__VeRoutes><__VeRoute element=\{<RequireAuth \/>\}><__VeRoute element=\{<Shell \/>\}><__VeRoute index element=\{<Orders \/>\} \/><\/__VeRoute><\/__VeRoute><\/__VeRoutes>/);
+  assert.doesNotMatch(m, /Login/);
+  // Route objects with children.
+  const objects = `import { Guard } from './Guard'
+import { Orders } from './Orders'
+export const routes = [{
+  element: <Guard />,
+  children: [
+    { path: '/orders', element: <Orders /> },
+  ],
+}]`;
+  assert.match(routeElementModule('src/routes.tsx', objects, 5, DIR) ?? '', /<__VeRoute element=\{<Guard \/>\}><__VeRoute index element=\{<Orders \/>\} \/>/);
 });
 
 test('replies: a page\'s total is a count, an order\'s is money; items take their owner\'s name', () => {
@@ -101,4 +138,87 @@ test('replies: a page\'s total is a count, an order\'s is money; items take thei
   assert.equal(page.total, 42);
   assert.equal(page.items[0].total, 1299);
   assert.deepEqual(page.items[0].items.map((i) => i.name), ['Order item 1', 'Order item 2', 'Order item 3']);
+});
+
+test('app shell: App.tsx\'s providers and router frame every preview; its layout and siblings stay out', () => {
+  const text = `import { useState } from 'react'
+import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { Provider } from 'react-redux'
+import { store } from './store'
+import { ThemeContext } from './theme'
+import { Navbar } from './Navbar'
+import Home from './pages/Home'
+import './App.css'
+
+export default function App() {
+  const [theme, setTheme] = useState('dark')
+  return (
+    <Provider store={store}>
+      <ThemeContext.Provider value={{ theme, setTheme }}>
+        <BrowserRouter>
+          <div className="layout">
+            <Navbar />
+            <Routes>
+              <Route path="/" element={<Home />} />
+            </Routes>
+          </div>
+        </BrowserRouter>
+      </ThemeContext.Provider>
+    </Provider>
+  )
+}`;
+  const sh = appShell('src/App.tsx', text, 'default', DIR);
+  const module = sh.modules['shell/0.tsx'];
+  assert.equal(sh.hasRouter, true);
+  assert.deepEqual(sh.names, ['Provider', 'ThemeContext.Provider']);
+  assert.equal(sh.component, 'App');
+  // The frame: providers, then the preview's router, then the component.
+  assert.match(module, /<Provider store=\{store\}><ThemeContext\.Provider value=\{\{ theme, setTheme \}\}><__ve\.Router>\{__ve\.children\}<\/__ve\.Router><\/ThemeContext\.Provider><\/Provider>/);
+  // The whole app: as written, with its router swapped.
+  assert.match(module, /__ve\.whole \? \(<Provider store=\{store\}>[\s\S]*<__ve\.Router>[\s\S]*<Navbar \/>[\s\S]*<\/__ve\.Router>/);
+  assert.doesNotMatch(module, /BrowserRouter>/);
+  // Its hook stays, and imports point back at the app.
+  assert.match(module, /const \[theme, setTheme\] = useState\('dark'\)/);
+  assert.match(module, /from '..\/..\/..\/src\/store'/);
+  assert.match(module, /export \{ App as __VeHop \}/);
+  assert.match(sh.modules['app-shell.tsx'], /import \{ __VeHop as Top \} from '.\/shell\/0'/);
+});
+
+test('app shell: none when App has no providers or router, or when it starts the app itself', () => {
+  const plain = `import { Routes, Route } from 'react-router-dom'\nimport { Navbar } from './Navbar'\nexport function App() { return <><Navbar /><Routes><Route path="/" element={<p />} /></Routes></> }`;
+  assert.equal(appShell('src/App.tsx', plain, 'App', DIR).file, undefined);
+  const inline = `import { createRoot } from 'react-dom/client'\nfunction App() { return <Suspense><Routes /></Suspense> }\ncreateRoot(root).render(<App />)`;
+  assert.equal(appShell('src/main.tsx', inline, 'default', DIR).file, undefined);
+  // useRoutes: the routes variable is where pages go; an anonymous default export gets a name.
+  const hooks = `import { useRoutes } from 'react-router-dom'\nimport { QueryClientProvider } from '@tanstack/react-query'\nimport { routes } from './routes'\nexport default () => {\n  const element = useRoutes(routes)\n  return <QueryClientProvider client={qc}>{element}</QueryClientProvider>\n}`;
+  const sh = appShell('src/App.tsx', hooks, 'default', DIR);
+  const module = sh.modules['shell/0.tsx'];
+  assert.deepEqual(sh.names, ['QueryClientProvider']);
+  assert.match(module, /const __VeApp = \(\) =>/);
+  assert.match(module, /export default __VeApp/);
+  assert.match(module, /<QueryClientProvider client=\{qc\}>\{__ve\.children\}<\/QueryClientProvider>/);
+});
+
+test('providers: the entry says where <App /> comes from', () => {
+  const p = appProviders('src/main.tsx', `import { createRoot } from 'react-dom/client'\nimport Root from './app/Root'\ncreateRoot(r).render(<Root />)`, DIR);
+  assert.deepEqual(p.app, { from: 'src/app/Root', export: 'default' });
+});
+
+test('app shell: App hands over to a component that holds the router; each step is copied, pointing at the next', () => {
+  const app = { path: 'src/App.tsx', name: 'default', text: `import { AppRouter } from '@routes'\nimport { useLoadSettings } from './hooks'\nexport default function App() {\n  useLoadSettings()\n  return <AppRouter />\n}` };
+  const router = { path: 'src/routes/AppRouter.tsx', name: 'AppRouter', text: `import { BrowserRouter, Routes, Route } from 'react-router-dom'\nimport { Home } from '../pages/Home'\nconst AppRouter = () => (\n  <BrowserRouter>\n    <Routes><Route path="/" element={<Home />} /></Routes>\n  </BrowserRouter>\n)\nexport default AppRouter` };
+  const chain = shellChain(app, (s) => (s === app ? [{ tag: 'AppRouter', step: router }] : []));
+  assert.equal(chain?.length, 2);
+  const sh = appShellChain(chain!, DIR);
+  assert.equal(sh.hasRouter, true);
+  assert.equal(sh.component, 'App');
+  // App: as written (its hook runs), drawing the next copy.
+  assert.match(sh.modules['shell/0.tsx'], /import \{ __VeHop as __VeNext \} from '.\/1'/);
+  assert.match(sh.modules['shell/0.tsx'], /useLoadSettings\(\)\n  return <__VeNext \/>/);
+  assert.match(sh.modules['shell/0.tsx'], /from '..\/..\/..\/src\/hooks'/);
+  // AppRouter: the frame, its router swapped.
+  assert.match(sh.modules['shell/1.tsx'], /<__ve\.Router>\{__ve\.children\}<\/__ve\.Router>/);
+  assert.match(sh.modules['shell/1.tsx'], /export \{ AppRouter as __VeHop \}/);
+  // Nothing to follow: no frame.
+  assert.equal(shellChain(app, () => []), undefined);
 });

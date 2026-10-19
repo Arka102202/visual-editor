@@ -17,3 +17,18 @@ declare module 'react-router-dom' {
   export function useParams(): Record<string, string | undefined>
 }
 interface ImportMeta { env: Record<string, string | undefined> }
+declare module 'zustand' {
+  export interface StoreApi<T> { getState(): T; setState(partial: Partial<T> | T, replace?: boolean): void }
+  export type UseBoundStore<S> = (<U>(select: (state: S extends StoreApi<infer T> ? T : never) => U) => U) & S
+  export function create<T>(): (init: (set: (partial: Partial<T>) => void, get: () => T) => T) => UseBoundStore<StoreApi<T>>
+}
+declare module '@reduxjs/toolkit' {
+  export function configureStore<S>(options: { reducer: { [K in keyof S]: (state: S[K] | undefined, action: unknown) => S[K] } }): { getState(): S; dispatch(action: unknown): void }
+}
+declare module 'jotai' {
+  export interface PrimitiveAtom<V> { init: V; read(get: unknown): V }
+  export function atom<V>(init: V): PrimitiveAtom<V>
+}
+declare module 'valtio' {
+  export function proxy<T extends object>(initial: T): T
+}

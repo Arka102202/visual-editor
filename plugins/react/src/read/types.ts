@@ -112,12 +112,27 @@ export class TypeView {
     return this.checker.getTypeAtLocation(param);
   }
 
+  /** The type of a member (`store.init`). */
+  memberType(type: TS.Type, name: string): TS.Type | undefined {
+    const p = type.getProperty(name);
+    return p ? this.checker.getTypeOfSymbol(p) : undefined;
+  }
+
+  /** What calling a member returns (`store.getState()`). */
+  returnOfMember(type: TS.Type, name: string): TS.Type | undefined {
+    const m = this.memberType(type, name);
+    const sig = m?.getCallSignatures()[0];
+    return sig ? this.checker.getReturnTypeOfSignature(sig) : undefined;
+  }
+
   /** A type as a shape (fields, lists, literal values, enums, dates), as deep as is useful. */
   shapeOf(type: TS.Type, depth = 0, seen = new Set<TS.Type>()): Shape | undefined {
     const ts = this.ts;
     const checker = this.checker;
     const F = ts.TypeFlags;
     if (type.flags & (F.Any | F.Unknown | F.Never)) return undefined;
+    // Something React draws (children, an icon slot): text is the example, never an element object.
+    if (/^(ReactNode|ReactElement|ReactChild|ReactFragment|ReactPortal|Element)$/.test(type.aliasSymbol?.getName() ?? '')) return { kind: 'string' };
     if (type.isUnion()) {
       const parts = type.types.filter((t) => !(t.flags & (F.Undefined | F.Null | F.Void)));
       if (!parts.length) return undefined;

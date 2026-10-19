@@ -12,10 +12,13 @@ import { situationsModule } from './situations';
 import { findDexie, seedFor, typesFrom } from './dexie';
 import { readShapesAndBindings, type Binding, type ReplyShape, type Shape } from '../read/shapes';
 import { loadTypeScript, mergeShapes, TypeView } from '../read/types';
+import { fitToType, operationShape, readGraphql, type GraphqlRead } from '../read/graphql';
 import { exampleOf, replyRules, type ReplyRule } from './replies';
 import { CALLBACK } from './harness';
-import { appProviders, noProviders, routeElementModule, standInsModule } from './providers';
+import { appProviders, appShellChain, noProviders, noShell, routeElementModule, shellChain, standInsModule, type AppShell, type ShellStep } from './providers';
 import { record, withRecordings } from './recordings';
+import { findStores, storeSeeds, type FoundStore, type StoreSeed } from './stores';
+import { findSaved, savedSeeds, type FoundSaved, type SavedSeed } from './saved';
 
 /** Situations every component can be shown in. "live backend" calls the developer's real dev backend. */
 export const LIVE = 'live backend';
@@ -41,6 +44,14 @@ interface Known {
   replies: ReplyRule[];
   /** File texts, to read the TypeScript types of props for example values. */
   texts: Map<string, string>;
+  /** The app's stores, and their example state (worked out when first needed). */
+  stores: FoundStore[];
+  seeds?: StoreSeed[];
+  /** Data the app saves in the browser and reads back, and example values for it (worked out when first needed). */
+  saved: FoundSaved[];
+  savedSeeds?: SavedSeed[];
+  /** GraphQL operations the code sends, and where it keeps their results. */
+  graphql: GraphqlRead;
 }
 
 export class ReactPreviews {
@@ -64,7 +75,7 @@ export class ReactPreviews {
   private rulesFor(root: string, known: Known): ReplyRule[] {
     if (known.rules) return known.rules;
     const view = this.typesOf(root);
-    if (!view) return (known.rules = known.replies);
+    if (!view) return (known.rules = [...known.replies, ...graphqlRules(known.graphql).rules]);
     const typed = new Map<string, Shape>();
     for (const b of known.bindings) {
       const type = view.typeAt(b.path, b.start);
@@ -80,9 +91,13 @@ export class ReactPreviews {
     const merged = known.used.map((u) => ({ ...u, shape: mergeShapes(typed.get(`${u.method} ${u.match}`), u.shape) }));
     // Typed replies the code doesn't read field by field still count (a "who am I" reply kept whole).
     for (const [key, shape] of typed) if (!merged.some((m) => `${m.method} ${m.match}` === key)) merged.push({ method: key.split(' ')[0], match: key.slice(key.indexOf(' ') + 1), shape });
+    const graphql = graphqlRules(known.graphql, view);
+    known.seeds ??= storeSeeds(known.stores, view);
+    known.savedSeeds ??= savedSeeds(known.saved, view);
     known.choices = new Map();
-    for (const m of merged) collectChoices(m.shape, known.choices);
-    return (known.rules = replyRules(merged));
+    const shapes = [...merged.map((m) => m.shape), ...graphql.shapes, ...known.seeds.map((s) => s.shape), ...known.savedSeeds.map((s) => s.shape)];
+    for (const shape of shapes) if (shape) collectChoices(shape, known.choices);
+    return (known.rules = [...replyRules(merged), ...graphql.rules]);
   }
 
   /** The situations for a card: the usual ones, plus one per role or plan value the types allow. */
@@ -102,7 +117,7 @@ export class ReactPreviews {
     const type = view?.propsOf(c.path, c.name);
     const shape = type ? view!.shapeOf(type) : undefined;
     if (!shape?.fields) return exampleProps(c, types);
-    return Object.fromEntries(Object.entries(shape.fields).map(([name, s]) => [name, s.kind === 'function' ? { [CALLBACK]: name } : exampleOf(s, name)]));
+    return Object.fromEntries(Object.entries(shape.fields).map(([name, s]) => [name, s.kind === 'function' ? { [CALLBACK]: name } : name === 'children' ? 'Example content' : exampleOf(s, name)]));
   }
   /** Whether the folder is trusted in VS Code (set by the extension): previews run the project's own code. */
   trusted: () => boolean = () => true;
@@ -116,7 +131,7 @@ export class ReactPreviews {
     const code = files.filter((f) => /\.[cm]?[jt]sx?$/.test(f.path));
     const { replies: used, bindings } = readShapesAndBindings(code);
     const texts = new Map(files.map((f) => [f.path, f.text]));
-    this.known.set(root, { model, used, bindings, replies: replyRules(used), texts, authKeys: authKeysIn(texts) });
+    this.known.set(root, { model, used, bindings, replies: replyRules(used), texts, authKeys: authKeysIn(texts), stores: findStores(code), saved: findSaved(code), graphql: readGraphql(code) });
     this.types.get(root)?.invalidate();
   }
 
@@ -173,8 +188,14 @@ export class ReactPreviews {
       throw new Error('The live backend situation is off for this project. Choose it again to allow previews to call your dev backend, or use the other situations (no backend needed).');
     }
 
-    writeHarness(root);
+    const shell = writeHarness(root, this.known.get(root));
     const known = this.known.get(root)!;
+    // The app component itself, when it has its own providers or router: drawn whole, with the preview's router.
+    const isApp = (shell.steps ?? []).some((s) => c.path === s.path && (!s.name || c.name === s.name));
+    // A modal, dialog or drawer is shown open (the store switch that opens it is set).
+    const opens = /(Modal|Dialog|Drawer|Sheet|Popover|Popup|Lightbox)$/.test(c.name);
+    // A React Flow edge only draws inside a diagram: shown between two nodes.
+    const edge = /\b(BaseEdge|getBezierPath|getSmoothStepPath|getStraightPath|getSimpleBezierPath)\b/.test(known.texts.get(c.path) ?? '');
     const types = typesFrom(known.texts);
     const route = known.model.routes.find((r) => r.target === c.id)?.path;
     // The app's own login page, for logging in inside the preview when the backend asks for it.
@@ -186,9 +207,9 @@ export class ReactPreviews {
     // A page shown the way its route shows it (with its guard), when the route wraps it.
     const routeDef = known.model.routes.find((r) => r.target === c.id);
     const routeText = routeDef ? known.texts.get(routeDef.file) : undefined;
-    const element = routeDef && routeText ? routeElementModule(routeDef.file, routeText, routeDef.path, PREVIEW_DIR) : undefined;
+    const element = routeDef && routeText ? routeElementModule(routeDef.file, routeText, routeDef.line, PREVIEW_DIR, appSetup(root).providers.router) : undefined;
     if (element) writeIfChanged(join(root, PREVIEW_DIR, 'routes', `${key}.tsx`), element);
-    writeIfChanged(join(root, PREVIEW_DIR, 'cards', `${key}.json`), JSON.stringify({ path: c.path, export: c.name, props: this.propsFor(root, c, types), ...(route ? { route } : {}), ...(seed ? { seed } : {}), requests: withRecordings(root, this.rulesFor(root, known)), ...(login ? { login } : {}), authKeys: known.authKeys, ...(element ? { element: `routes/${key}.tsx` } : {}) }, null, 2));
+    writeIfChanged(join(root, PREVIEW_DIR, 'cards', `${key}.json`), JSON.stringify({ path: c.path, export: c.name, props: this.propsFor(root, c, types), ...(route ? { route } : {}), ...(seed ? { seed } : {}), requests: withRecordings(root, this.rulesFor(root, known)), ...(login ? { login } : {}), authKeys: known.authKeys, ...(element ? { element: `routes/${key}.tsx` } : {}), ...(isApp ? { app: true } : {}), ...(opens ? { opens: true } : {}), ...(edge ? { edge: true } : {}), stores: (known.seeds ?? []).map(({ shape: _s, ...seed }) => seed), saved: (known.savedSeeds ?? []).map(({ shape: _s, ...seed }) => seed) }, null, 2));
 
     let server = this.servers.get(root);
     if (!server) {
@@ -218,8 +239,11 @@ function writeIfChanged(path: string, text: string) {
   writeFileSync(path, text);
 }
 
-/** The preview page and its helpers, kept up to date with the app's setup. Never committed (its own .gitignore). */
-export function writeHarness(root: string) {
+/**
+ * The preview page and its helpers, kept up to date with the app's setup. Never committed (its own .gitignore).
+ * Returns the app component's frame (its own providers), to know which card is the app itself.
+ */
+export function writeHarness(root: string, known?: Pick<Known, 'model' | 'texts'>): AppShell {
   const dir = join(root, PREVIEW_DIR);
   const setup = appSetup(root);
   // The app's own providers (from its entry), and stand-ins for the login providers among them.
@@ -227,12 +251,55 @@ export function writeHarness(root: string) {
   const providers = setup.entry && entryText ? appProviders(setup.entry, entryText, PREVIEW_DIR) : noProviders();
   setup.appHasRouter = providers.hasRouter;
   writeIfChanged(join(dir, 'app-providers.tsx'), providers.module);
+  // The app component's own providers (in App.tsx, around its routes).
+  const appFile = providers.app ? withExtension(root, providers.app.from) : undefined;
+  const appText = appFile ? readText(join(root, appFile)) : undefined;
+  // It may hand over to another component that holds the routes (<AppRouter />): followed through the components it draws.
+  const rendersOf = (step: ShellStep): { tag: string; step: ShellStep }[] => {
+    const here = known?.model.components.filter((c) => c.path === step.path && !c.parent) ?? [];
+    const comp = here.find((c) => c.name === step.name) ?? (step.name === 'default' ? (here.length === 1 ? here[0] : here.find((c) => c.name === 'App')) : undefined);
+    return (comp?.renders ?? []).flatMap((r) => {
+      const target = r.target ? known!.model.components.find((c) => c.id === r.target) : undefined;
+      const text = target && (known!.texts.get(target.path) ?? readText(join(root, target.path)));
+      return target && text ? [{ tag: r.tag, step: { path: target.path, text, name: target.name } }] : [];
+    });
+  };
+  const chain = appFile && appText ? shellChain({ path: appFile, text: appText, name: providers.app!.export }, rendersOf) : undefined;
+  const shell = chain ? appShellChain(chain, PREVIEW_DIR) : noShell();
+  setup.shellHasRouter = shell.hasRouter;
+  for (const [path, text] of Object.entries(shell.modules)) writeIfChanged(join(dir, path), text);
   writeIfChanged(join(dir, 'stand-ins.tsx'), standInsModule(providers.standIns));
   writeIfChanged(join(dir, '.gitignore'), '# Visual Editor previews: made on this computer, never committed.\n*\n');
   writeIfChanged(join(dir, 'index.html'), previewHtml(setup.index));
   writeIfChanged(join(dir, 'preview.tsx'), previewTsx(setup));
   writeIfChanged(join(dir, 'situations.js'), situationsModule());
   if (!existsSync(join(dir, 'cards'))) mkdirSync(join(dir, 'cards'), { recursive: true });
+  return shell;
+}
+
+/** An import path's file (`src/App` → `src/App.tsx`, or its folder's index). */
+function withExtension(root: string, from: string): string | undefined {
+  for (const ext of ['', '.tsx', '.ts', '.jsx', '.js', '/index.tsx', '/index.ts', '/index.jsx', '/index.js']) {
+    const p = from + ext;
+    if (/\.[cm]?[jt]sx?$/.test(p) && existsSync(join(root, p))) return p;
+  }
+  return undefined;
+}
+
+/** GraphQL replies: each operation's { data: … }, with exactly the fields it asks for (kinds from types when known). */
+function graphqlRules(read: GraphqlRead, view?: TypeView): { rules: ReplyRule[]; shapes: Shape[] } {
+  const rules: ReplyRule[] = [];
+  const shapes: Shape[] = [];
+  for (const use of read.uses) {
+    const op = read.operations.get(use.operation);
+    if (!op || op.kind === 'subscription' || rules.some((g) => g.operation === op.name)) continue;
+    let type = view && use.start !== undefined ? view.typeAt(use.path, use.start) : undefined;
+    if (type && use.member) type = view!.memberType(type, use.member);
+    const shape = fitToType(type ? view!.shapeOf(type) : undefined, operationShape(op, read.fragments));
+    rules.push({ match: '', operation: op.name, reply: { data: exampleOf(shape, 'data') } });
+    shapes.push(shape);
+  }
+  return { rules, shapes };
 }
 
 /** Values the types allow for access fields (role, plan…), anywhere in a reply. */
