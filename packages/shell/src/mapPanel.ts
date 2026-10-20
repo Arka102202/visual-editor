@@ -9,13 +9,14 @@ import { cardMarks, type OutsideChanges } from './changes';
 import type { CurrentProject } from './currentProject';
 import { layoutMap, type Arrange } from './layout';
 import { cardColours, lineColours, usedBy } from './styles';
-import type { FromMap, MapMeasure, ShowMap, ToMap } from './mapMessages';
+import type { CardLines, FromMap, MapMeasure, ShowMap, ToMap } from './mapMessages';
 import type { ProjectIndex } from './projectIndex';
 import type { Review } from './review';
 import { forCard } from './memory';
 import { previewerFor, versionsOf } from './previews';
 import type { PreviewTarget } from './previewPanel';
 import type { ProjectMemory } from './memoryView';
+import { onThemeChange, themeTokenColours } from './themeColours';
 
 export class MapPanel {
   private panel: vscode.WebviewPanel | undefined;
@@ -51,6 +52,7 @@ export class MapPanel {
       review.onChange(() => this.update()),
       changes.onChange(() => this.update()),
       memory.onChange(() => void this.sendCard()),
+      onThemeChange(() => void this.sendTheme()),
     );
   }
 
@@ -111,6 +113,7 @@ export class MapPanel {
     }
     if (m.type === 'ready') {
       this.ready = true;
+      void this.sendTheme();
       this.send();
     } else if (m.type === 'choose') {
       this.current.choose(m.root);
@@ -127,6 +130,10 @@ export class MapPanel {
     } else if (m.type === 'card') {
       this.card = m.id;
       void this.sendCard();
+    } else if (m.type === 'lines') {
+      this.sendLines(m.id);
+    } else if (m.type === 'goTo') {
+      this.focus(m.id);
     } else if (m.type === 'preview') {
       const root = this.current.get()?.project.root;
       if (root) this.openPreview?.({ root, item: m.id, ...(m.versions ? { versions: true } : {}) });
@@ -181,6 +188,29 @@ export class MapPanel {
     const found = previewerFor(state, item);
     const versions = found ? (await versionsOf(found, item, state.project)).length : 0;
     void this.panel?.webview.postMessage({ type: 'card', id: item.id, entries: forCard(this.memory.entries(state.project.root), item), canPreview: !!found, versions } satisfies ToMap);
+  }
+
+  /** The code colours of the theme on now, so the page colours types the way the editor does. */
+  private async sendTheme() {
+    const tokens = await themeTokenColours();
+    void this.panel?.webview.postMessage({ type: 'theme', tokens } satisfies ToMap);
+  }
+
+  /** Every line that joins a card to another, on any map, with the card at the other end. */
+  private sendLines(id: string) {
+    const state = this.current.get();
+    if (!this.panel || !this.ready || !state) return;
+    const found: { dir: 'in' | 'out'; kind: string; label?: string; otherId: string }[] = [];
+    for (const l of state.links ?? []) {
+      if (l.from === l.to) continue;
+      if (l.to === id) found.push({ dir: 'in', kind: l.kind, ...(l.label ? { label: l.label } : {}), otherId: l.from });
+      else if (l.from === id) found.push({ dir: 'out', kind: l.kind, ...(l.label ? { label: l.label } : {}), otherId: l.to });
+    }
+    const wanted = new Set(found.map((f) => f.otherId));
+    const items = new Map(state.items.filter((i) => wanted.has(i.id)).map((i) => [i.id, i]));
+    const lines = found.flatMap(({ otherId, ...f }) => (items.has(otherId) ? [{ ...f, other: items.get(otherId)! }] : []));
+    const maps = Object.fromEntries(state.detected.flatMap((d) => d.plugin.maps ?? []).map((m) => [m.id, m.title]));
+    void this.panel.webview.postMessage({ type: 'lines', id, lines, maps } satisfies CardLines);
   }
 
   private timed<T>(fn: () => T): T {

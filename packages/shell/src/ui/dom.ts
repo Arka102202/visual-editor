@@ -23,6 +23,17 @@ export function addStyles(css: string) {
   .chip.proposed { background: #d9a400; color: #1e1e1e; }
   .chip.changed { background: #2f6fdb; color: #fff; }
   [hidden] { display: none !important; }
+  /* House rules on every page: no scrollbar is ever shown (scrolling still works); buttons never wrap or shrink;
+     buttons are icons (see ui/buttons.ts), named on hover; rows of buttons scroll sideways instead of wrapping. */
+  * { scrollbar-width: none; }
+  *::-webkit-scrollbar { display: none; width: 0; height: 0; }
+  button { white-space: nowrap; flex: none; }
+  button.icon { display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 26px; min-width: 30px; padding: 0 7px; }
+  button.icon svg { display: block; flex: none; }
+  button.icon .count { font-size: 11px; font-variant-numeric: tabular-nums; }
+  button.icon.on { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
+  .tray { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; overflow-x: auto; overflow-y: hidden; min-width: 0; }
+  .ve-tip { position: fixed; z-index: 1000; pointer-events: none; padding: 3px 8px; border-radius: 4px; font-size: 12px; white-space: pre-line; max-width: 420px; color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground)); background: var(--vscode-editorHoverWidget-background, #252526); border: 1px solid var(--vscode-editorHoverWidget-border, #8886); box-shadow: 0 2px 8px #0004; }
 ${css}`;
   document.head.append(style);
 }

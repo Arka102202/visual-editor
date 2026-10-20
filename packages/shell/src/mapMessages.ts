@@ -1,5 +1,6 @@
 // What the shell and the map page say to each other. Shared by both sides, so they can't drift apart.
 
+import type { Item } from '@visual-editor/contract';
 import type { Mark } from './changes';
 import type { Arrange, Layout } from './layout';
 import type { MemoryEntry } from './memory';
@@ -14,7 +15,23 @@ export interface MapProject {
 }
 
 /** Shell → map page: the map, or what's remembered about the chosen card. */
-export type ToMap = ShowMap | CardMemory | { type: 'focus'; id: string } | { type: 'measure' };
+export type ToMap =
+  | ShowMap
+  | CardMemory
+  | CardLines
+  | { type: 'focus'; id: string }
+  | { type: 'measure' }
+  /** The code colours of the theme on now (type, string, keyword…), for text shown the way the editor colours it. */
+  | { type: 'theme'; tokens: Record<string, string> };
+
+/** Every line that joins one card to another, on any map (for Focus's side panel). */
+export interface CardLines {
+  type: 'lines';
+  id: string;
+  lines: { dir: 'in' | 'out'; kind: string; label?: string; other: Item }[];
+  /** The title of each map, by id. */
+  maps: Record<string, string>;
+}
 
 /** How the map performs (for the performance test): drawing time, and frame times while moving around. */
 export interface MapMeasure {
@@ -91,6 +108,10 @@ export type FromMap =
   | { type: 'openReview'; proposal?: string }
   /** A card was chosen (its notes and history are wanted), or none. */
   | { type: 'card'; id?: string }
+  /** Every line that joins this card to another, on any map, is wanted. */
+  | { type: 'lines'; id: string }
+  /** Show a card on its own map (switching maps), chosen and in view. */
+  | { type: 'goTo'; id: string }
   | { type: 'addNote'; id: string }
   | { type: 'preview'; id: string; versions?: boolean }
   | { type: 'clearChanged' }

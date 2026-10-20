@@ -3,6 +3,7 @@
 
 import type { FromReview, ReviewFile, ReviewItem, ToReview } from '../reviewMessages';
 import { addStyles, ago, el } from '../ui/dom';
+import { iconButton, installTips, tray, type Icon } from '../ui/buttons';
 
 declare function acquireVsCodeApi(): { postMessage(message: FromReview): void };
 const vscode = acquireVsCodeApi();
@@ -60,11 +61,12 @@ const STATUS_WORDS: Record<ReviewItem['status'], string> = {
 const list = el('div', 'list');
 const detail = el('div', 'detail');
 const empty = el('div', 'empty');
-const tryButton = el('button', 'primary', 'Try it with an example');
-tryButton.title = 'Makes an example proposal (adding "How to run" to the README) so you can see how review works';
+const TRY_WORDS = 'Try it with an example: makes an example proposal (adding "How to run" to the README) so you can see how review works';
+const tryButton = iconButton('example', TRY_WORDS, { cls: 'primary' });
 tryButton.addEventListener('click', () => vscode.postMessage({ type: 'try' }));
 empty.append(el('h2', undefined, 'Nothing to review'), el('p', undefined, 'Changes proposed by assistants, agents and plugins appear here before they touch your code.'), tryButton);
 document.body.append(list, detail, empty);
+installTips();
 
 let current: ToReview | undefined;
 
@@ -80,8 +82,7 @@ function show(m: ToReview) {
   if (waiting.length) list.append(el('div', 'group', `Waiting for you (${waiting.length})`), ...waiting.map(row));
   if (done.length) list.append(el('div', 'group', 'Done'), ...done.map(row));
   // Always at hand, not only when Review is empty.
-  const more = el('button', 'try', 'Try an example proposal');
-  more.title = tryButton.title;
+  const more = iconButton('example', TRY_WORDS, { cls: 'try' });
   more.addEventListener('click', () => vscode.postMessage({ type: 'try' }));
   if (m.problems.length) {
     const box = el('div', 'problems');
@@ -103,9 +104,9 @@ function row(item: ReviewItem): HTMLElement {
   return r;
 }
 
-function button(text: string, cls: string | undefined, title: string, message: FromReview): HTMLButtonElement {
-  const b = el('button', cls, text);
-  b.title = title;
+/** An icon button named `name` (shown on hover) that sends `message`. */
+function button(icon: Icon, name: string, cls: string | undefined, message: FromReview): HTMLButtonElement {
+  const b = iconButton(icon, name, { cls });
   b.addEventListener('click', () => vscode.postMessage(message));
   return b;
 }
@@ -127,22 +128,22 @@ function drawDetail(item: ReviewItem) {
     detail.append(warn);
   }
 
-  const actions = el('div', 'actions');
+  const actions = tray(el('div', 'actions'));
   if (item.status === 'proposed') {
-    const approve = button('Approve and apply', 'primary', 'Make all of these changes now (they can be undone)', { type: 'approve', id: item.id });
+    const approve = button('choose', 'Approve and apply: make all of these changes now (they can be undone)', 'primary', { type: 'approve', id: item.id });
     approve.disabled = item.conflicts.length > 0;
     actions.append(
       approve,
-      button('Send back', undefined, `Ask ${item.by.name} to change it, with a note`, { type: 'sendBack', id: item.id }),
-      button('Reject', undefined, 'Drop it; nothing changes', { type: 'reject', id: item.id }),
+      button('sendBack', `Send back: ask ${item.by.name} to change it, with a note`, undefined, { type: 'sendBack', id: item.id }),
+      button('reject', 'Reject: drop it; nothing changes', undefined, { type: 'reject', id: item.id }),
     );
   } else if (item.status === 'applied') {
-    const undo = button('Undo', undefined, 'Put the files back as they were', { type: 'undo', id: item.id });
+    const undo = button('undo', 'Undo: put the files back as they were', undefined, { type: 'undo', id: item.id });
     undo.disabled = item.conflicts.length > 0;
     actions.append(undo);
   }
   for (const p of item.previews) {
-    actions.append(button(`Preview ${p.label}`, undefined, 'See it before and after this change, side by side', { type: 'preview', id: item.id, item: p.id }));
+    actions.append(button('preview', `Preview ${p.label}: before and after this change, side by side`, undefined, { type: 'preview', id: item.id, item: p.id }));
   }
   if (actions.childElementCount) detail.append(actions);
 
