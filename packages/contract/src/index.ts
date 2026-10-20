@@ -4,7 +4,7 @@
 // No VS Code imports here: plugins and the shell's tests use it outside VS Code too.
 
 /** The contract version this package describes. Plugins say which version they were built for. */
-export const CONTRACT_VERSION = 5;
+export const CONTRACT_VERSION = 6;
 
 /** Something that can be stopped or removed (same shape as VS Code's Disposable). */
 export interface Disposable {
@@ -159,6 +159,37 @@ export interface Choice {
   changes: { path: string; after: string | null }[];
 }
 
+/**
+ * Contract 6: one piece of data a card needs to be drawn: a prop, or a source of data inside it or anything it draws
+ * (a hook's value, state filled from elsewhere…), worked out from the files alone (nothing runs, nothing is called),
+ * with an example value when the plugin could make one. The shell lists them; the developer fills in what's missing;
+ * the card is drawn, from these values only, when every required one has one.
+ */
+export interface Need {
+  /** Unique within the card and lasting, e.g. "prop:title", "api:GET /api/orders". */
+  id: string;
+  /** The heading it's listed under, e.g. "Props", "Route", "API replies", "Context". */
+  group: string;
+  /** Its name, e.g. "title", ":id", "GET /api/orders". */
+  label: string;
+  /** Its type as written in code, or as worked out (e.g. "Order[]", "'new' | 'paid'"). */
+  type?: string;
+  /** The card can't be drawn without it (optional props and the like aren't). */
+  required: boolean;
+  /** An example value (JSON-like), when one could be made; undefined: none. */
+  value?: unknown;
+  /** Parts of `value` that couldn't be worked out ('' is all of it; 'customer.address' a field inside). */
+  missing?: string[];
+  /** The developer's own value, kept by the plugin (it replaces `value`). */
+  yours?: unknown;
+  /** Something to look at, e.g. the type changed since the developer's value was given. */
+  check?: string;
+  /** How the value was found, in words, e.g. "from its type", "guessed from its name". */
+  from?: string;
+  /** Where in the code it's declared or used (project-relative). */
+  place?: { path: string; line?: number };
+}
+
 /** What to show: a whole HTML page (scripts allowed, no network beyond this computer), or the address of a dev server page. */
 export type PreviewOutput = { html: string } | { url: string };
 
@@ -174,6 +205,10 @@ export interface Previewer {
    * for messages a page posts to its parent with `source: 'visual-editor-preview'`.
    */
   heard?(message: Record<string, unknown>, context: { item: Item; project: ProjectInfo }): void;
+  /** Contract 6: the data a card needs to be drawn, with example values where they could be made. */
+  needs?(item: Item, context: { project: ProjectInfo }): Need[] | Promise<Need[]>;
+  /** Contract 6: keeps the developer's own value for one of a card's needs (undefined: back to the example). */
+  keep?(item: Item, need: string, value: unknown, context: { project: ProjectInfo }): void | Promise<void>;
   /** Contract 5: other versions of a card to compare (none: the card has only itself). */
   versions?(item: Item, context: { project: ProjectInfo }): Version[] | Promise<Version[]>;
   /** Contract 5: making a version the real one; the shell shows it as a proposal before anything changes. */

@@ -9,11 +9,12 @@ import { cardMarks, type OutsideChanges } from './changes';
 import type { CurrentProject } from './currentProject';
 import { layoutMap, type Arrange } from './layout';
 import { cardColours, lineColours, usedBy } from './styles';
-import type { CardLines, FromMap, MapMeasure, ShowMap, ToMap } from './mapMessages';
+import type { CardLines, CardNeeds, FromMap, MapMeasure, ShowMap, ToMap } from './mapMessages';
 import type { ProjectIndex } from './projectIndex';
 import type { Review } from './review';
 import { forCard } from './memory';
-import { previewerFor, versionsOf } from './previews';
+import { previewerFor, render, versionsOf } from './previews';
+import { readFile } from 'node:fs/promises';
 import type { PreviewTarget } from './previewPanel';
 import type { ProjectMemory } from './memoryView';
 import { onThemeChange, themeTokenColours } from './themeColours';
@@ -45,6 +46,8 @@ export class MapPanel {
     private readonly review: Review,
     private readonly changes: OutsideChanges,
     private readonly memory: ProjectMemory,
+    /** Where the developer's own preview values are kept (this workspace's storage, not the project's files). */
+    private readonly values?: vscode.Memento,
   ) {
     this.subscriptions.push(
       index.onChange(() => this.update()),
@@ -69,7 +72,8 @@ export class MapPanel {
       localResourceRoots: [dist],
     });
     panel.iconPath = vscode.Uri.joinPath(this.extensionUri, 'media', 'icon.svg');
-    panel.webview.html = webviewPage(panel.webview, vscode.Uri.joinPath(dist, 'map.js'), 'Visual Editor');
+    // The Preview window shows cards drawn by a dev server on this computer.
+    panel.webview.html = webviewPage(panel.webview, vscode.Uri.joinPath(dist, 'map.js'), 'Visual Editor', 'frame-src http://127.0.0.1:* http://localhost:* http://*.localhost:*;');
     panel.webview.onDidReceiveMessage((m: FromMap) => this.receive(m), undefined, this.subscriptions);
     panel.onDidDispose(() => {
       this.panel = undefined;
@@ -134,6 +138,12 @@ export class MapPanel {
       this.sendLines(m.id);
     } else if (m.type === 'goTo') {
       this.focus(m.id);
+    } else if (m.type === 'needs') {
+      void this.sendNeeds(m.id);
+    } else if (m.type === 'draw') {
+      void this.sendDrawing(m.id);
+    } else if (m.type === 'setValue') {
+      void this.setValue(m.id, m.need, m.value);
     } else if (m.type === 'preview') {
       const root = this.current.get()?.project.root;
       if (root) this.openPreview?.({ root, item: m.id, ...(m.versions ? { versions: true } : {}) });
@@ -188,6 +198,69 @@ export class MapPanel {
     const found = previewerFor(state, item);
     const versions = found ? (await versionsOf(found, item, state.project)).length : 0;
     void this.panel?.webview.postMessage({ type: 'card', id: item.id, entries: forCard(this.memory.entries(state.project.root), item), canPreview: !!found, versions } satisfies ToMap);
+  }
+
+  /** Where one card's values are kept. */
+  private valuesKey(root: string, id: string) {
+    return `previewValues:${root}|${id}`;
+  }
+
+  /** What a card needs to be drawn, from its plugin, with the developer's own values. */
+  private async sendNeeds(id: string) {
+    const state = this.current.get();
+    const item = state?.items.find((i) => i.id === id);
+    if (!this.panel || !state || !item) return;
+    const values = this.values?.get<Record<string, unknown>>(this.valuesKey(state.project.root, id)) ?? {};
+    const found = previewerFor(state, item);
+    let message: CardNeeds;
+    try {
+      if (!found?.previewer.needs) throw new Error(`No plugin can draw ${item.label} on its own yet.`);
+      const needs = await found.previewer.needs(item, { project: state.project });
+      message = { type: 'needs', id, needs, values };
+    } catch (e) {
+      message = { type: 'needs', id, needs: [], values, error: e instanceof Error ? e.message : String(e) };
+    }
+    void this.panel.webview.postMessage(message satisfies ToMap);
+  }
+
+  /** The card drawn by its plugin (the values go into the page from the Preview window). */
+  private async sendDrawing(id: string) {
+    const state = this.current.get();
+    const item = state?.items.find((i) => i.id === id);
+    if (!this.panel || !state || !item) return;
+    const found = previewerFor(state, item);
+    if (!found) {
+      void this.panel.webview.postMessage({ type: 'drawing', id, error: `No plugin can draw ${item.label}.` } satisfies ToMap);
+      return;
+    }
+    const root = state.project.root;
+    const read = (path: string) => readFile(join(root, path), 'utf8').catch(() => undefined);
+    const theme = vscode.window.activeColorTheme.kind === vscode.ColorThemeKind.Light || vscode.window.activeColorTheme.kind === vscode.ColorThemeKind.HighContrastLight ? 'light' : 'dark';
+    const r = await render(found, { item, project: state.project, situation: 'normal', theme, width: 1024, read });
+    const message: ToMap = r.error !== undefined ? { type: 'drawing', id, error: r.error } : 'html' in r.output ? { type: 'drawing', id, html: r.output.html } : { type: 'drawing', id, url: r.output.url };
+    void this.panel?.webview.postMessage(message);
+  }
+
+  private async setValue(id: string, need: string, value: unknown) {
+    const state = this.current.get();
+    const root = state?.project.root;
+    const item = state?.items.find((i) => i.id === id);
+    const found = state && item ? previewerFor(state, item) : undefined;
+    // A plugin that keeps values (next to the component's file) keeps them; otherwise this workspace does.
+    if (state && item && found?.previewer.keep) {
+      try {
+        await found.previewer.keep(item, need, value, { project: state.project });
+        return;
+      } catch {
+        // Kept here instead.
+      }
+    }
+    if (!root || !this.values) return;
+    const key = this.valuesKey(root, id);
+    const all = { ...(this.values.get<Record<string, unknown>>(key) ?? {}) };
+    if (value === undefined) delete all[need];
+    else all[need] = value;
+    await this.values.update(key, Object.keys(all).length ? all : undefined);
   }
 
   /** The code colours of the theme on now, so the page colours types the way the editor does. */
