@@ -3,7 +3,7 @@
 // any width × height, rotate, zoom to fit); side panels the developer arranges, starting with the Console. The page
 // talks to it through the inspector the proxy adds. Plain DOM.
 
-import type { FromMap } from '../mapMessages';
+import type { FromMap, PluginPanel } from '../mapMessages';
 import { el } from '../ui/dom';
 import { iconButton, tray, type Icon } from '../ui/buttons';
 import { Frame, type LayoutStore } from '../ui/frame';
@@ -11,6 +11,7 @@ import { ConsolePanel, type ConsoleEntry } from './consolePanel';
 import { CssPanel, type Picked } from './cssPanel';
 import { NetworkPanel } from './networkPanel';
 import type { CardNetwork } from './previewTypes';
+import { PluginPanels } from './pluginPanels';
 
 export const PREVIEW_CSS = `
   .pv-main { position: absolute; inset: 0; display: flex; flex-direction: column; }
@@ -62,7 +63,8 @@ export class PreviewWindow {
   private readonly console: ConsolePanel;
   private readonly css: CssPanel;
   private readonly network: NetworkPanel;
-  private readonly pickButton = iconButton('pick', 'Pick an element: hover the page to see it, click to see its CSS (Esc stops)');
+  private readonly plugins: PluginPanels;
+  private readonly pickButton = iconButton('pick', 'Pick an element: hover the page to see it, click to choose it: its CSS, and its component in the App panel (Esc stops)');
   private picking = false;
   private iframe: HTMLIFrameElement | undefined;
   /** The app's address through the proxy, once it's running. */
@@ -74,22 +76,24 @@ export class PreviewWindow {
   private fit = true;
 
   constructor(private readonly deps: Deps) {
-    this.frame = new Frame('preview', deps.store, { bottom: { panels: ['console', 'network'], size: 240 }, right: { panels: ['css'], size: 380 } }, { size: { width: 'min(1400px, 96vw)', height: 'min(900px, 92vh)' } });
+    this.frame = new Frame('preview', deps.store, { bottom: { panels: ['console', 'network'], size: 240 }, right: { panels: ['css', 'plugin:*'], size: 380 } }, { size: { width: 'min(1400px, 96vw)', height: 'min(900px, 92vh)' } });
     this.frame.title.textContent = 'Preview';
     this.console = new ConsolePanel((url, line, column) => deps.post({ type: 'openSource', url, line, column }));
     this.console.onCounts = (all, errors) => this.frame.updatePanel('console', { count: errors || all, name: errors ? `Console: ${errors} error${errors === 1 ? '' : 's'}, ${all} message${all === 1 ? '' : 's'} in all` : `Console: everything the page logs (${all})`, tint: errors ? 'var(--vscode-errorForeground, #f48771)' : undefined });
     this.css = new CssPanel(
       (m) => this.toPage(m),
-      () => this.setPicking(true),
       (source, selector) => deps.post({ type: 'openRule', source, selector }),
     );
     this.network = new NetworkPanel((m) => deps.post(m));
     this.network.onCounts = (calls, faked) => this.frame.updatePanel('network', { count: calls, name: `Network: ${calls} call${calls === 1 ? '' : 's'}${faked ? `, ${faked} answered by fakes` : ''}` });
-    this.frame.setPanels([
-      { id: 'console', icon: 'console', name: 'Console: everything the page logs', body: this.console.body },
-      { id: 'network', icon: 'api', name: 'Network: every call the app makes, and the fakes that answer instead of the backend', body: this.network.body },
-      { id: 'css', icon: 'css', name: 'CSS: the picked element’s rules, box model and final values', body: this.css.body },
-    ]);
+    this.plugins = new PluginPanels({
+      post: (m) => deps.post(m),
+      toPage: (m) => this.toPage(m),
+      changed: () => this.arrangePanels(),
+      reload: () => this.reload(),
+      setCount: (id, count) => this.frame.updatePanel(id, { count }),
+    });
+    this.arrangePanels();
     this.pickButton.addEventListener('click', () => this.setPicking(!this.picking));
 
     // The bar: back, forward, reload, the address; responsive mode; open in the browser.
@@ -196,9 +200,25 @@ export class PreviewWindow {
     else this.network.showExample(m);
   }
 
+  /** The shell's own panels, then the plugins' (React's App panel…). */
+  private arrangePanels() {
+    this.frame.setPanels([
+      { id: 'console', icon: 'console', name: 'Console: everything the page logs', body: this.console.body },
+      { id: 'network', icon: 'api', name: 'Network: every call the app makes, and the fakes that answer instead of the backend', body: this.network.body },
+      { id: 'css', icon: 'css', name: 'CSS: the picked element’s rules, box model and final values', body: this.css.body },
+      ...this.plugins.specs(),
+    ]);
+  }
+
+  /** The shown project's plugin panels (from VS Code). */
+  setPluginPanels(panels: PluginPanel[]) {
+    this.plugins.set(panels);
+  }
+
   /** What the page says (through the inspector). */
   fromPage(data: Record<string, unknown>, source: MessageEventSource | null) {
     if (!this.iframe || source !== this.iframe.contentWindow) return;
+    this.plugins.fromPage(data);
     if (data.type === 'hello') {
       this.wait.hidden = true;
       this.css.empty();
@@ -212,7 +232,8 @@ export class PreviewWindow {
       this.console.add(data.entries as ConsoleEntry[]);
     } else if (data.type === 'picked') {
       this.css.show(data.element as Picked);
-      this.frame.showPanel('css');
+      // One picker for every panel: the CSS panel comes forward unless a plugin's (React's App panel) is on screen.
+      if (!this.plugins.specs().some((p) => this.frame.isShown(p.id))) this.frame.showPanel('css');
     } else if (data.type === 'picking') {
       this.picking = !!data.on;
       this.pickButton.classList.toggle('on', this.picking);

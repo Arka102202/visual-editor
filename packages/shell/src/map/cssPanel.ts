@@ -97,19 +97,16 @@ export class CssPanel {
 
   constructor(
     private readonly toPage: (m: Record<string, unknown>) => void,
-    private readonly startPicking: () => void,
     private readonly openRule: (source: string, selector: string) => void,
   ) {
     this.empty();
   }
 
   /** Nothing picked (a new page, or not yet). */
-  empty(text = 'Pick an element in the page to see its CSS: the target button in Preview’s bar, then click anything.') {
+  empty(text = 'Pick an element to see its CSS: the picker in Preview’s bar (the arrow), then click anything in the page.') {
     this.element = undefined;
-    const pick = iconButton('pick', 'Pick an element in the page');
-    pick.addEventListener('click', () => this.startPicking());
     const bar = el('div', 'bar');
-    bar.append(el('span', 'empty', text), pick);
+    bar.append(el('span', 'empty', text));
     this.body.replaceChildren(bar);
   }
 
@@ -124,18 +121,16 @@ export class CssPanel {
     const scroll = this.body.parentElement?.scrollTop ?? 0;
     const out: Node[] = [];
 
-    // Who: the element, its size, and pick / refresh / its parent.
+    // Who: the element, its size, and refresh / its parent (another one: Preview's picker).
     const bar = el('div', 'bar');
     const who = el('span', 'who', p.label);
     who.dataset.tip = p.text ? `${p.label}\n“${p.text}”` : p.label;
     const tools = tray(el('div'));
-    const pick = iconButton('pick', 'Pick another element');
-    pick.addEventListener('click', () => this.startPicking());
     const up = iconButton('goBack', 'Its parent');
     up.addEventListener('click', () => this.toPage({ type: 'selectUp', steps: 1 }));
     const refresh = iconButton('reload', 'Read it again (after the page changed)');
     refresh.addEventListener('click', () => this.toPage({ type: 'refresh' }));
-    tools.append(pick, up, refresh);
+    tools.append(up, refresh);
     bar.append(who, el('span', 'dim', `${round(p.size.width)} × ${round(p.size.height)}`), tools);
     out.push(bar);
 

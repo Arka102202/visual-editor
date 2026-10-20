@@ -20,9 +20,10 @@ const CONSOLE = String.raw`(() => {
   function flush() { timer = 0; if (queue.length) ve.say({ type: 'console', entries: queue.splice(0) }); }
   function push(e) { queue.push(e); if (!timer) timer = setTimeout(flush, 40); }
   /** A value as something that can be posted: plain values as they are, objects up to a depth, the rest described. */
-  function copy(v, depth, seen) {
+  function copy(v, depth, seen, o) {
     var t = typeof v;
     if (v === null || t === 'string' || t === 'number' || t === 'boolean') return v;
+    if (o && o.replace && (t === 'object' || t === 'function')) { var r = o.replace(v); if (r !== undefined) return r; }
     if (t === 'undefined') return { $t: 'undefined' };
     if (t === 'bigint') return { $t: 'bigint', text: String(v) + 'n' };
     if (t === 'symbol') return { $t: 'symbol', text: String(v) };
@@ -30,25 +31,26 @@ const CONSOLE = String.raw`(() => {
     if (v instanceof Error) return { $t: 'error', text: v.name + ': ' + v.message, stack: String(v.stack || '') };
     if (typeof Element !== 'undefined' && v instanceof Element) return { $t: 'element', text: '<' + v.tagName.toLowerCase() + (v.id ? '#' + v.id : '') + (typeof v.className === 'string' && v.className ? '.' + v.className.trim().split(/\s+/).join('.') : '') + '>' };
     if (seen.indexOf(v) >= 0) return { $t: 'circular', text: '[circular]' };
-    if (depth > 4) return { $t: 'more', text: Array.isArray(v) ? 'Array(' + v.length + ')' : '{…}' };
+    if (depth > (o && o.depth !== undefined ? o.depth : 4)) return { $t: 'more', text: Array.isArray(v) ? 'Array(' + v.length + ')' : '{…}' };
     seen = seen.concat([v]);
     if (Array.isArray(v)) {
       var list = [];
-      for (var i = 0; i < v.length && i < 100; i++) list.push(copy(v[i], depth + 1, seen));
+      for (var i = 0; i < v.length && i < 100; i++) list.push(copy(v[i], depth + 1, seen, o));
       if (v.length > 100) list.push({ $t: 'more', text: '… ' + (v.length - 100) + ' more' });
       return list;
     }
-    if (v instanceof Map) return { $t: 'map', size: v.size, entries: Array.from(v.entries()).slice(0, 50).map(function (e) { return [copy(e[0], depth + 1, seen), copy(e[1], depth + 1, seen)]; }) };
-    if (v instanceof Set) return { $t: 'set', size: v.size, items: Array.from(v).slice(0, 50).map(function (x) { return copy(x, depth + 1, seen); }) };
+    if (v instanceof Map) return { $t: 'map', size: v.size, entries: Array.from(v.entries()).slice(0, 50).map(function (e) { return [copy(e[0], depth + 1, seen, o), copy(e[1], depth + 1, seen, o)]; }) };
+    if (v instanceof Set) return { $t: 'set', size: v.size, items: Array.from(v).slice(0, 50).map(function (x) { return copy(x, depth + 1, seen, o); }) };
     if (v instanceof Date) return { $t: 'date', text: v.toISOString() };
     var out = {};
     var keys = Object.keys(v);
     for (var k = 0; k < keys.length && k < 100; k++) {
-      try { out[keys[k]] = copy(v[keys[k]], depth + 1, seen); } catch (e) { out[keys[k]] = { $t: 'error', text: '(could not read)' }; }
+      try { out[keys[k]] = copy(v[keys[k]], depth + 1, seen, o); } catch (e) { out[keys[k]] = { $t: 'error', text: '(could not read)' }; }
     }
     var name = v.constructor && v.constructor.name;
     return name && name !== 'Object' ? { $t: 'object', name: name, fields: out } : out;
   }
+  ve.copy = function (v, options) { return copy(v, 0, [], options || {}); };
   /** Where the call came from: the first place in the stack outside this inspector. */
   function caller(stack) {
     var lines = String(stack || '').split('\n');
@@ -132,6 +134,8 @@ const PICKER = String.raw`(() => {
     ve.say({ type: 'picking', on: false });
     select(e.target);
   }
+  /** Plugins' page scripts hear of each pick (window.visualEditor.onPicked). */
+  ve.picked = [];
   function swallow(e) { if (picking) { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); } }
   window.addEventListener('mousemove', onMove, true);
   window.addEventListener('click', onClick, true);
@@ -265,6 +269,7 @@ const PICKER = String.raw`(() => {
     selected = el;
     show(el);
     if (el) ve.say({ type: 'picked', element: info(el) });
+    if (el) ve.picked.forEach(function (fn) { try { fn(el); } catch (err) { console.error(err); } });
   }
   window.addEventListener('message', function (e) {
     var m = e.data;
@@ -273,6 +278,56 @@ const PICKER = String.raw`(() => {
     if (m.type === 'refresh' && selected) select(selected.isConnected ? selected : null);
     if (m.type === 'selectUp' && selected) { var t = selected; for (var i = 0; i < m.steps && t.parentElement; i++) t = t.parentElement; select(t); }
     if (m.type === 'unselect') { selected = null; show(null); }
+  });
+})();
+`;
+
+/** What plugins' page scripts get: window.visualEditor (the contract's PreviewPageApi). */
+const PLUGINS = String.raw`(() => {
+  var ve = window.__veInspector;
+  if (!ve || window.visualEditor) return;
+  var handlers = {};
+  var outline = null;
+  function box() {
+    var d = document.createElement('div');
+    d.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483645;box-sizing:border-box;border:2px solid #4f8cff;background:rgba(79,140,255,.14);border-radius:2px';
+    return d;
+  }
+  window.visualEditor = {
+    version: 1,
+    on: function (channel, fn) { (handlers[channel] = handlers[channel] || []).push(fn); },
+    send: function (channel, data) { ve.say({ type: 'plugin', channel: channel, data: data }); },
+    copy: function (v, options) { return ve.copy(v, options); },
+    highlight: function (els, text) {
+      if (outline) { outline.forEach(function (d) { d.remove(); }); outline = null; }
+      if (!els || !els.length) return;
+      outline = [];
+      var all = null;
+      els.slice(0, 50).forEach(function (el) {
+        var r = el.getBoundingClientRect();
+        if (!r.width && !r.height) return;
+        var d = box();
+        d.style.left = r.left + 'px'; d.style.top = r.top + 'px'; d.style.width = r.width + 'px'; d.style.height = r.height + 'px';
+        document.documentElement.appendChild(d);
+        outline.push(d);
+        all = all ? { l: Math.min(all.l, r.left), t: Math.min(all.t, r.top), b: Math.max(all.b, r.bottom) } : { l: r.left, t: r.top, b: r.bottom };
+      });
+      if (text && all) {
+        var tag = document.createElement('div');
+        tag.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483646;background:#4f8cff;color:#fff;font:11px/1.6 ui-monospace,monospace;padding:1px 6px;border-radius:3px;white-space:nowrap';
+        tag.textContent = text;
+        tag.style.left = Math.max(0, all.l) + 'px';
+        tag.style.top = (all.t > 24 ? all.t - 22 : all.b + 4) + 'px';
+        document.documentElement.appendChild(tag);
+        outline.push(tag);
+      }
+    },
+    onPicked: function (fn) { ve.picked.push(fn); },
+  };
+  window.addEventListener('message', function (e) {
+    var m = e.data;
+    if (e.source !== window.parent || !m || m.source !== 've-preview' || m.type !== 'plugin') return;
+    (handlers[m.channel] || []).forEach(function (fn) { try { fn(m.data); } catch (err) { console.error(err); } });
   });
 })();
 `;
@@ -291,6 +346,19 @@ export const INSPECTOR = `(() => {
       return null;
     }
   }
+  // Shown inside a frame (Preview in VS Code): the browser keeps only "SameSite=None; Secure" cookies there, so the
+  // ones the app sets are made so (the proxy does the same for cookies its backend sets). Not in a browser of its own.
+  var framed = window.parent !== window;
+  if (framed) {
+    var cookie = Object.getOwnPropertyDescriptor(Document.prototype, 'cookie');
+    if (cookie && cookie.set) {
+      Object.defineProperty(document, 'cookie', {
+        configurable: true,
+        get: function () { return cookie.get.call(document); },
+        set: function (v) { cookie.set.call(document, String(v).replace(/;\\s*secure\\b/gi, '').replace(/;\\s*samesite=[^;]*/gi, '') + '; SameSite=None; Secure'); },
+      });
+    }
+  }
   var realFetch = window.fetch;
   window.fetch = function (input, init) {
     var isRequest = typeof Request !== 'undefined' && input instanceof Request;
@@ -298,7 +366,7 @@ export const INSPECTOR = `(() => {
     var to = route(url);
     var request = new Request(to || url, isRequest ? input : init);
     if (isRequest && init) request = new Request(request, init);
-    request.headers.set('${CALL_HEADER}', '1');
+    request.headers.set('${CALL_HEADER}', framed ? 'frame' : '1');
     return realFetch.call(window, request);
   };
   var open = XMLHttpRequest.prototype.open;
@@ -310,7 +378,7 @@ export const INSPECTOR = `(() => {
     return open.apply(this, args);
   };
   XMLHttpRequest.prototype.send = function () {
-    try { this.setRequestHeader('${CALL_HEADER}', '1'); } catch (e) {}
+    try { this.setRequestHeader('${CALL_HEADER}', framed ? 'frame' : '1'); } catch (e) {}
     return send.apply(this, arguments);
   };
   /** Messages to the window around the page (Visual Editor's Preview), when there is one. */
@@ -334,4 +402,4 @@ export const INSPECTOR = `(() => {
     if (m.type === 'reload') location.reload();
   });
 })();
-` + CONSOLE + PICKER;
+` + CONSOLE + PICKER + PLUGINS;

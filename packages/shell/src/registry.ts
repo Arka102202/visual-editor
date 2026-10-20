@@ -26,6 +26,12 @@ export function checkPlugin(plugin: Partial<Plugin> | undefined, taken: (id: str
   for (const r of plugin.readers ?? []) {
     if (!r?.id || typeof r.wants !== 'function' || typeof r.read !== 'function') return 'One of its readers is missing an id, wants() or read().';
   }
+  const panels = new Set<string>();
+  for (const p of plugin.previewPanels ?? []) {
+    if (!p?.id || !/^[a-z][a-z0-9-]*$/.test(p.id) || panels.has(p.id)) return 'Each of its Preview panels needs its own id: short lowercase letters, digits and dashes.';
+    panels.add(p.id);
+    if (!p.name || typeof p.icon !== 'string' || typeof p.page !== 'string' || typeof p.panel !== 'string') return `Its Preview panel "${p.id}" is missing a name, an icon, or its page or panel script.`;
+  }
   return undefined;
 }
 

@@ -39,6 +39,8 @@ export type ToMap =
   | { type: 'fakes'; endpoints: FakeEndpoint[]; scenarios: Scenarios; headers: string[] }
   /** The project's contracts (in short), and which type each endpoint answers with (contracts.json's "map"). */
   | { type: 'contracts'; contracts: ContractInfo[]; map: Record<string, string> }
+  /** Plugins' Preview panels for the shown project: their scripts, and the facts each one needs. */
+  | { type: 'panels'; panels: PluginPanel[] }
   /** An example answer made from a contract (asked for with `contractExample`). */
   | { type: 'contractExample'; ref: ContractRef; status?: number; body?: unknown; error?: string };
 
@@ -151,6 +153,8 @@ export type FromMap =
   | { type: 'fakeFromContract'; operations: string[]; status?: string }
   /** An example answer from the contract, to look at. */
   | { type: 'contractExample'; ref: ContractRef }
+  /** Open the code of a card found by its name (and kind), e.g. a component a plugin panel shows. */
+  | { type: 'openItem'; label: string; kind?: string }
   /** Open an address in the developer's own browser. */
   | { type: 'openExternal'; url: string }
   /** A window's side panels were arranged: keep it. */
@@ -163,3 +167,14 @@ export type FromMap =
   | { type: 'window' }
   /** Open a card's code: path relative to the shown project's root. */
   | { type: 'open'; path: string; line?: number };
+
+/** A plugin's Preview panel, as the map page gets it. */
+export interface PluginPanel {
+  /** "<plugin id>/<panel id>". */
+  key: string;
+  name: string;
+  icon: string;
+  /** The panel's script. */
+  code: string;
+  facts?: unknown;
+}

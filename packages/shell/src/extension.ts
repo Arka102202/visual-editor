@@ -24,7 +24,10 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
   const registry = new PluginRegistry();
   const log = vscode.window.createOutputChannel('Visual Editor');
   // Each project's app through Visual Editor's proxy (its calls seen, and later faked).
-  const proxies = new AppProxies(log, context.secrets);
+  // Plugins' Preview panels add their page scripts to the pages of the projects they detected.
+  const proxies = new AppProxies(log, context.secrets, (root) =>
+    (index.snapshot().find((s) => s.project.root === root)?.detected ?? []).flatMap(({ plugin }) => (plugin.previewPanels ?? []).map((p) => ({ key: `${plugin.id}/${p.id}`, code: p.page }))),
+  );
   context.subscriptions.push(proxies);
 
   // The side panel: which plugins are installed, and any that couldn't be used.

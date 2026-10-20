@@ -224,6 +224,14 @@ export class Frame {
     b.replaceWith(fresh);
   }
 
+  /** Whether a panel is on screen now (its dock open, and its tab the chosen one). */
+  isShown(id: string): boolean {
+    const d = this.dockOf(id);
+    if (!d || this.layout.hidden.includes(id)) return false;
+    const dock = this.layout.docks[d];
+    return dock.open && dock.active === id && !this.docks.get(d)!.el.hidden;
+  }
+
   /** Shows a panel (opening its dock and choosing its tab). */
   showPanel(id: string) {
     const d = this.dockOf(id);

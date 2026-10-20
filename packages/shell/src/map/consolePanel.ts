@@ -220,6 +220,11 @@ function preview(v: unknown): string {
   return `{${keys.slice(0, 4).join(', ')}${keys.length > 4 ? ', …' : ''}}`;
 }
 
+/** A value as the Console shows it (for plugin panels too). */
+export function valueView(v: unknown, key?: string): Node {
+  return value(v, key);
+}
+
 /** A value: plain ones coloured; objects, lists, maps and sets open like a tree; errors with their stack. */
 function value(v: unknown, key?: string): Node {
   const span = (cls: string, text: string) => el('span', `cs-v ${cls}`, text);
