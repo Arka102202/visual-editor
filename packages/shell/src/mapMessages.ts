@@ -117,6 +117,8 @@ export type FromMap =
   | { type: 'app' }
   /** Open the developer's own file for a place in the code the browser runs (a console message's). */
   | { type: 'openSource'; url: string; line: number; column: number }
+  /** Open the stylesheet a CSS rule comes from, at that rule. */
+  | { type: 'openRule'; source: string; selector: string }
   /** Open an address in the developer's own browser. */
   | { type: 'openExternal'; url: string }
   /** A window's side panels were arranged: keep it. */

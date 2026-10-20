@@ -50,6 +50,8 @@ export const ICONS = {
   levelInfo: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5V8"/>',
   levelLog: '<path d="M5 7h14M5 12h14M5 17h9"/>',
   levelDebug: '<rect x="8" y="6" width="8" height="12" rx="4"/><path d="M12 6V3M5 9l3 1M19 9l-3 1M4 14h4M16 14h4M5 19l3-2M19 19l-3-2"/>',
+  pick: '<path d="M4 4l7 17 2.5-7.5L21 11z"/><path d="M14 14l6 6"/>',
+  css: '<path d="M8 4c-2 0-3 1-3 3v2c0 1.5-1 2.5-2 3 1 .5 2 1.5 2 3v2c0 2 1 3 3 3M16 4c2 0 3 1 3 3v2c0 1.5 1 2.5 2 3-1 .5-2 1.5-2 3v2c0 2-1 3-3 3"/>',
   panels: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 9v11"/>',
   dockLeft: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 4h6v16H3"/>',
   dockRight: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4h6v16h-6"/>',

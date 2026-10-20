@@ -140,6 +140,9 @@ export class MapPanel {
     } else if (m.type === 'openSource') {
       const root = this.current.get()?.project.root;
       if (root) void this.proxies?.openSource(root, m.url, m.line, m.column);
+    } else if (m.type === 'openRule') {
+      const root = this.current.get()?.project.root;
+      if (root) void this.proxies?.openRule(root, m.source, m.selector);
     } else if (m.type === 'openExternal') {
       if (/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//.test(m.url)) void vscode.env.openExternal(vscode.Uri.parse(m.url));
     } else if (m.type === 'layout') {
