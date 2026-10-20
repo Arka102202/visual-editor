@@ -11,6 +11,8 @@ import type { MemoryEntry } from '../memory';
 import { addStyles, ago, el } from '../ui/dom';
 import { iconButton, installTips, mapIcon, setIcon, tray, type Icon } from '../ui/buttons';
 import { TYPE_CSS, typeText, useThemeTokens } from '../ui/typeText';
+import { PREVIEW_CSS, PreviewWindow } from './preview';
+import { WINDOW_CSS, windowControls } from '../ui/windows';
 import type { Tone } from '../styles';
 
 declare function acquireVsCodeApi(): { postMessage(message: FromMap): void };
@@ -146,6 +148,8 @@ addStyles(`
   .nb-row.prop.open .v { display: none; }
   .nb-row.prop.open .full { display: block; margin-top: 6px; padding: 6px 8px; border-radius: 4px; background: color-mix(in srgb, var(--vscode-foreground) 7%, transparent); font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; white-space: pre-wrap; word-break: break-word; cursor: text; user-select: text; }
 ${TYPE_CSS}
+${PREVIEW_CSS}
+${WINDOW_CSS}
   .nb-side .none { font-size: 12px; opacity: .6; padding: 4px 2px; }
 `);
 
@@ -240,6 +244,8 @@ let linked = new Set<string>();
 const BUSY = 3;
 const look: Look = { paint, colours: () => colours, marks: () => marks, drawCard };
 const openCode = (item: Item) => item.source && vscode.postMessage({ type: 'open', path: item.source.path, line: item.source.line });
+/** One card drawn on its own, with the data it needs (opened from the drawer and from Focus). */
+const preview = new PreviewWindow({ post: (m) => vscode.postMessage(m), openCode: (path, line) => vscode.postMessage({ type: 'open', path, line }) });
 const mv = new MapView(stage, look, {
   pick: (id) => select(id),
   open: openCode,
@@ -274,7 +280,7 @@ function showCard(m: CardMemory) {
   }
   if (m.canPreview) {
     const preview = iconButton('preview', 'Preview: see how it looks', { cls: 'primary' });
-    preview.addEventListener('click', () => vscode.postMessage({ type: 'preview', id: item.id }));
+    preview.addEventListener('click', () => openPreview(item.id, item.label));
     if (m.versions) {
       const versions = iconButton('versions', `Versions: its ${m.versions} other version${m.versions === 1 ? '' : 's'}, side by side with it; choose one to make it the real one`, { count: m.versions });
       versions.addEventListener('click', () => vscode.postMessage({ type: 'preview', id: item.id, versions: true }));
@@ -380,11 +386,14 @@ const nbZoom = el('span', 'zoom');
 const nbOut = iconButton('zoomOut', 'Zoom out');
 const nbIn = iconButton('zoomIn', 'Zoom in');
 const nbFit = iconButton('fitMap', 'Fit: show all of it');
+const nbPreview = iconButton('preview', 'Preview: draw this card on its own, with the data it needs');
 const nbOnMap = iconButton('onMap', 'Show on map: close this and go to the card on the map');
 const nbClose = iconButton('close', 'Close (Esc)');
 const nbSideButton = iconButton('sidePanel', 'List: hide or show everything joined to this card', { cls: 'on' });
 nbHead.append(nbTitle, nbCounts, tray(el('div', 'nb-tools')));
-nbHead.lastElementChild!.append(nbZoom, nbOut, nbIn, nbFit, nbSideButton, nbOnMap, nbClose);
+// Moved by its title bar; full screen with a button or a double-click on the title bar.
+const nbWindow = windowControls(nbBox, nbHead);
+nbHead.lastElementChild!.append(nbZoom, nbOut, nbIn, nbFit, nbSideButton, nbPreview, nbOnMap, nbWindow.fullButton, nbClose);
 const nbBody = el('div', 'nb-body');
 const nbStage = el('div', 'nb-stage');
 const nbSide = el('div', 'nb-side');
@@ -404,9 +413,13 @@ const nbView = new MapView(nbStage, look, {
 nbBack.addEventListener('pointerdown', (e) => {
   if (e.target === nbBack) closeNeighbours();
 });
+// Esc closes the window on top: Preview (it can open over Focus), then Focus.
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !nbBack.hidden) closeNeighbours();
+  if (e.key !== 'Escape') return;
+  if (preview.isOpen) preview.close();
+  else if (!nbBack.hidden) closeNeighbours();
 });
+nbPreview.addEventListener('click', () => nbId && openPreview(nbId, mv.placedById.get(nbId)?.item.label ?? nbId));
 nbOut.addEventListener('click', () => nbView.zoomAt(undefined, undefined, 1 / 1.25));
 nbIn.addEventListener('click', () => nbView.zoomAt(undefined, undefined, 1.25));
 nbFit.addEventListener('click', () => nbView.fit());
@@ -657,6 +670,12 @@ function lineRow(l: CardLines['lines'][number]): HTMLElement {
   row.title = [o.label, o.sub, onFocusMap ? 'Click to find it in the map here' : '', o.source ? 'Double-click to open its code' : ''].filter(Boolean).join('\n');
   const acts = tray(el('div', 'acts'));
   if (onFocusMap) {
+    const look = iconButton('preview', `Preview ${o.label}: draw it on its own, with the data it needs`);
+    look.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openPreview(o.id, o.label);
+    });
+    acts.append(look);
     const focus = iconButton('focus', `Focus on ${o.label}: its own neighbours`);
     focus.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -684,6 +703,10 @@ function lineRow(l: CardLines['lines'][number]): HTMLElement {
   if (onFocusMap) row.addEventListener('click', () => nbView.centre(o.id));
   row.addEventListener('dblclick', () => openCode(o));
   return row;
+}
+
+function openPreview(id: string, label: string) {
+  preview.show(id, label);
 }
 
 /** Chooses a card and moves the view so it's in the middle. */
@@ -870,10 +893,15 @@ changedBadge.addEventListener('click', () => vscode.postMessage({ type: 'clearCh
 picker.addEventListener('change', () => vscode.postMessage({ type: 'choose', root: picker.value }));
 
 window.addEventListener('message', (e: MessageEvent<ToMap>) => {
+  // The Preview window's drawing (a page from the project's dev server) talks to it.
+  const fromPreview = e.data as unknown as { source?: string } | undefined;
+  if (fromPreview?.source === 'visual-editor-preview') return preview.fromFrame(e.data as unknown as Record<string, unknown>, e.source);
   if (e.data?.type === 'show') show(e.data);
   else if (e.data?.type === 'card') showCard(e.data);
   else if (e.data?.type === 'lines') showLines(e.data);
   else if (e.data?.type === 'theme') useThemeTokens(e.data.tokens);
+  else if (e.data?.type === 'needs') preview.receive(e.data);
+  else if (e.data?.type === 'drawing') preview.receiveDrawing(e.data);
   else if (e.data?.type === 'focus') focusCard(e.data.id);
   else if (e.data?.type === 'measure') void measure();
 });
