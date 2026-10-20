@@ -10,6 +10,7 @@ import { createServer, request as httpRequest, Agent as HttpAgent, type Incoming
 import { request as httpsRequest, Agent as HttpsAgent } from 'node:https';
 import { connect, type Socket } from 'node:net';
 import { CALL_HEADER, INSPECTOR, VE_PATH } from './inspector';
+import { patch, type Decision, type Fakes } from './fakes';
 
 /** One call the page made (or a file it loaded), as recorded. */
 export interface Recorded {
@@ -29,6 +30,8 @@ export interface Recorded {
   requestBody?: string;
   responseBody?: string;
   error?: string;
+  /** The fake that answered (or changed the answer): the endpoint's id and the case's name. */
+  faked?: { endpoint: string; case: string };
 }
 
 /** How much of a body is kept. */
@@ -54,6 +57,12 @@ export class AppProxy {
   constructor(
     /** Where the app's dev server answers (found or started when first needed). */
     private readonly devOrigin: () => Promise<string>,
+    private readonly options: {
+      /** The project's fakes (what to answer instead of the backend). */
+      fakes?: () => Fakes | undefined;
+      /** Headers added to every call the page makes (a token, a cookie), kept out of the project's files. */
+      headers?: () => Record<string, string>;
+    } = {},
   ) {}
 
   /** Calls back for each call recorded (when it has its answer). */
@@ -132,8 +141,31 @@ export class AppProxy {
     for await (const c of req) chunks.push(c as Buffer);
     const body = Buffer.concat(chunks);
     if (record.kind === 'api' && body.length) record.requestBody = text(body);
+    // A fake may answer it, change the answer, or fail it.
+    const decision: Decision = record.kind === 'api' ? (this.options.fakes?.()?.decide(record.method, target.pathname, routed ? target.origin : undefined) ?? { kind: 'pass' }) : { kind: 'pass' };
+    if (decision.kind !== 'pass') record.faked = { endpoint: decision.endpoint.id, case: decision.name };
+    if (decision.kind === 'answer' || decision.kind === 'fail') {
+      if (decision.delay) await new Promise((r) => setTimeout(r, decision.delay));
+      if (decision.kind === 'fail') {
+        record.error = 'failed on purpose (a fake): the connection dropped';
+        record.ms = Math.round(performance.now() - started);
+        this.keep(record);
+        req.socket.destroy();
+        return;
+      }
+      res.writeHead(decision.status, { ...decision.headers, 'content-length': String(decision.body.length) });
+      res.end(decision.body);
+      record.status = decision.status;
+      record.responseHeaders = decision.headers;
+      record.responseBody = text(decision.body);
+      record.ms = Math.round(performance.now() - started);
+      this.keep(record);
+      return;
+    }
     const headers: Record<string, string | string[] | undefined> = { ...req.headers, host: target.host };
     delete headers[CALL_HEADER];
+    // The developer's own headers (a token, a cookie) on every call the page makes.
+    if (record.kind === 'api') for (const [k, v] of Object.entries(this.options.headers?.() ?? {})) headers[k.toLowerCase()] = v;
     // Plain bodies (to add the inspector to pages, and to keep what calls answered).
     delete headers['accept-encoding'];
     if (routed) {
@@ -167,15 +199,31 @@ export class AppProxy {
         const parts: Buffer[] = [];
         for await (const c of answer) parts.push(c as Buffer);
         let payload = Buffer.concat(parts);
+        let status = answer.statusCode ?? 502;
+        // A fake that changes the real answer: its status, headers, some fields, a delay.
+        if (decision.kind === 'change') {
+          if (decision.status) status = decision.status;
+          if (decision.headers) Object.assign(out, decision.headers);
+          if (decision.patch) {
+            try {
+              payload = Buffer.from(JSON.stringify(patch(JSON.parse(payload.toString('utf8')), decision.patch)));
+              delete out['transfer-encoding'];
+              out['content-length'] = String(payload.length);
+            } catch {
+              // Not JSON: left as it is.
+            }
+          }
+          if (decision.delay) await new Promise((r) => setTimeout(r, decision.delay));
+        }
         if (record.kind === 'page' && isHtml) {
           payload = Buffer.from(withInspector(payload.toString('utf8')));
           // Sent whole now, with its new length (not in chunks).
           delete out['transfer-encoding'];
           out['content-length'] = String(payload.length);
         } else record.responseBody = text(payload);
-        res.writeHead(answer.statusCode ?? 502, out);
+        res.writeHead(status, out);
         res.end(payload);
-        this.done(record, answer, started);
+        this.done(record, answer, started, status);
       },
     );
     upstream.on('error', (e) => {
@@ -188,8 +236,8 @@ export class AppProxy {
     upstream.end(body);
   }
 
-  private done(record: Recorded, answer: IncomingMessage, started: number) {
-    record.status = answer.statusCode;
+  private done(record: Recorded, answer: IncomingMessage, started: number, status = answer.statusCode) {
+    record.status = status;
     record.responseHeaders = flat(answer.headers);
     record.ms = Math.round(performance.now() - started);
     this.keep(record);

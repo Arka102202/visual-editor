@@ -16,6 +16,7 @@ import { Frame, FRAME_CSS, type Layout as PanelLayout, type LayoutStore } from '
 import { PREVIEW_CSS, PreviewWindow } from './preview';
 import { CONSOLE_CSS } from './consolePanel';
 import { CSS_PANEL_CSS } from './cssPanel';
+import { NETWORK_CSS } from './networkPanel';
 import type { Tone } from '../styles';
 
 declare function acquireVsCodeApi(): { postMessage(message: FromMap): void };
@@ -145,6 +146,7 @@ ${FRAME_CSS}
 ${PREVIEW_CSS}
 ${CONSOLE_CSS}
 ${CSS_PANEL_CSS}
+${NETWORK_CSS}
 `);
 
 // The page: a bar on top, the stage below, and a message for when there's nothing to draw.
@@ -852,6 +854,7 @@ window.addEventListener('message', (e: MessageEvent<ToMap>) => {
   else if (e.data?.type === 'layouts') layouts = { ...e.data.layouts, ...layouts };
   else if (e.data?.type === 'app') preview.receiveApp(e.data);
   else if (e.data?.type === 'preview') preview.open(e.data.path);
+  else if (e.data?.type === 'calls' || e.data?.type === 'fakes') preview.receiveNetwork(e.data);
   else if (e.data?.type === 'focus') focusCard(e.data.id);
   else if (e.data?.type === 'measure') void measure();
 });
