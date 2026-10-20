@@ -69,6 +69,14 @@ export const ICONS = {
 
 export type Icon = keyof typeof ICONS;
 
+/** Icons plugins bring (their Preview panels' tabs), by name. */
+const pluginIcons = new Map<string, string>();
+
+/** Adds a plugin's icon (SVG drawing for a 24×24 box, in lines): only shapes and lines are kept, never scripts. */
+export function addIcon(name: string, svg: string) {
+  pluginIcons.set(name, svg.replace(/<\/?(script|foreignObject|iframe|image|use|a)\b[^>]*>/gi, '').replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '').replace(/(href|src)\s*=/gi, 'data-x='));
+}
+
 /** The icon for a map tab: known map kinds get their own; any other map gets a general one. */
 export function mapIcon(id: string): Icon {
   if (/component/i.test(id)) return 'components';
@@ -86,7 +94,7 @@ export function iconButton(icon: Icon, name: string, opts: { count?: string | nu
 
 /** Changes a button's icon, name and count. */
 export function setIcon(b: HTMLElement, icon: Icon, name: string, count?: string | number) {
-  b.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[icon]}</svg>`;
+  b.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[icon] ?? pluginIcons.get(icon) ?? ''}</svg>`;
   if (count !== undefined && count !== '') b.append(el('span', 'count', String(count)));
   b.setAttribute('aria-label', name);
   b.dataset.tip = name;

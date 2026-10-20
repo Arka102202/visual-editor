@@ -67,6 +67,8 @@ export class AppProxy {
       headers?: () => Record<string, string>;
       /** The project's contracts (answers are checked against them). */
       contracts?: () => Contracts | undefined;
+      /** Plugins' page scripts (their Preview panels'), added to pages right after the inspector: key ("react/app") → code. */
+      pageScripts?: () => { key: string; code: string }[];
     } = {},
   ) {}
 
@@ -113,6 +115,13 @@ export class AppProxy {
       res.end(INSPECTOR);
       return;
     }
+    if (path.startsWith(`${VE_PATH}/plugin/`)) {
+      const key = decodeURIComponent(path.slice(`${VE_PATH}/plugin/`.length).replace(/\.js(\?.*)?$/, ''));
+      const script = this.options.pageScripts?.().find((s) => s.key === key);
+      res.writeHead(script ? 200 : 404, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(script?.code ?? `// no page script "${key}"`);
+      return;
+    }
     let target: URL;
     let shown: string;
     const routed = path.startsWith(`${VE_PATH}/x/`) ? /^\/__ve\/x\/([^/]+)(\/.*)?$/.exec(path) : null;
@@ -131,6 +140,8 @@ export class AppProxy {
       return;
     }
     const isCall = !!req.headers[CALL_HEADER] || !!routed;
+    // From a page shown inside a frame (Preview, in VS Code): there only "SameSite=None; Secure" cookies are kept.
+    const framed = req.headers[CALL_HEADER] === 'frame' || req.headers['sec-fetch-dest'] === 'iframe';
     const wantsPage = !isCall && req.method === 'GET' && /text\/html/.test(String(req.headers.accept ?? ''));
     const record: Recorded = {
       id: this.next++,
@@ -173,6 +184,12 @@ export class AppProxy {
     if (record.kind === 'api') for (const [k, v] of Object.entries(this.options.headers?.() ?? {})) headers[k.toLowerCase()] = v;
     // Plain bodies (to add the inspector to pages, and to keep what calls answered).
     delete headers['accept-encoding'];
+    // Pages are always fetched whole: a browser's kept copy is the page as Visual Editor changed it then (an older
+    // inspector, other plugins' scripts), and "unchanged since" would bring that copy back.
+    if (record.kind === 'page') {
+      delete headers['if-none-match'];
+      delete headers['if-modified-since'];
+    }
     if (routed) {
       // The other address sees its own origin, as if the page had called it directly.
       if (headers.origin) headers.origin = target.origin;
@@ -191,7 +208,7 @@ export class AppProxy {
       async (answer) => {
         const out: Record<string, string | string[] | undefined> = { ...answer.headers };
         // Cookies the other address sets belong to the proxy's address now (the page reaches it through here).
-        if (routed && out['set-cookie']) out['set-cookie'] = ([] as string[]).concat(out['set-cookie']).map((c) => c.replace(/;\s*domain=[^;]*/gi, '').replace(/;\s*secure/gi, '').replace(/;\s*samesite=none/gi, '; SameSite=Lax'));
+        if (out['set-cookie']) out['set-cookie'] = ([] as string[]).concat(out['set-cookie']).map((c) => cookieFor(c, { routed: !!routed, framed }));
         const isHtml = /text\/html/.test(String(answer.headers['content-type'] ?? ''));
         if (record.kind === 'page' && !isHtml) record.kind = 'file';
         const keep = record.kind === 'api' || (record.kind === 'page' && isHtml);
@@ -221,9 +238,12 @@ export class AppProxy {
           if (decision.delay) await new Promise((r) => setTimeout(r, decision.delay));
         }
         if (record.kind === 'page' && isHtml) {
-          payload = Buffer.from(withInspector(payload.toString('utf8')));
-          // Sent whole now, with its new length (not in chunks).
+          payload = Buffer.from(withInspector(payload.toString('utf8'), (this.options.pageScripts?.() ?? []).map((s) => s.key)));
+          // Sent whole now, with its new length (not in chunks), and never kept by the browser.
           delete out['transfer-encoding'];
+          delete out.etag;
+          delete out['last-modified'];
+          out['cache-control'] = 'no-store';
           out['content-length'] = String(payload.length);
         } else record.responseBody = text(payload);
         res.writeHead(status, out);
@@ -309,10 +329,23 @@ export class AppProxy {
   }
 }
 
-/** A page with the inspector added first in its <head> (before the app's own scripts). */
-export function withInspector(html: string): string {
-  const tag = `<script src="${VE_PATH}/inspector.js"></script>`;
-  if (html.includes(tag)) return html;
+/**
+ * A cookie as the page can keep it. Another address's cookies belong to the proxy's address now (the page reaches it
+ * through here): no domain. In a frame (Preview inside VS Code) the browser keeps only "SameSite=None; Secure" ones, so
+ * they're made so (this computer's address counts as secure). Elsewhere the app's own cookies stay as they are.
+ */
+export function cookieFor(cookie: string, where: { routed: boolean; framed: boolean }): string {
+  let c = where.routed ? cookie.replace(/;\s*domain=[^;]*/gi, '') : cookie;
+  if (where.framed) return `${c.replace(/;\s*secure\b/gi, '').replace(/;\s*samesite=[^;]*/gi, '')}; SameSite=None; Secure`;
+  if (where.routed) c = c.replace(/;\s*secure\b/gi, '').replace(/;\s*samesite=none/gi, '; SameSite=Lax');
+  return c;
+}
+
+/** A page with the inspector added first in its <head> (before the app's own scripts), then plugins' page scripts. */
+export function withInspector(html: string, plugins: string[] = []): string {
+  const first = `<script src="${VE_PATH}/inspector.js"></script>`;
+  if (html.includes(first)) return html;
+  const tag = [first, ...plugins.map((k) => `<script src="${VE_PATH}/plugin/${k.split('/').map(encodeURIComponent).join('/')}.js"></script>`)].join('\n    ');
   if (/<head[^>]*>/i.test(html)) return html.replace(/<head[^>]*>/i, (m) => `${m}\n    ${tag}`);
   if (/<html[^>]*>/i.test(html)) return html.replace(/<html[^>]*>/i, (m) => `${m}<head>${tag}</head>`);
   return `${tag}\n${html}`;

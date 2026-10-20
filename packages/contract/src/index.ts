@@ -4,7 +4,7 @@
 // No VS Code imports here: plugins and the shell's tests use it outside VS Code too.
 
 /** The contract version this package describes. Plugins say which version they were built for. */
-export const CONTRACT_VERSION = 7;
+export const CONTRACT_VERSION = 8;
 
 /** Something that can be stopped or removed (same shape as VS Code's Disposable). */
 export interface Disposable {
@@ -131,6 +131,91 @@ export interface Plugin {
   detect(project: ProjectInfo): Detection | undefined | Promise<Detection | undefined>;
   readers?: Reader[];
   maps?: MapDefinition[];
+  /** Contract 8: panels the plugin adds to Preview (the running app), e.g. React's App panel. */
+  previewPanels?: PreviewPanel[];
+}
+
+// ---------------------------------------------------------------------------
+// Contract 8: Preview panels
+// ---------------------------------------------------------------------------
+
+/**
+ * A panel in Preview, made of two scripts that talk to each other through the shell:
+ *   - `page` runs inside the app's page, before the app's own code (so it can hook in early). It gets
+ *     `window.visualEditor` (PreviewPageApi).
+ *   - `panel` runs in Visual Editor's window and draws the panel. It calls
+ *     `VisualEditor.definePanel('<plugin id>/<panel id>', (api: PreviewPanelApi) => { … })`.
+ * Both are plain scripts (bundle them as an IIFE). The panel shows only for projects the plugin detected.
+ * The panel shares its window with the shell: give every class name and element id your own prefix (e.g. "ra-"), so
+ * the shell's styles never land on your elements, nor yours on the shell's.
+ */
+export interface PreviewPanel {
+  /** Short and unique within the plugin, e.g. "app". */
+  id: string;
+  /** Its name, shown when hovering its tab, e.g. "App: components, stores, route, storage". */
+  name: string;
+  /** Its tab's icon: SVG drawing for a 24×24 box, in lines (stroke), like the shell's own icons. */
+  icon: string;
+  /** The script for the app's page. */
+  page: string;
+  /** The script for the panel. */
+  panel: string;
+  /** Facts about the project the panel needs (read in VS Code, sent to the panel as `api.facts`), e.g. where its stores are. */
+  facts?(project: ProjectInfo, items: Item[]): unknown | Promise<unknown>;
+}
+
+/** What `window.visualEditor` gives a panel's page script. Messages are on a channel: "<plugin id>/<panel id>". */
+export interface PreviewPageApi {
+  /** Messages from the panel. */
+  on(channel: string, handler: (data: unknown) => void): void;
+  /** A message to the panel (made of plain values: use `copy` for anything else). */
+  send(channel: string, data: unknown): void;
+  /**
+   * Any value as plain values the panel can show (objects to a depth, functions and elements described, loops cut).
+   * `replace` may turn a value into something else first (return undefined to leave it).
+   */
+  copy(value: unknown, options?: { depth?: number; replace?: (value: unknown) => unknown }): unknown;
+  /** Outlines elements in the page with a label (none: removes the outline). */
+  highlight(elements: Element[] | null, label?: string): void;
+  /** The developer picked an element with Preview's picker (one picker for every panel). */
+  onPicked(handler: (element: Element) => void): void;
+}
+
+/** What a panel's script gets, in Visual Editor's window. */
+export interface PreviewPanelApi {
+  /** The panel's own element: fill it. */
+  body: HTMLElement;
+  /** The facts PreviewPanel.facts gave (and again when they change: onFacts). */
+  facts: unknown;
+  onFacts(handler: (facts: unknown) => void): void;
+  /** A message to the page script. */
+  send(data: unknown): void;
+  /** Messages from the page script. */
+  on(handler: (data: unknown) => void): void;
+  /** The page (re)loaded: its page script runs anew. */
+  onPage(handler: (url: string) => void): void;
+  /** The panel's tab was opened. */
+  onShow(handler: () => void): void;
+  /** Loads the app's page again (e.g. when the page script doesn't answer: the page was there before the panel). */
+  reloadPage(): void;
+  /** Changes the number on the panel's tab. */
+  setCount(count: number | undefined): void;
+  /** Opens a place in the code the browser ran (a URL, line and column), in the developer's own file (by source maps). */
+  openSource(url: string, line: number, column: number): void;
+  /** Opens a project file (relative to the project, or absolute) at a line. */
+  openFile(path: string, line?: number): void;
+  /** Opens the code of a card on the map, found by its name (and kind), e.g. a component. */
+  openItem(label: string, kind?: string): void;
+  /** The shell's look, so plugin panels match it: buttons (icon only, name on hover) and values. */
+  ui: {
+    el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K];
+    /** An icon button: `icon` is a shell icon's name, or SVG drawing like PreviewPanel.icon. */
+    button(icon: string, name: string, options?: { cls?: string }): HTMLButtonElement;
+    /** A row of buttons that never wraps (it scrolls sideways). */
+    tray(row: HTMLElement): HTMLElement;
+    /** A value made by PreviewPageApi.copy, shown like the Console shows values (objects open like a tree). */
+    value(value: unknown, key?: string): Node;
+  };
 }
 
 // ---------------------------------------------------------------------------

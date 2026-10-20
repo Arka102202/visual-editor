@@ -26,6 +26,8 @@ export class AppProxies implements vscode.Disposable {
   constructor(
     private readonly log: vscode.OutputChannel,
     private readonly secrets?: vscode.SecretStorage,
+    /** Plugins' page scripts for a project (their Preview panels'): key ("react/app") → code. */
+    private readonly pageScripts?: (root: string) => { key: string; code: string }[],
   ) {}
 
   /** Each call (or page) a project's app makes, as it's recorded. */
@@ -227,7 +229,7 @@ export class AppProxies implements vscode.Disposable {
     let entry = this.running.get(root);
     if (!entry) {
       const dev = new DevServer(root);
-      const proxy = new AppProxy(() => dev.ensure(), { fakes: () => this.fakesOf(root), headers: () => this.headers.get(root) ?? {}, contracts: () => this.contracts.get(root)?.contracts });
+      const proxy = new AppProxy(() => dev.ensure(), { fakes: () => this.fakesOf(root), headers: () => this.headers.get(root) ?? {}, contracts: () => this.contracts.get(root)?.contracts, pageScripts: () => this.pageScripts?.(root) ?? [] });
       proxy.onRecord((r) => {
         this.write(r);
         for (const l of this.callListeners) l(root, r);

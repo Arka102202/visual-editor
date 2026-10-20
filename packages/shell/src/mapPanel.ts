@@ -4,12 +4,12 @@
 import * as vscode from 'vscode';
 import type { MapDefinition } from '@visual-editor/contract';
 import { webviewPage } from './webviewPage';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { cardMarks, type OutsideChanges } from './changes';
 import type { CurrentProject } from './currentProject';
 import { layoutMap, type Arrange } from './layout';
 import { cardColours, lineColours, usedBy } from './styles';
-import type { CardLines, FromMap, MapMeasure, ShowMap, ToMap } from './mapMessages';
+import type { CardLines, FromMap, MapMeasure, PluginPanel, ShowMap, ToMap } from './mapMessages';
 import type { ProjectIndex } from './projectIndex';
 import type { Review } from './review';
 import { forCard } from './memory';
@@ -34,6 +34,9 @@ export class MapPanel {
   private floating = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private readonly subscriptions: vscode.Disposable[] = [];
+  /** The plugin panels last sent (to send again only when they change), and what they were made from. */
+  private panelsSent = '';
+  private panelsFrom: unknown;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -136,6 +139,9 @@ export class MapPanel {
       this.ready = true;
       void this.panel?.webview.postMessage({ type: 'layouts', layouts: this.layouts?.get('panelLayouts') ?? {} } satisfies ToMap);
       void this.sendTheme();
+      this.panelsSent = '';
+      this.panelsFrom = undefined;
+      void this.sendPanels();
       this.send();
     } else if (m.type === 'choose') {
       this.current.choose(m.root);
@@ -182,6 +188,13 @@ export class MapPanel {
       else if (m.type === 'mapType') void p.mapType(root, m.operation, m.typeName);
       else if (m.type === 'fakeFromContract') void p.fakeFromContract(root, m.operations, m.status);
       else void p.contractExample(root, m.ref).then((r) => this.panel?.webview.postMessage({ type: 'contractExample', ref: m.ref, ...r } satisfies ToMap));
+    } else if (m.type === 'openItem') {
+      const state = this.current.get();
+      const found = state?.items.filter((i) => i.label === m.label && i.source && (!m.kind || i.kind === m.kind || i.map === m.kind)) ?? [];
+      const item = found[0] ?? state?.items.find((i) => i.label === m.label && i.source);
+      if (!state || !item?.source) return void vscode.window.showInformationMessage(`${m.label} isn't on the map: it may come from a library.`);
+      const line = Math.max(0, (item.source.line ?? 1) - 1);
+      void vscode.window.showTextDocument(vscode.Uri.file(join(state.project.root, item.source.path)), { selection: new vscode.Range(line, 0, line, 0), viewColumn: vscode.ViewColumn.Beside });
     } else if (m.type === 'openRule') {
       const root = this.current.get()?.project.root;
       if (root) void this.proxies?.openRule(root, m.source, m.selector);
@@ -202,7 +215,7 @@ export class MapPanel {
       const root = this.current.get()?.project.root;
       if (!root) return;
       const line = Math.max(0, (m.line ?? 1) - 1);
-      void vscode.window.showTextDocument(vscode.Uri.file(join(root, m.path)), {
+      void vscode.window.showTextDocument(vscode.Uri.file(isAbsolute(m.path) ? m.path : join(root, m.path)), {
         selection: new vscode.Range(line, 0, line, 0),
         viewColumn: vscode.ViewColumn.Beside,
       });
@@ -240,6 +253,31 @@ export class MapPanel {
     const item = state?.items.find((i) => i.id === this.card);
     if (!state || !item) return;
     void this.panel?.webview.postMessage({ type: 'card', id: item.id, entries: forCard(this.memory.entries(state.project.root), item) } satisfies ToMap);
+  }
+
+  /** Plugins' Preview panels for the shown project, with their facts (sent again only when something changed). */
+  private async sendPanels() {
+    const state = this.current.get();
+    if (!this.panel || !this.ready) return;
+    // Worked out again only when the project's cards were read again (or another project is shown).
+    if (state && this.panelsFrom === state.items) return;
+    this.panelsFrom = state?.items;
+    const panels: PluginPanel[] = [];
+    for (const { plugin } of state?.detected ?? []) {
+      for (const p of plugin.previewPanels ?? []) {
+        let facts: unknown;
+        try {
+          facts = await p.facts?.(state!.project, state!.items.filter((i) => i.id.startsWith(`${plugin.id}:`)));
+        } catch (e) {
+          facts = { error: e instanceof Error ? e.message : String(e) };
+        }
+        panels.push({ key: `${plugin.id}/${p.id}`, name: p.name, icon: p.icon, code: p.panel, facts });
+      }
+    }
+    const sig = JSON.stringify(panels.map((p) => [p.key, p.name, p.icon, p.code.length, p.facts]));
+    if (sig === this.panelsSent) return;
+    this.panelsSent = sig;
+    void this.panel.webview.postMessage({ type: 'panels', panels } satisfies ToMap);
   }
 
   /** The calls so far (when asked), the project's fakes and its contracts, for the Network panel. */
@@ -309,6 +347,7 @@ export class MapPanel {
   /** Changes come in bursts; redraw once they settle. */
   private update() {
     if (!this.panel || !this.ready) return;
+    void this.sendPanels();
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => this.send(), 80);
   }
