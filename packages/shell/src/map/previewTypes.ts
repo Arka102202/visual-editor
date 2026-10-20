@@ -2,4 +2,4 @@
 
 import type { ToMap } from '../mapMessages';
 
-export type CardNetwork = Extract<ToMap, { type: 'calls' } | { type: 'fakes' }>;
+export type CardNetwork = Extract<ToMap, { type: 'calls' } | { type: 'fakes' } | { type: 'contracts' } | { type: 'contractExample' }>;

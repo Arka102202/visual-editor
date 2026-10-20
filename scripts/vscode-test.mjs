@@ -5,6 +5,9 @@
 //   VSCODE_PATH=…    VS Code elsewhere
 //   TEST=look PROJECT=<folder> [PLUGINS=react,hello] [CARD=<label>]
 //                    open a real project instead and take screenshots of its map (changes nothing)
+//   TEST=preview PROJECT=<folder> DEBUG_PORT=<port>
+//                    open a real project's app in Preview and hold it open, to be driven through Chrome's debugging
+//                    protocol on that port (the test's own window only); <requests>/stop ends it
 
 import * as esbuild from 'esbuild';
 import { execFileSync, spawn } from 'node:child_process';
@@ -32,6 +35,7 @@ if (shots) mkdirSync(shots, { recursive: true });
 const code = process.env.VSCODE_PATH ?? '/Applications/Visual Studio Code.app/Contents/MacOS/Electron';
 const requests = join(temp, 'requests');
 mkdirSync(requests);
+if (process.env.DEBUG_PORT) console.log(`requests: ${requests}`);
 const env = {
   ...process.env,
   VISUAL_EDITOR_TEST: '1',
@@ -57,6 +61,7 @@ const child = spawn(
     '--skip-release-notes',
     '--disable-telemetry',
     '--new-window',
+    ...(process.env.DEBUG_PORT ? [`--remote-debugging-port=${process.env.DEBUG_PORT}`] : []),
   ],
   { env, stdio: ['ignore', 'pipe', 'pipe'] },
 );

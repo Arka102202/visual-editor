@@ -3,7 +3,7 @@
 //     the dev server's live-reload socket passes through too;
 //   - calls the page makes to other addresses come as /__ve/x/<origin>/<path> (the inspector sends them here) and go
 //     on to that address;
-//   - every call the page makes is recorded (and, in later steps, can be faked).
+//   - every call the page makes is recorded, can be faked (fakes.ts), and its answer is checked against the contract.
 // It listens on this computer only. No VS Code APIs, so it can be tested.
 
 import { createServer, request as httpRequest, Agent as HttpAgent, type IncomingMessage, type Server, type ServerResponse, type IncomingHttpHeaders } from 'node:http';
@@ -11,6 +11,7 @@ import { request as httpsRequest, Agent as HttpsAgent } from 'node:https';
 import { connect, type Socket } from 'node:net';
 import { CALL_HEADER, INSPECTOR, VE_PATH } from './inspector';
 import { patch, type Decision, type Fakes } from './fakes';
+import type { Contracts } from '../contracts/contracts';
 
 /** One call the page made (or a file it loaded), as recorded. */
 export interface Recorded {
@@ -32,6 +33,8 @@ export interface Recorded {
   error?: string;
   /** The fake that answered (or changed the answer): the endpoint's id and the case's name. */
   faked?: { endpoint: string; case: string };
+  /** The contract the call is in: its operation, where it's from, and how the answer differs from it (none: it fits). */
+  contract?: { operation: string; source: string; issues: string[] };
 }
 
 /** How much of a body is kept. */
@@ -62,6 +65,8 @@ export class AppProxy {
       fakes?: () => Fakes | undefined;
       /** Headers added to every call the page makes (a token, a cookie), kept out of the project's files. */
       headers?: () => Record<string, string>;
+      /** The project's contracts (answers are checked against them). */
+      contracts?: () => Contracts | undefined;
     } = {},
   ) {}
 
@@ -142,7 +147,7 @@ export class AppProxy {
     const body = Buffer.concat(chunks);
     if (record.kind === 'api' && body.length) record.requestBody = text(body);
     // A fake may answer it, change the answer, or fail it.
-    const decision: Decision = record.kind === 'api' ? (this.options.fakes?.()?.decide(record.method, target.pathname, routed ? target.origin : undefined) ?? { kind: 'pass' }) : { kind: 'pass' };
+    const decision: Decision = record.kind === 'api' ? (this.options.fakes?.()?.decide(record.method, target.pathname, routed ? target.origin : undefined, record.requestBody) ?? { kind: 'pass' }) : { kind: 'pass' };
     if (decision.kind !== 'pass') record.faked = { endpoint: decision.endpoint.id, case: decision.name };
     if (decision.kind === 'answer' || decision.kind === 'fail') {
       if (decision.delay) await new Promise((r) => setTimeout(r, decision.delay));
@@ -244,9 +249,28 @@ export class AppProxy {
   }
 
   private keep(record: Recorded) {
+    if (record.kind === 'api' && record.status !== undefined && !record.error) this.checkContract(record);
     this.records.push(record);
     if (this.records.length > MAX_RECORDS) this.records.splice(0, this.records.length - MAX_RECORDS);
     for (const l of this.listeners) l(record);
+  }
+
+  /** How a JSON answer differs from the contract (when a contract has the call). */
+  private checkContract(record: Recorded) {
+    const contracts = this.options.contracts?.();
+    if (!contracts?.list.length || !/json/.test(record.responseHeaders?.['content-type'] ?? '')) return;
+    let body: unknown;
+    try {
+      body = JSON.parse(record.responseBody ?? '');
+    } catch {
+      return;
+    }
+    try {
+      const result = contracts.check(record.method, new URL(record.url, 'http://x').pathname, record.status!, body, record.requestBody);
+      if (result) record.contract = result;
+    } catch {
+      // A contract that can't check this answer: no result.
+    }
   }
 
   /** A socket (the dev server's live reload): passed straight through to the dev server. */
