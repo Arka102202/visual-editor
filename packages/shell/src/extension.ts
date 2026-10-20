@@ -11,6 +11,7 @@ import { findWorkspace, isIgnoredPath, isProjectFile } from './projects';
 import { basename, relative, sep } from 'node:path';
 import { CurrentProject } from './currentProject';
 import { MapPanel } from './mapPanel';
+import { AppProxies } from './proxy/appProxies';
 import { OutsideChanges } from './changes';
 import { Review } from './review';
 import { askEntry, MemoryView, ProjectMemory } from './memoryView';
@@ -22,6 +23,9 @@ import { vscodeFiles } from './vscodeFiles';
 export function activate(context: vscode.ExtensionContext): ShellApi {
   const registry = new PluginRegistry();
   const log = vscode.window.createOutputChannel('Visual Editor');
+  // Each project's app through Visual Editor's proxy (its calls seen, and later faked).
+  const proxies = new AppProxies(log);
+  context.subscriptions.push(proxies);
 
   // The side panel: which plugins are installed, and any that couldn't be used.
   const pluginsView = new PluginsView(registry);
@@ -140,6 +144,18 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
   context.subscriptions.push(
     map,
     vscode.commands.registerCommand('visualEditor.openMap', () => map.show()),
+    vscode.commands.registerCommand('visualEditor.openApp', async () => {
+      const root = current.get()?.project.root;
+      if (!root) return void vscode.window.showInformationMessage('Open a folder with a project first.');
+      try {
+        const url = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Starting the app through Visual Editor' }, (p) =>
+          proxies.open(root, (text) => p.report({ message: text })),
+        );
+        await vscode.env.openExternal(vscode.Uri.parse(url));
+      } catch (e) {
+        void vscode.window.showErrorMessage(`Couldn't start the app: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }),
     vscode.commands.registerCommand('visualEditor.openReview', (proposal?: string) => review.show(typeof proposal === 'string' ? proposal : undefined)),
     vscode.commands.registerCommand('visualEditor.tryProposal', () => review.tryExample()),
     ...(['rule', 'decision'] as const).map((kind) =>

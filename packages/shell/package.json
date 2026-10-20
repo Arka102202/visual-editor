@@ -55,6 +55,12 @@
         "icon": "$(type-hierarchy-sub)"
       },
       {
+        "command": "visualEditor.openApp",
+        "title": "Open the App through Visual Editor",
+        "category": "Visual Editor",
+        "icon": "$(globe)"
+      },
+      {
         "command": "visualEditor.openReview",
         "title": "Open Review",
         "category": "Visual Editor",
