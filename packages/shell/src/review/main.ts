@@ -142,9 +142,6 @@ function drawDetail(item: ReviewItem) {
     undo.disabled = item.conflicts.length > 0;
     actions.append(undo);
   }
-  for (const p of item.previews) {
-    actions.append(button('preview', `Preview ${p.label}: before and after this change, side by side`, undefined, { type: 'preview', id: item.id, item: p.id }));
-  }
   if (actions.childElementCount) detail.append(actions);
 
   for (const f of item.files) detail.append(drawFile(f));

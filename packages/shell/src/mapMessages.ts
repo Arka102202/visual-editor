@@ -1,6 +1,6 @@
 // What the shell and the map page say to each other. Shared by both sides, so they can't drift apart.
 
-import type { Item, Need } from '@visual-editor/contract';
+import type { Item } from '@visual-editor/contract';
 import type { Mark } from './changes';
 import type { Arrange, Layout } from './layout';
 import type { MemoryEntry } from './memory';
@@ -22,24 +22,7 @@ export type ToMap =
   | { type: 'focus'; id: string }
   | { type: 'measure' }
   /** The code colours of the theme on now (type, string, keyword…), for text shown the way the editor colours it. */
-  | { type: 'theme'; tokens: Record<string, string> }
-  | CardNeeds
-  /** Where the card's drawing is (a page on this computer), or why it can't be drawn. */
-  | { type: 'drawing'; id: string; url?: string; html?: string; error?: string };
-
-/**
- * What a card needs to be drawn (worked out by its plugin from the files), and the values the developer gave for
- * some of them (kept for next time), for the Preview window.
- */
-export interface CardNeeds {
-  type: 'needs';
-  id: string;
-  needs: Need[];
-  /** The developer's own values, by need id: they replace the plugin's examples. */
-  values: Record<string, unknown>;
-  /** Why the needs couldn't be worked out. */
-  error?: string;
-}
+  | { type: 'theme'; tokens: Record<string, string> };
 
 /** Every line that joins one card to another, on any map (for Focus's side panel). */
 export interface CardLines {
@@ -77,10 +60,6 @@ export interface CardMemory {
   id: string;
   /** Notes, rules and decisions about it, and changes to it, newest first. */
   entries: MemoryEntry[];
-  /** A plugin can show how it looks. */
-  canPreview: boolean;
-  /** How many other versions of it there are to compare (contract 5). */
-  versions: number;
 }
 
 export type ShowMap = {
@@ -129,14 +108,7 @@ export type FromMap =
   | { type: 'lines'; id: string }
   /** Show a card on its own map (switching maps), chosen and in view. */
   | { type: 'goTo'; id: string }
-  /** What a card needs to be drawn is wanted (the Preview window opened). */
-  | { type: 'needs'; id: string }
-  /** Every required value is there: the card's drawing is wanted. */
-  | { type: 'draw'; id: string }
-  /** The developer gave a value for one of a card's needs (undefined: back to the plugin's example). */
-  | { type: 'setValue'; id: string; need: string; value?: unknown }
   | { type: 'addNote'; id: string }
-  | { type: 'preview'; id: string; versions?: boolean }
   | { type: 'clearChanged' }
   /** Move the tab into its own floating window, or back. */
   | { type: 'window' }
