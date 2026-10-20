@@ -25,7 +25,11 @@ export type ToMap =
   /** The code colours of the theme on now (type, string, keyword…), for text shown the way the editor colours it. */
   | { type: 'theme'; tokens: Record<string, string> }
   /** How the developer arranged each window's side panels (by window). */
-  | { type: 'layouts'; layouts: Record<string, PanelLayout> };
+  | { type: 'layouts'; layouts: Record<string, PanelLayout> }
+  /** The app's address through Visual Editor's proxy (for Preview), how starting it goes, or why it can't start. */
+  | { type: 'app'; url?: string; progress?: string; error?: string }
+  /** Open Preview (from the command): at this address of the app. */
+  | { type: 'preview'; path?: string };
 
 /** Every line that joins one card to another, on any map (for Focus's side panel). */
 export interface CardLines {
@@ -109,6 +113,12 @@ export type FromMap =
   | { type: 'card'; id?: string }
   /** Every line that joins this card to another, on any map, is wanted. */
   | { type: 'lines'; id: string }
+  /** Preview wants the app's address (the proxy and dev server start when needed). */
+  | { type: 'app' }
+  /** Open the developer's own file for a place in the code the browser runs (a console message's). */
+  | { type: 'openSource'; url: string; line: number; column: number }
+  /** Open an address in the developer's own browser. */
+  | { type: 'openExternal'; url: string }
   /** A window's side panels were arranged: keep it. */
   | { type: 'layout'; key: string; layout: PanelLayout }
   /** Show a card on its own map (switching maps), chosen and in view. */

@@ -140,10 +140,11 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
   );
 
   // The map, and choosing which project it shows.
-  const map = new MapPanel(context.extensionUri, index, current, review, changes, memory, context.globalState);
+  const map = new MapPanel(context.extensionUri, index, current, review, changes, memory, context.globalState, proxies);
   context.subscriptions.push(
     map,
     vscode.commands.registerCommand('visualEditor.openMap', () => map.show()),
+    vscode.commands.registerCommand('visualEditor.previewApp', () => map.preview()),
     vscode.commands.registerCommand('visualEditor.openApp', async () => {
       const root = current.get()?.project.root;
       if (!root) return void vscode.window.showInformationMessage('Open a folder with a project first.');

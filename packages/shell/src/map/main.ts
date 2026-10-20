@@ -13,6 +13,8 @@ import { iconButton, installTips, mapIcon, setIcon, tray, type Icon } from '../u
 import { TYPE_CSS, typeText, useThemeTokens } from '../ui/typeText';
 import { WINDOW_CSS } from '../ui/windows';
 import { Frame, FRAME_CSS, type Layout as PanelLayout, type LayoutStore } from '../ui/frame';
+import { PREVIEW_CSS, PreviewWindow } from './preview';
+import { CONSOLE_CSS } from './consolePanel';
 import type { Tone } from '../styles';
 
 declare function acquireVsCodeApi(): { postMessage(message: FromMap): void };
@@ -139,6 +141,8 @@ addStyles(`
 ${TYPE_CSS}
 ${WINDOW_CSS}
 ${FRAME_CSS}
+${PREVIEW_CSS}
+${CONSOLE_CSS}
 `);
 
 // The page: a bar on top, the stage below, and a message for when there's nothing to draw.
@@ -264,6 +268,9 @@ function showCard(m: CardMemory) {
     open.addEventListener('click', () => vscode.postMessage({ type: 'open', path: item.source!.path, line: item.source!.line }));
     buttons.append(open);
   }
+  const look = iconButton('preview', item.kind === 'route' ? `Preview: open ${item.label} in the running app` : 'Preview: open the running app', { cls: 'primary' });
+  look.addEventListener('click', () => openPreview(item));
+  buttons.prepend(look);
   const inOut = iconButton('focus', 'Focus: only what comes into this card and what goes out of it (its immediate neighbours)');
   inOut.addEventListener('click', () => openNeighbours(item.id));
   buttons.append(inOut);
@@ -372,7 +379,20 @@ const nbOut = iconButton('zoomOut', 'Zoom out');
 const nbIn = iconButton('zoomIn', 'Zoom in');
 const nbFit = iconButton('fitMap', 'Fit: show all of it');
 const nbOnMap = iconButton('onMap', 'Show on map: close this and go to the card on the map');
-focus.addTools(nbZoom, nbOut, nbIn, nbFit, nbOnMap);
+const nbPreview = iconButton('preview', 'Preview: open the running app (at this page, for a page card)');
+focus.addTools(nbZoom, nbOut, nbIn, nbFit, nbPreview, nbOnMap);
+nbPreview.addEventListener('click', () => {
+  const item = nbId ? mv.placedById.get(nbId)?.item : undefined;
+  openPreview(item);
+});
+
+/** The running app, over everything (opened from a card, Focus, or the Preview command). */
+const preview = new PreviewWindow({ post: (m) => vscode.postMessage(m), store: layoutStore });
+
+/** Opens Preview: a page card at its own address (its :params left to fill in), anything else where it was. */
+function openPreview(item?: Item) {
+  preview.open(item?.kind === 'route' && item.label.startsWith('/') ? item.label : undefined);
+}
 const nbStage = el('div', 'nb-stage');
 focus.main.append(nbStage);
 let nbId: string | undefined;
@@ -820,11 +840,16 @@ changedBadge.addEventListener('click', () => vscode.postMessage({ type: 'clearCh
 picker.addEventListener('change', () => vscode.postMessage({ type: 'choose', root: picker.value }));
 
 window.addEventListener('message', (e: MessageEvent<ToMap>) => {
+  // The app in Preview talks through the inspector the proxy adds to its pages.
+  const fromPage = e.data as unknown as { source?: string } | undefined;
+  if (fromPage?.source === 've-inspector') return preview.fromPage(e.data as unknown as Record<string, unknown>, e.source);
   if (e.data?.type === 'show') show(e.data);
   else if (e.data?.type === 'card') showCard(e.data);
   else if (e.data?.type === 'lines') showLines(e.data);
   else if (e.data?.type === 'theme') useThemeTokens(e.data.tokens);
   else if (e.data?.type === 'layouts') layouts = { ...e.data.layouts, ...layouts };
+  else if (e.data?.type === 'app') preview.receiveApp(e.data);
+  else if (e.data?.type === 'preview') preview.open(e.data.path);
   else if (e.data?.type === 'focus') focusCard(e.data.id);
   else if (e.data?.type === 'measure') void measure();
 });

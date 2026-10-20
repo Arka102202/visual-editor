@@ -15,6 +15,7 @@ import type { Review } from './review';
 import { forCard } from './memory';
 import type { ProjectMemory } from './memoryView';
 import { onThemeChange, themeTokenColours } from './themeColours';
+import type { AppProxies } from './proxy/appProxies';
 
 export class MapPanel {
   private panel: vscode.WebviewPanel | undefined;
@@ -43,6 +44,8 @@ export class MapPanel {
     private readonly memory: ProjectMemory,
     /** Where the windows' panel layouts are kept (for every project: it's how the developer likes to work). */
     private readonly layouts?: vscode.Memento,
+    /** Each project's app through the proxy (for Preview). */
+    private readonly proxies?: AppProxies,
   ) {
     this.subscriptions.push(
       index.onChange(() => this.update()),
@@ -67,7 +70,8 @@ export class MapPanel {
       localResourceRoots: [dist],
     });
     panel.iconPath = vscode.Uri.joinPath(this.extensionUri, 'media', 'icon.svg');
-    panel.webview.html = webviewPage(panel.webview, vscode.Uri.joinPath(dist, 'map.js'), 'Visual Editor');
+    // Preview shows the app through Visual Editor's proxy, on this computer.
+    panel.webview.html = webviewPage(panel.webview, vscode.Uri.joinPath(dist, 'map.js'), 'Visual Editor', 'frame-src http://127.0.0.1:* http://localhost:*;');
     panel.webview.onDidReceiveMessage((m: FromMap) => this.receive(m), undefined, this.subscriptions);
     panel.onDidDispose(() => {
       this.panel = undefined;
@@ -131,6 +135,13 @@ export class MapPanel {
       void this.sendCard();
     } else if (m.type === 'lines') {
       this.sendLines(m.id);
+    } else if (m.type === 'app') {
+      void this.sendApp();
+    } else if (m.type === 'openSource') {
+      const root = this.current.get()?.project.root;
+      if (root) void this.proxies?.openSource(root, m.url, m.line, m.column);
+    } else if (m.type === 'openExternal') {
+      if (/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//.test(m.url)) void vscode.env.openExternal(vscode.Uri.parse(m.url));
     } else if (m.type === 'layout') {
       void this.layouts?.update('panelLayouts', { ...(this.layouts.get<Record<string, unknown>>('panelLayouts') ?? {}), [m.key]: m.layout });
     } else if (m.type === 'goTo') {
@@ -184,6 +195,28 @@ export class MapPanel {
     const item = state?.items.find((i) => i.id === this.card);
     if (!state || !item) return;
     void this.panel?.webview.postMessage({ type: 'card', id: item.id, entries: forCard(this.memory.entries(state.project.root), item) } satisfies ToMap);
+  }
+
+  /** The app's address through the proxy, for Preview (starting it, and its dev server, when needed). */
+  private async sendApp() {
+    const root = this.current.get()?.project.root;
+    const post = (m: ToMap) => void this.panel?.webview.postMessage(m);
+    if (!root) return post({ type: 'app', error: 'Open a folder with a project first.' });
+    if (!this.proxies) return post({ type: 'app', error: 'The app can’t be run from here.' });
+    try {
+      const url = await this.proxies.open(root, (text) => text && post({ type: 'app', progress: text }));
+      post({ type: 'app', url });
+    } catch (e) {
+      post({ type: 'app', error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  /** Opens the map with Preview open (at an address of the app, or where it was). */
+  preview(path?: string) {
+    this.show();
+    const send = () => void this.panel?.webview.postMessage({ type: 'preview', ...(path ? { path } : {}) } satisfies ToMap);
+    if (this.ready) send();
+    else setTimeout(send, 800);
   }
 
   /** The code colours of the theme on now, so the page colours types the way the editor does. */

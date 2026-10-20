@@ -74,7 +74,7 @@ export function get(url: string, ms = 1500): Promise<{ status: number; body: str
   const host = u.hostname.replace(/^\[|\]$/g, '');
   return new Promise((resolve) => {
     const socket = connect({ host, port: Number(u.port) || 80 });
-    let data = '';
+    const parts: Buffer[] = [];
     const done = (r: { status: number; body: string } | undefined) => {
       socket.destroy();
       resolve(r);
@@ -82,12 +82,31 @@ export function get(url: string, ms = 1500): Promise<{ status: number; body: str
     socket.setTimeout(ms, () => done(undefined));
     socket.on('error', () => done(undefined));
     socket.on('connect', () => socket.write(`GET ${u.pathname}${u.search} HTTP/1.1\r\nHost: ${u.host}\r\nAccept: */*\r\nConnection: close\r\n\r\n`));
-    socket.on('data', (d) => (data += String(d)));
+    socket.on('data', (d: Buffer) => parts.push(d));
     socket.on('end', () => {
-      const status = Number(data.match(/^HTTP\/1\.[01] (\d{3})/)?.[1] ?? 0);
-      done(status ? { status, body: data.slice(data.indexOf('\r\n\r\n') + 4) } : undefined);
+      const data = Buffer.concat(parts);
+      const split = data.indexOf('\r\n\r\n');
+      const head = data.subarray(0, split < 0 ? data.length : split).toString('latin1');
+      const status = Number(head.match(/^HTTP\/1\.[01] (\d{3})/)?.[1] ?? 0);
+      const body = split < 0 ? Buffer.alloc(0) : data.subarray(split + 4);
+      done(status ? { status, body: (/^transfer-encoding:\s*chunked/im.test(head) ? unchunk(body) : body).toString('utf8') } : undefined);
     });
   });
+}
+
+/** A body sent in chunks ("chunked"), joined (sizes count bytes). */
+function unchunk(body: Buffer): Buffer {
+  const out: Buffer[] = [];
+  let at = 0;
+  while (at < body.length) {
+    const end = body.indexOf('\r\n', at);
+    if (end < 0) break;
+    const size = parseInt(body.subarray(at, end).toString('latin1'), 16);
+    if (!size) break;
+    out.push(body.subarray(end + 2, end + 2 + size));
+    at = end + 2 + size + 2;
+  }
+  return Buffer.concat(out);
 }
 
 /** Whether nothing listens on `port` (on every address form). */
