@@ -2,12 +2,8 @@
 // components, pages and API calls, and gives the shell three maps.
 
 import { CONTRACT_VERSION, type MapDefinition, type Plugin } from '@visual-editor/contract';
-import { COMPONENT_PREFIX, reactPackage, SHARED_FROM_WORDS, wantsFile } from './cards';
+import { reactPackage, SHARED_FROM_WORDS, wantsFile } from './cards';
 import { readingWorker } from './workerClient';
-import { ReactDrawings } from './preview/drawings';
-
-/** Components drawn by the project's dev server (one set per window: it keeps the servers it started). */
-export const drawings = new ReactDrawings();
 
 export * from './cards';
 
@@ -54,24 +50,12 @@ export const reactPlugin: Plugin = {
     return pkg ? { reason: `${pkg} is in package.json` } : undefined;
   },
   maps: MAPS,
-  previews: [
-    {
-      id: 'react-components',
-      wants: (item) => item.id.startsWith(COMPONENT_PREFIX),
-      // What a component needs to be drawn: worked out in the reading worker from the files alone.
-      needs: (item, { project }) => readingWorker.needs(project.root, item.id.slice(COMPONENT_PREFIX.length)),
-      // The developer's own values, kept next to each component's file.
-      keep: (item, need, value, { project }) => readingWorker.keep(project.root, item.id.slice(COMPONENT_PREFIX.length), need, value),
-      // Drawn by the project's own dev server from static copies, with the values the Preview window posts in.
-      render: ({ item, project }) => drawings.render(item, project),
-    },
-  ],
   readers: [
     {
       id: 'react',
       wants: wantsFile,
       // Read in a worker thread (in VS Code), so a big project never freezes the editor.
-      read: async (files, project) => (await readingWorker.read(files, project.root)).result,
+      read: async (files) => (await readingWorker.read(files)).result,
     },
   ],
 };

@@ -5,9 +5,8 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
-import type { Need, ReadResult, SourceFile } from '@visual-editor/contract';
+import type { ReadResult, SourceFile } from '@visual-editor/contract';
 import { readModel, toMaps } from './cards';
-import { PreviewReader, type DrawSpec } from './preview/reader';
 import type { FeModel } from './read/model';
 
 /** Most memory the reading worker may use. */
@@ -18,28 +17,18 @@ export class ReadingWorker {
   private next = 1;
   private readonly waiting = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private readonly file = join(__dirname, 'worker.js');
-  /** Without a worker (tests): each project's last reading, for needs. */
-  private readonly here = new Map<string, PreviewReader>();
 
   /** Whether there's a worker to use (in VS Code; not in tests). */
   get available(): boolean {
     return !process.env.VISUAL_EDITOR_NO_WORKER && existsSync(this.file) && __filename.endsWith('extension.js');
   }
 
-  /** Reads a project's files (`root`: its folder, kept for needs). */
-  read(files: SourceFile[], root?: string): Promise<{ model: FeModel; result: ReadResult }> {
+  read(files: SourceFile[]): Promise<{ model: FeModel; result: ReadResult }> {
     if (!this.available) {
       const model = readModel(files);
-      if (root) this.here.set(root, new PreviewReader(model, files, root));
       return Promise.resolve({ model, result: toMaps(model) });
     }
-    return this.ask({ read: { files, root } }) as Promise<{ model: FeModel; result: ReadResult }>;
-  }
-
-  /** What a component (its model id) needs to be drawn, from the project's last reading. */
-  needs(root: string, component: string): Promise<Need[]> {
-    if (!this.available) return Promise.resolve(this.here.get(root)?.needsOf(component) ?? []);
-    return this.ask({ needs: { root, component } }) as Promise<Need[]>;
+    return this.ask(files) as Promise<{ model: FeModel; result: ReadResult }>;
   }
 
   stop() {
@@ -47,24 +36,12 @@ export class ReadingWorker {
     this.worker = undefined;
   }
 
-  /** How to draw a component (its import, route and context objects), from the project's last reading. */
-  async drawSpec(root: string, component: string): Promise<DrawSpec | undefined> {
-    if (!this.available) return this.here.get(root)?.drawSpec(component);
-    return ((await this.ask({ draw: { root, component } })) as DrawSpec | null) ?? undefined;
-  }
-
-  /** Keeps the developer's own value for one of a component's needs, in its file's `.preview.json`. */
-  async keep(root: string, component: string, need: string, value: unknown): Promise<void> {
-    if (!this.available) return this.here.get(root)?.keep(component, need, value);
-    await this.ask({ keep: { root, component, need, value } });
-  }
-
-  private ask(question: { read: { files: SourceFile[]; root?: string } } | { needs: { root: string; component: string } } | { draw: { root: string; component: string } } | { keep: { root: string; component: string; need: string; value: unknown } }): Promise<unknown> {
+  private ask(files: SourceFile[]): Promise<unknown> {
     const worker = this.start();
     const id = this.next++;
     return new Promise((resolve, reject) => {
       this.waiting.set(id, { resolve, reject });
-      worker.postMessage({ id, ...question });
+      worker.postMessage({ id, files });
     });
   }
 
