@@ -14,7 +14,9 @@ const CONFIG = /(^|\/)(tsconfig[\w.-]*\.json|jsconfig\.json|(vite|webpack)\.conf
 export const SHARED_FROM = 3;
 export const SHARED_FROM_WORDS = `${SHARED_FROM} or more`;
 
-export const componentId = (c: { id: string }) => `react:component:${c.id}`;
+/** Card ids of components start with this, followed by the model's id (`path#Name`). */
+export const COMPONENT_PREFIX = 'react:component:';
+export const componentId = (c: { id: string }) => `${COMPONENT_PREFIX}${c.id}`;
 export const routeId = (path: string) => `react:route:${path}`;
 export const apiId = (id: string) => `react:api:${id}`;
 

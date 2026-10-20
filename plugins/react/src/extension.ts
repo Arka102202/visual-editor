@@ -2,7 +2,7 @@
 
 import * as vscode from 'vscode';
 import { SHELL_EXTENSION_ID, type ShellApi } from '@visual-editor/contract';
-import { reactPlugin } from './plugin';
+import { drawings, reactPlugin } from './plugin';
 import { readingWorker } from './workerClient';
 
 export async function activate(context: vscode.ExtensionContext) {
@@ -15,7 +15,8 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(api.register(reactPlugin));
 }
 
-/** The reading worker stops with the extension. */
-export function deactivate() {
+/** The reading worker, and the dev servers Visual Editor started for previews, stop with the extension. */
+export async function deactivate() {
   readingWorker.stop();
+  await drawings.stop();
 }

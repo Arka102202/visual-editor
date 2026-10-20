@@ -1,0 +1,1 @@
+{ "name": "ts-shop", "private": true, "dependencies": { "react": "^19.0.0", "@tanstack/react-query": "^5.0.0", "react-router-dom": "^7.0.0" } }
