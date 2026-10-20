@@ -274,7 +274,7 @@ function showCard(m: CardMemory) {
     open.addEventListener('click', () => vscode.postMessage({ type: 'open', path: item.source!.path, line: item.source!.line }));
     buttons.append(open);
   }
-  const look = iconButton('preview', item.kind === 'route' ? `Preview: open ${item.label} in the running app` : 'Preview: open the running app', { cls: 'primary' });
+  const look = iconButton('preview', item.kind === 'route' ? `Preview: open ${item.label} in the running app` : `Preview: show ${item.label} in the running app (a component alone, inside the app’s providers)`, { cls: 'primary' });
   look.addEventListener('click', () => openPreview(item));
   buttons.prepend(look);
   const inOut = iconButton('focus', 'Focus: only what comes into this card and what goes out of it (its immediate neighbours)');
@@ -397,7 +397,9 @@ const preview = new PreviewWindow({ post: (m) => vscode.postMessage(m), store: l
 
 /** Opens Preview: a page card at its own address (its :params left to fill in), anything else where it was. */
 function openPreview(item?: Item) {
-  preview.open(item?.kind === 'route' && item.label.startsWith('/') ? item.label : undefined);
+  // A page card opens at its address; any other card goes to a plugin panel that can show it (a component, alone).
+  if (item?.kind === 'route' && item.label.startsWith('/')) return preview.open(item.label);
+  preview.open(undefined, item);
 }
 const nbStage = el('div', 'nb-stage');
 focus.main.append(nbStage);
@@ -857,6 +859,7 @@ window.addEventListener('message', (e: MessageEvent<ToMap>) => {
   else if (e.data?.type === 'app') preview.receiveApp(e.data);
   else if (e.data?.type === 'preview') preview.open(e.data.path);
   else if (e.data?.type === 'panels') preview.setPluginPanels(e.data.panels);
+  else if (e.data?.type === 'panelAnswer') preview.pluginAnswer(e.data);
   else if (e.data?.type === 'calls' || e.data?.type === 'fakes' || e.data?.type === 'contracts' || e.data?.type === 'contractExample') preview.receiveNetwork(e.data);
   else if (e.data?.type === 'focus') focusCard(e.data.id);
   else if (e.data?.type === 'measure') void measure();

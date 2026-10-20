@@ -188,6 +188,8 @@ export class MapPanel {
       else if (m.type === 'mapType') void p.mapType(root, m.operation, m.typeName);
       else if (m.type === 'fakeFromContract') void p.fakeFromContract(root, m.operations, m.status);
       else void p.contractExample(root, m.ref).then((r) => this.panel?.webview.postMessage({ type: 'contractExample', ref: m.ref, ...r } satisfies ToMap));
+    } else if (m.type === 'panelAsk') {
+      void this.panelAsk(m.key, m.id, m.request);
     } else if (m.type === 'openItem') {
       const state = this.current.get();
       const found = state?.items.filter((i) => i.label === m.label && i.source && (!m.kind || i.kind === m.kind || i.map === m.kind)) ?? [];
@@ -253,6 +255,23 @@ export class MapPanel {
     const item = state?.items.find((i) => i.id === this.card);
     if (!state || !item) return;
     void this.panel?.webview.postMessage({ type: 'card', id: item.id, entries: forCard(this.memory.entries(state.project.root), item) } satisfies ToMap);
+  }
+
+  /** A plugin panel's question for its plugin's VS Code side (PreviewPanel.serve). */
+  private async panelAsk(key: string, id: number, request: unknown) {
+    const state = this.current.get();
+    const [pluginId, panelId] = key.split('/');
+    const plugin = state?.detected.find((d) => d.plugin.id === pluginId)?.plugin;
+    const panel = plugin?.previewPanels?.find((p) => p.id === panelId);
+    const post = (m: ToMap) => void this.panel?.webview.postMessage(m);
+    if (!state || !panel?.serve) return post({ type: 'panelAnswer', key, id, error: 'Nothing answers that here.' });
+    try {
+      const mine = (id: string) => id.startsWith(`${pluginId}:`);
+      const answer = await panel.serve(request, state.project, state.items.filter((i) => mine(i.id)), state.links.filter((l) => mine(l.from) && mine(l.to)));
+      post({ type: 'panelAnswer', key, id, answer });
+    } catch (e) {
+      post({ type: 'panelAnswer', key, id, error: e instanceof Error ? e.message : String(e) });
+    }
   }
 
   /** Plugins' Preview panels for the shown project, with their facts (sent again only when something changed). */

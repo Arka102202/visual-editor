@@ -52,7 +52,7 @@ export const FRAME_CSS = `
   .fw-dock[data-dock=right] { border-left: 1px solid var(--vscode-panel-border, #8883); }
   .fw-dock[data-dock=bottom] { border-top: 1px solid var(--vscode-panel-border, #8883); }
   /* Floating over the content instead of beside it. */
-  .fw-dock.float { position: absolute; z-index: 3; border: 1px solid var(--vscode-panel-border, #8885); border-radius: 10px; overflow: hidden; background: color-mix(in srgb, var(--vscode-sideBar-background, var(--vscode-editor-background)) 94%, transparent); box-shadow: 0 8px 28px #0007; }
+  .fw-dock.float { position: absolute; z-index: 3; border: 1px solid var(--vscode-panel-border, #8885); border-radius: 10px; overflow: hidden; background: var(--vscode-sideBar-background, var(--vscode-editor-background)); box-shadow: 0 8px 28px #0007; }
   .fw-dock.float[data-dock=left] { left: 10px; top: 10px; bottom: 10px; }
   .fw-dock.float[data-dock=right] { right: 10px; top: 10px; bottom: 10px; }
   .fw-dock.float[data-dock=bottom] { left: 10px; right: 10px; bottom: 10px; }
@@ -65,6 +65,8 @@ export const FRAME_CSS = `
   .fw-dock-head .own { flex: none; gap: 2px; }
   .fw-dock-head .own button { background: transparent; opacity: .6; }
   .fw-dock-head .own button:hover { opacity: 1; }
+  /* Switched on (floating): clearly marked, so it can be found to switch it off. */
+  .fw-dock-head .own button.on { opacity: 1; color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
   .fw-dock-body { position: relative; flex: 1; min-height: 0; }
   .fw-dock-body > * { position: absolute; inset: 0; overflow: auto; }
   /* Its inner edge: drag to resize. */
@@ -322,7 +324,7 @@ export class Frame {
     const head = el('div', 'fw-dock-head');
     const tabs = tray(el('div', 'tabs'));
     const own = tray(el('div', 'own'));
-    const floatButton = iconButton('float', 'Float over the content, or sit beside it');
+    const floatButton = iconButton('float', 'Float over the content, or sit beside it (on: floating; press to dock it back)');
     const hide = iconButton('hide', 'Hide these panels (the Panels menu brings them back)');
     own.append(floatButton, hide);
     head.append(tabs, own);
