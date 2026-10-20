@@ -6,20 +6,115 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import { DevServer, get } from './devServer';
 import { AppProxy, type Recorded } from './proxy';
+import { Fakes, FAKES_DIR, type FakeEndpoint, type Scenarios } from './fakes';
 import { mapIn, original, type SourceMap } from './sourceMap';
 
 export class AppProxies implements vscode.Disposable {
   private readonly running = new Map<string, { dev: DevServer; proxy: AppProxy }>();
+  private readonly fakes = new Map<string, { fakes: Fakes; watcher: vscode.FileSystemWatcher }>();
+  /** Headers the proxy adds to calls (by project), kept in VS Code's secret storage: never in the project's files. */
+  private readonly headers = new Map<string, Record<string, string>>();
+  private readonly callListeners = new Set<(root: string, r: Recorded) => void>();
+  private readonly fakeListeners = new Set<(root: string) => void>();
 
-  constructor(private readonly log: vscode.OutputChannel) {}
+  constructor(
+    private readonly log: vscode.OutputChannel,
+    private readonly secrets?: vscode.SecretStorage,
+  ) {}
+
+  /** Each call (or page) a project's app makes, as it's recorded. */
+  onCall(listener: (root: string, r: Recorded) => void): vscode.Disposable {
+    this.callListeners.add(listener);
+    return { dispose: () => this.callListeners.delete(listener) };
+  }
+
+  /** A project's fakes changed (from Visual Editor, or its files were edited). */
+  onFakes(listener: (root: string) => void): vscode.Disposable {
+    this.fakeListeners.add(listener);
+    return { dispose: () => this.fakeListeners.delete(listener) };
+  }
+
+  /** A project's fakes (read from .visual-editor/api/, and read again whenever those files change). */
+  fakesOf(root: string): Fakes {
+    let entry = this.fakes.get(root);
+    if (!entry) {
+      const fakes = new Fakes(root);
+      const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(root), `${FAKES_DIR}/*.json`));
+      const reload = () => {
+        fakes.load();
+        for (const l of this.fakeListeners) l(root);
+      };
+      watcher.onDidChange(reload);
+      watcher.onDidCreate(reload);
+      watcher.onDidDelete(reload);
+      entry = { fakes, watcher };
+      this.fakes.set(root, entry);
+    }
+    return entry.fakes;
+  }
+
+  saveFake(root: string, endpoint: FakeEndpoint) {
+    this.fakesOf(root).save(endpoint);
+    for (const l of this.fakeListeners) l(root);
+  }
+
+  removeFake(root: string, id: string) {
+    this.fakesOf(root).remove(id);
+    for (const l of this.fakeListeners) l(root);
+  }
+
+  /** The case an endpoint uses ("pass": the real backend). */
+  useCase(root: string, id: string, use: string) {
+    const e = this.fakesOf(root).endpoints.find((x) => x.id === id);
+    if (e) this.saveFake(root, { ...e, use });
+  }
+
+  saveScenarios(root: string, scenarios: Scenarios) {
+    this.fakesOf(root).saveScenarios(scenarios);
+    for (const l of this.fakeListeners) l(root);
+  }
+
+  async openFake(root: string, id: string) {
+    await vscode.window.showTextDocument(vscode.Uri.file(join(root, FAKES_DIR, `${id}.json`)), { viewColumn: vscode.ViewColumn.Beside });
+  }
+
+  /** The headers the proxy adds for a project (read from the secret storage once). */
+  async headersOf(root: string): Promise<Record<string, string>> {
+    if (!this.headers.has(root)) {
+      let saved: Record<string, string> = {};
+      try {
+        saved = JSON.parse((await this.secrets?.get(`visualEditor.proxyHeaders:${root}`)) ?? '{}');
+      } catch {
+        saved = {};
+      }
+      this.headers.set(root, saved);
+    }
+    return this.headers.get(root)!;
+  }
+
+  /** Changes the headers: a value sets one, null removes it. */
+  async setHeaders(root: string, change: Record<string, string | null>) {
+    const next = { ...(await this.headersOf(root)) };
+    for (const [k, v] of Object.entries(change)) {
+      if (v === null) delete next[k];
+      else if (k.trim()) next[k.trim()] = v;
+    }
+    this.headers.set(root, next);
+    await this.secrets?.store(`visualEditor.proxyHeaders:${root}`, JSON.stringify(next));
+    for (const l of this.fakeListeners) l(root);
+  }
 
   /** A project's proxy (started now if it isn't running), with its dev server behind it; returns the app's address. */
   async open(root: string, progress?: (text: string) => void): Promise<string> {
+    await this.headersOf(root);
     let entry = this.running.get(root);
     if (!entry) {
       const dev = new DevServer(root);
-      const proxy = new AppProxy(() => dev.ensure());
-      proxy.onRecord((r) => this.write(r));
+      const proxy = new AppProxy(() => dev.ensure(), { fakes: () => this.fakesOf(root), headers: () => this.headers.get(root) ?? {} });
+      proxy.onRecord((r) => {
+        this.write(r);
+        for (const l of this.callListeners) l(root, r);
+      });
       entry = { dev, proxy };
       this.running.set(root, entry);
     }
@@ -28,6 +123,11 @@ export class AppProxies implements vscode.Disposable {
     const origin = await entry.proxy.start();
     this.log.appendLine(`App proxy for ${root}: ${origin} → dev server ${entry.dev.origin}${entry.dev.startedByUs ? ' (started by Visual Editor)' : ''}`);
     return origin;
+  }
+
+  /** The calls a project's app made so far (the latest last). */
+  callsOf(root: string): Recorded[] {
+    return this.running.get(root)?.proxy.records.filter((r) => r.kind !== 'file').slice(-300) ?? [];
   }
 
   /** A project's running proxy, if any. */
@@ -105,7 +205,7 @@ export class AppProxies implements vscode.Disposable {
   /** Calls the page made (not every file it loaded), one line each. */
   private write(r: Recorded) {
     if (r.kind === 'file') return;
-    this.log.appendLine(`  ${r.kind === 'page' ? 'page' : 'call'} ${r.method} ${r.url} → ${r.error ? `failed: ${r.error}` : r.status} · ${r.ms} ms`);
+    this.log.appendLine(`  ${r.kind === 'page' ? 'page' : 'call'} ${r.method} ${r.url} → ${r.error ? `failed: ${r.error}` : r.status} · ${r.ms} ms${r.faked ? ` · fake "${r.faked.case}"` : ''}`);
   }
 
   dispose() {
@@ -114,5 +214,7 @@ export class AppProxies implements vscode.Disposable {
       void dev.stop();
     }
     this.running.clear();
+    for (const { watcher } of this.fakes.values()) watcher.dispose();
+    this.fakes.clear();
   }
 }

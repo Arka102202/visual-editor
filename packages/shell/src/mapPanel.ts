@@ -55,6 +55,25 @@ export class MapPanel {
       memory.onChange(() => void this.sendCard()),
       onThemeChange(() => void this.sendTheme()),
     );
+    // Calls the app makes go to the Network panel as they happen (a few at a time); fakes when they change.
+    if (proxies) {
+      let batch: Parameters<Parameters<typeof proxies.onCall>[0]>[1][] = [];
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      this.subscriptions.push(
+        proxies.onCall((root, r) => {
+          if (r.kind === 'file' || root !== this.current.get()?.project.root || !this.ready) return;
+          batch.push(r);
+          timer ??= setTimeout(() => {
+            void this.panel?.webview.postMessage({ type: 'calls', calls: batch } satisfies ToMap);
+            batch = [];
+            timer = undefined;
+          }, 100);
+        }),
+        proxies.onFakes((root) => {
+          if (root === this.current.get()?.project.root) void this.sendNetwork(false);
+        }),
+      );
+    }
   }
 
   /** Opens the map, or brings it to the front. */
@@ -140,6 +159,18 @@ export class MapPanel {
     } else if (m.type === 'openSource') {
       const root = this.current.get()?.project.root;
       if (root) void this.proxies?.openSource(root, m.url, m.line, m.column);
+    } else if (m.type === 'network') {
+      void this.sendNetwork(true);
+    } else if (m.type === 'saveFake' || m.type === 'removeFake' || m.type === 'useCase' || m.type === 'saveScenarios' || m.type === 'openFake' || m.type === 'setHeaders') {
+      const root = this.current.get()?.project.root;
+      const p = this.proxies;
+      if (!root || !p) return;
+      if (m.type === 'saveFake') p.saveFake(root, m.endpoint);
+      else if (m.type === 'removeFake') p.removeFake(root, m.id);
+      else if (m.type === 'useCase') p.useCase(root, m.id, m.use);
+      else if (m.type === 'saveScenarios') p.saveScenarios(root, m.scenarios);
+      else if (m.type === 'openFake') void p.openFake(root, m.id);
+      else void p.setHeaders(root, m.headers);
     } else if (m.type === 'openRule') {
       const root = this.current.get()?.project.root;
       if (root) void this.proxies?.openRule(root, m.source, m.selector);
@@ -198,6 +229,16 @@ export class MapPanel {
     const item = state?.items.find((i) => i.id === this.card);
     if (!state || !item) return;
     void this.panel?.webview.postMessage({ type: 'card', id: item.id, entries: forCard(this.memory.entries(state.project.root), item) } satisfies ToMap);
+  }
+
+  /** The calls so far (when asked) and the project's fakes, for the Network panel. */
+  private async sendNetwork(withCalls: boolean) {
+    const root = this.current.get()?.project.root;
+    if (!this.panel || !root || !this.proxies) return;
+    const post = (m: ToMap) => void this.panel?.webview.postMessage(m);
+    if (withCalls) post({ type: 'calls', calls: this.proxies.callsOf(root), all: true });
+    const fakes = this.proxies.fakesOf(root);
+    post({ type: 'fakes', endpoints: fakes.endpoints, scenarios: fakes.scenarios, headers: Object.keys(await this.proxies.headersOf(root)) });
   }
 
   /** The app's address through the proxy, for Preview (starting it, and its dev server, when needed). */

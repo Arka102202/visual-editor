@@ -9,6 +9,8 @@ import { iconButton, tray, type Icon } from '../ui/buttons';
 import { Frame, type LayoutStore } from '../ui/frame';
 import { ConsolePanel, type ConsoleEntry } from './consolePanel';
 import { CssPanel, type Picked } from './cssPanel';
+import { NetworkPanel } from './networkPanel';
+import type { CardNetwork } from './previewTypes';
 
 export const PREVIEW_CSS = `
   .pv-main { position: absolute; inset: 0; display: flex; flex-direction: column; }
@@ -59,6 +61,7 @@ export class PreviewWindow {
   private readonly fitButton = iconButton('fitMap', 'Zoom to fit: the whole screen size in view (off: real size, scroll to see it all)', { cls: 'on' });
   private readonly console: ConsolePanel;
   private readonly css: CssPanel;
+  private readonly network: NetworkPanel;
   private readonly pickButton = iconButton('pick', 'Pick an element: hover the page to see it, click to see its CSS (Esc stops)');
   private picking = false;
   private iframe: HTMLIFrameElement | undefined;
@@ -71,7 +74,7 @@ export class PreviewWindow {
   private fit = true;
 
   constructor(private readonly deps: Deps) {
-    this.frame = new Frame('preview', deps.store, { bottom: { panels: ['console'], size: 220 }, right: { panels: ['css'], size: 380 } }, { size: { width: 'min(1400px, 96vw)', height: 'min(900px, 92vh)' } });
+    this.frame = new Frame('preview', deps.store, { bottom: { panels: ['console', 'network'], size: 240 }, right: { panels: ['css'], size: 380 } }, { size: { width: 'min(1400px, 96vw)', height: 'min(900px, 92vh)' } });
     this.frame.title.textContent = 'Preview';
     this.console = new ConsolePanel((url, line, column) => deps.post({ type: 'openSource', url, line, column }));
     this.console.onCounts = (all, errors) => this.frame.updatePanel('console', { count: errors || all, name: errors ? `Console: ${errors} error${errors === 1 ? '' : 's'}, ${all} message${all === 1 ? '' : 's'} in all` : `Console: everything the page logs (${all})`, tint: errors ? 'var(--vscode-errorForeground, #f48771)' : undefined });
@@ -80,8 +83,11 @@ export class PreviewWindow {
       () => this.setPicking(true),
       (source, selector) => deps.post({ type: 'openRule', source, selector }),
     );
+    this.network = new NetworkPanel((m) => deps.post(m));
+    this.network.onCounts = (calls, faked) => this.frame.updatePanel('network', { count: calls, name: `Network: ${calls} call${calls === 1 ? '' : 's'}${faked ? `, ${faked} answered by fakes` : ''}` });
     this.frame.setPanels([
       { id: 'console', icon: 'console', name: 'Console: everything the page logs', body: this.console.body },
+      { id: 'network', icon: 'api', name: 'Network: every call the app makes, and the fakes that answer instead of the backend', body: this.network.body },
       { id: 'css', icon: 'css', name: 'CSS: the picked element’s rules, box model and final values', body: this.css.body },
     ]);
     this.pickButton.addEventListener('click', () => this.setPicking(!this.picking));
@@ -169,6 +175,7 @@ export class PreviewWindow {
     }
     this.showWait('Starting the app…', 'Visual Editor runs it through its proxy (on this computer only), with your dev server behind it.');
     this.deps.post({ type: 'app' });
+    this.deps.post({ type: 'network' });
   }
 
   /** The app's address, how starting it goes, or why it can't start. */
@@ -179,6 +186,12 @@ export class PreviewWindow {
     this.app = m.url.replace(/\/$/, '');
     this.frame.hint.textContent = this.app.replace(/^https?:\/\//, '');
     this.go(this.pending);
+  }
+
+  /** Calls the app made, and the project's fakes (from the extension). */
+  receiveNetwork(m: CardNetwork) {
+    if (m.type === 'calls') this.network.addCalls(m.calls, m.all);
+    else this.network.setFakes(m.endpoints, m.scenarios, m.headers);
   }
 
   /** What the page says (through the inspector). */

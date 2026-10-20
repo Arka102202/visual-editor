@@ -3,6 +3,8 @@
 import type { Item } from '@visual-editor/contract';
 import type { Mark } from './changes';
 import type { Layout as PanelLayout } from './ui/frame';
+import type { Recorded } from './proxy/proxy';
+import type { FakeEndpoint, Scenarios } from './proxy/fakes';
 import type { Arrange, Layout } from './layout';
 import type { MemoryEntry } from './memory';
 import type { Tone } from './styles';
@@ -29,7 +31,11 @@ export type ToMap =
   /** The app's address through Visual Editor's proxy (for Preview), how starting it goes, or why it can't start. */
   | { type: 'app'; url?: string; progress?: string; error?: string }
   /** Open Preview (from the command): at this address of the app. */
-  | { type: 'preview'; path?: string };
+  | { type: 'preview'; path?: string }
+  /** Calls the app made (new ones as they happen; `all`: these are all of them so far). */
+  | { type: 'calls'; calls: Recorded[]; all?: boolean }
+  /** The project's fakes, its scenarios, and the names of the headers the proxy adds (their values stay hidden). */
+  | { type: 'fakes'; endpoints: FakeEndpoint[]; scenarios: Scenarios; headers: string[] };
 
 /** Every line that joins one card to another, on any map (for Focus's side panel). */
 export interface CardLines {
@@ -119,6 +125,16 @@ export type FromMap =
   | { type: 'openSource'; url: string; line: number; column: number }
   /** Open the stylesheet a CSS rule comes from, at that rule. */
   | { type: 'openRule'; source: string; selector: string }
+  /** The calls so far and the fakes are wanted (the Network panel opened). */
+  | { type: 'network' }
+  | { type: 'saveFake'; endpoint: FakeEndpoint }
+  | { type: 'removeFake'; id: string }
+  /** The case an endpoint uses ("pass": the real backend). */
+  | { type: 'useCase'; id: string; use: string }
+  | { type: 'saveScenarios'; scenarios: Scenarios }
+  | { type: 'openFake'; id: string }
+  /** Headers the proxy adds to calls: a value sets one, null removes it. */
+  | { type: 'setHeaders'; headers: Record<string, string | null> }
   /** Open an address in the developer's own browser. */
   | { type: 'openExternal'; url: string }
   /** A window's side panels were arranged: keep it. */
