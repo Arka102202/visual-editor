@@ -188,10 +188,12 @@ export class PreviewWindow {
     this.go(this.pending);
   }
 
-  /** Calls the app made, and the project's fakes (from the extension). */
+  /** Calls the app made, the project's fakes and contracts (from the extension). */
   receiveNetwork(m: CardNetwork) {
     if (m.type === 'calls') this.network.addCalls(m.calls, m.all);
-    else this.network.setFakes(m.endpoints, m.scenarios, m.headers);
+    else if (m.type === 'fakes') this.network.setFakes(m.endpoints, m.scenarios, m.headers);
+    else if (m.type === 'contracts') this.network.setContracts(m.contracts, m.map);
+    else this.network.showExample(m);
   }
 
   /** What the page says (through the inspector). */

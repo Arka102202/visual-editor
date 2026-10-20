@@ -2,11 +2,13 @@
 // them (.visual-editor/api/, one file per endpoint, plus scenarios.json). Each endpoint has cases; one is in use
 // ("pass": the real backend, the default). A case either answers itself (status, headers, body), or passes the call
 // on and changes the answer (a delay, some fields, the status), or fails like a dropped connection. A scenario sets
-// the case of many endpoints at once, and wins over each endpoint's own choice. No VS Code APIs, so it can be tested.
+// the case of many endpoints at once, and wins over each endpoint's own choice. A case can also answer from the
+// project's contract (an example, or one made from the shape; see contracts/). No VS Code APIs, so it can be tested.
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fits } from './fakePaths';
+import type { ContractRef, Contracts } from '../contracts/contracts';
 
 export { endpointId, fits, patternFor } from './fakePaths';
 
@@ -27,6 +29,8 @@ export interface FakeCase {
   delay?: number;
   /** Fail like a dropped connection (no answer at all). */
   network?: boolean;
+  /** Or answer from the contract (its example, or one made from its shape); `status` and `patch` change it. */
+  contract?: ContractRef;
   /** What it's for, in words. */
   note?: string;
 }
@@ -78,7 +82,11 @@ export class Fakes {
   endpoints: FakeEndpoint[] = [];
   scenarios: Scenarios = { scenarios: {} };
 
-  constructor(readonly root: string) {
+  constructor(
+    readonly root: string,
+    /** The project's contracts (for cases that answer from them). */
+    private readonly contracts?: () => Contracts | undefined,
+  ) {
     this.load();
   }
 
@@ -137,8 +145,8 @@ export class Fakes {
     return s?.[e.id] ?? e.use ?? 'pass';
   }
 
-  /** What to do with a call. */
-  decide(method: string, path: string, origin?: string): Decision {
+  /** What to do with a call (its body: for GraphQL, answered by what the query asks for). */
+  decide(method: string, path: string, origin?: string, body?: string): Decision {
     const e = this.find(method, path, origin);
     if (!e) return { kind: 'pass' };
     const name = this.caseOf(e);
@@ -147,6 +155,12 @@ export class Fakes {
     const delay = Math.max(0, Math.min(120_000, c.delay ?? 0));
     if (c.network) return { kind: 'fail', endpoint: e, name, delay };
     if (c.pass) return { kind: 'change', endpoint: e, name, ...(c.status ? { status: c.status } : {}), ...(c.headers ? { headers: c.headers } : {}), ...(c.patch ? { patch: c.patch } : {}), delay };
+    if (c.contract) {
+      const made = this.contracts?.()?.answer(c.contract, { method, path, body });
+      const answer = made ? (c.patch ? patch(made.body, c.patch) : made.body) : { error: `The contract has nothing for ${method} ${path} (the case “${name}” answers from it).` };
+      const text = JSON.stringify(answer, null, 2);
+      return { kind: 'answer', endpoint: e, name, status: c.status ?? (made ? made.status : 501), headers: { 'content-type': 'application/json; charset=utf-8', ...c.headers }, body: Buffer.from(text), delay };
+    }
     const text = typeof c.body === 'string' ? c.body : c.body === undefined ? '' : JSON.stringify(c.body, null, 2);
     const json = typeof c.body !== 'string' && c.body !== undefined;
     return {

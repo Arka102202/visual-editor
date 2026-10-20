@@ -53,6 +53,7 @@ export const ICONS = {
   pick: '<path d="M4 4l7 17 2.5-7.5L21 11z"/><path d="M14 14l6 6"/>',
   css: '<path d="M8 4c-2 0-3 1-3 3v2c0 1.5-1 2.5-2 3 1 .5 2 1.5 2 3v2c0 2 1 3 3 3M16 4c2 0 3 1 3 3v2c0 1.5 1 2.5 2 3-1 .5-2 1.5-2 3v2c0 2-1 3-3 3"/>',
   fake: '<path d="M4 7c0-1.7 1.3-3 3-3h10c1.7 0 3 1.3 3 3v3c0 5-3.6 9-8 10-4.4-1-8-5-8-10z"/><path d="M8.5 10.5h2M13.5 10.5h2M9 15c1.7 1.3 4.3 1.3 6 0"/>',
+  contract: '<path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4M9 12h7M9 16h4"/><path d="M14 17.5l1.5 1.5 3-3"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M14.5 8.5l2 2"/>',
   trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
   add: '<path d="M12 5v14M5 12h14"/>',

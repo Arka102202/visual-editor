@@ -171,6 +171,17 @@ export class MapPanel {
       else if (m.type === 'saveScenarios') p.saveScenarios(root, m.scenarios);
       else if (m.type === 'openFake') void p.openFake(root, m.id);
       else void p.setHeaders(root, m.headers);
+    } else if (m.type === 'addContract' || m.type === 'removeContract' || m.type === 'openContract' || m.type === 'reloadContracts' || m.type === 'mapType' || m.type === 'fakeFromContract' || m.type === 'contractExample') {
+      const root = this.current.get()?.project.root;
+      const p = this.proxies;
+      if (!root || !p) return;
+      if (m.type === 'addContract') void p.addContract(root, m.source);
+      else if (m.type === 'removeContract') void p.removeContract(root, m.source);
+      else if (m.type === 'openContract') void p.openContract(root, m.source);
+      else if (m.type === 'reloadContracts') void p.reloadContracts(root);
+      else if (m.type === 'mapType') void p.mapType(root, m.operation, m.typeName);
+      else if (m.type === 'fakeFromContract') void p.fakeFromContract(root, m.operations, m.status);
+      else void p.contractExample(root, m.ref).then((r) => this.panel?.webview.postMessage({ type: 'contractExample', ref: m.ref, ...r } satisfies ToMap));
     } else if (m.type === 'openRule') {
       const root = this.current.get()?.project.root;
       if (root) void this.proxies?.openRule(root, m.source, m.selector);
@@ -231,7 +242,7 @@ export class MapPanel {
     void this.panel?.webview.postMessage({ type: 'card', id: item.id, entries: forCard(this.memory.entries(state.project.root), item) } satisfies ToMap);
   }
 
-  /** The calls so far (when asked) and the project's fakes, for the Network panel. */
+  /** The calls so far (when asked), the project's fakes and its contracts, for the Network panel. */
   private async sendNetwork(withCalls: boolean) {
     const root = this.current.get()?.project.root;
     if (!this.panel || !root || !this.proxies) return;
@@ -239,6 +250,8 @@ export class MapPanel {
     if (withCalls) post({ type: 'calls', calls: this.proxies.callsOf(root), all: true });
     const fakes = this.proxies.fakesOf(root);
     post({ type: 'fakes', endpoints: fakes.endpoints, scenarios: fakes.scenarios, headers: Object.keys(await this.proxies.headersOf(root)) });
+    const contracts = await this.proxies.contractsOf(root);
+    post({ type: 'contracts', contracts: contracts.info(), map: contracts.config.map ?? {} });
   }
 
   /** The app's address through the proxy, for Preview (starting it, and its dev server, when needed). */

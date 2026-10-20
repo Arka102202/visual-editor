@@ -5,6 +5,7 @@ import type { Mark } from './changes';
 import type { Layout as PanelLayout } from './ui/frame';
 import type { Recorded } from './proxy/proxy';
 import type { FakeEndpoint, Scenarios } from './proxy/fakes';
+import type { ContractInfo, ContractRef } from './contracts/contracts';
 import type { Arrange, Layout } from './layout';
 import type { MemoryEntry } from './memory';
 import type { Tone } from './styles';
@@ -35,7 +36,11 @@ export type ToMap =
   /** Calls the app made (new ones as they happen; `all`: these are all of them so far). */
   | { type: 'calls'; calls: Recorded[]; all?: boolean }
   /** The project's fakes, its scenarios, and the names of the headers the proxy adds (their values stay hidden). */
-  | { type: 'fakes'; endpoints: FakeEndpoint[]; scenarios: Scenarios; headers: string[] };
+  | { type: 'fakes'; endpoints: FakeEndpoint[]; scenarios: Scenarios; headers: string[] }
+  /** The project's contracts (in short), and which type each endpoint answers with (contracts.json's "map"). */
+  | { type: 'contracts'; contracts: ContractInfo[]; map: Record<string, string> }
+  /** An example answer made from a contract (asked for with `contractExample`). */
+  | { type: 'contractExample'; ref: ContractRef; status?: number; body?: unknown; error?: string };
 
 /** Every line that joins one card to another, on any map (for Focus's side panel). */
 export interface CardLines {
@@ -135,6 +140,17 @@ export type FromMap =
   | { type: 'openFake'; id: string }
   /** Headers the proxy adds to calls: a value sets one, null removes it. */
   | { type: 'setHeaders'; headers: Record<string, string | null> }
+  /** Contracts: add a source (a project file, or an address), stop using one, open one, read them all again. */
+  | { type: 'addContract'; source: string }
+  | { type: 'removeContract'; source: string }
+  | { type: 'openContract'; source: string }
+  | { type: 'reloadContracts' }
+  /** The type an endpoint answers with ("Order[]"); none: forget it. */
+  | { type: 'mapType'; operation: string; typeName?: string }
+  /** Fake these operations from the contract (a case made for each, and used). */
+  | { type: 'fakeFromContract'; operations: string[]; status?: string }
+  /** An example answer from the contract, to look at. */
+  | { type: 'contractExample'; ref: ContractRef }
   /** Open an address in the developer's own browser. */
   | { type: 'openExternal'; url: string }
   /** A window's side panels were arranged: keep it. */

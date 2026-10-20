@@ -98,9 +98,9 @@ addStyles(`
   .card .field .v { opacity: .65; font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 50%; }
   .card .field .t { font-size: 10px; padding: 0 5px; border-radius: 6px; background: #8883; }
   .card .more { opacity: .6; font-style: italic; }
-  .empty { position: absolute; inset: 40px 0 0 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; gap: 6px; }
-  .empty h2 { margin: 0; font-size: 16px; font-weight: 600; }
-  .empty p { margin: 0; opacity: .7; max-width: 420px; }
+  .map-empty { position: absolute; inset: 40px 0 0 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; gap: 6px; }
+  .map-empty h2 { margin: 0; font-size: 16px; font-weight: 600; }
+  .map-empty p { margin: 0; opacity: .7; max-width: 420px; }
   /* Focus: one card's immediate neighbours, in a modal over the map. */
   /* Focus: one card's immediate neighbours, in a window over the map. */
   .nb-stage { position: absolute; inset: 0; }
@@ -218,7 +218,7 @@ for (const [b, mode] of arrangeButtons) hint(b, { name: mode === 'flow' ? 'Flow'
 const cardMeaning = (kind: string) => meanings.cards[kind] ?? `Cards the plugin calls “${kind}”.`;
 const lineMeaning = (kind: string) => meanings.lines[kind] ?? `Lines the plugin calls “${kind}”.`;
 const stage = el('div', 'stage');
-const empty = el('div', 'empty');
+const empty = el('div', 'map-empty');
 const emptyTitle = el('h2');
 const emptyDetail = el('p');
 empty.append(emptyTitle, emptyDetail);
@@ -854,7 +854,7 @@ window.addEventListener('message', (e: MessageEvent<ToMap>) => {
   else if (e.data?.type === 'layouts') layouts = { ...e.data.layouts, ...layouts };
   else if (e.data?.type === 'app') preview.receiveApp(e.data);
   else if (e.data?.type === 'preview') preview.open(e.data.path);
-  else if (e.data?.type === 'calls' || e.data?.type === 'fakes') preview.receiveNetwork(e.data);
+  else if (e.data?.type === 'calls' || e.data?.type === 'fakes' || e.data?.type === 'contracts' || e.data?.type === 'contractExample') preview.receiveNetwork(e.data);
   else if (e.data?.type === 'focus') focusCard(e.data.id);
   else if (e.data?.type === 'measure') void measure();
 });
