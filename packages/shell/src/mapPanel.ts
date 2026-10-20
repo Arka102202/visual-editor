@@ -41,6 +41,8 @@ export class MapPanel {
     private readonly review: Review,
     private readonly changes: OutsideChanges,
     private readonly memory: ProjectMemory,
+    /** Where the windows' panel layouts are kept (for every project: it's how the developer likes to work). */
+    private readonly layouts?: vscode.Memento,
   ) {
     this.subscriptions.push(
       index.onChange(() => this.update()),
@@ -109,6 +111,7 @@ export class MapPanel {
     }
     if (m.type === 'ready') {
       this.ready = true;
+      void this.panel?.webview.postMessage({ type: 'layouts', layouts: this.layouts?.get('panelLayouts') ?? {} } satisfies ToMap);
       void this.sendTheme();
       this.send();
     } else if (m.type === 'choose') {
@@ -128,6 +131,8 @@ export class MapPanel {
       void this.sendCard();
     } else if (m.type === 'lines') {
       this.sendLines(m.id);
+    } else if (m.type === 'layout') {
+      void this.layouts?.update('panelLayouts', { ...(this.layouts.get<Record<string, unknown>>('panelLayouts') ?? {}), [m.key]: m.layout });
     } else if (m.type === 'goTo') {
       this.focus(m.id);
     } else if (m.type === 'addNote') {

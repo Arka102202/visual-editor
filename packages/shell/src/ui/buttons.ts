@@ -33,6 +33,12 @@ export const ICONS = {
   goesOut: '<path d="M10 12h11M17 8l4 4-4 4"/><path d="M9 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4"/>',
   props: '<path d="M9 6h12M9 12h12M9 18h12"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>',
   sidePanel: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>',
+  panels: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 9v11"/>',
+  dockLeft: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 4h6v16H3"/>',
+  dockRight: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4h6v16h-6"/>',
+  dockBottom: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 14h18v6H3"/>',
+  float: '<rect x="3" y="4" width="18" height="16" rx="2"/><rect x="11" y="8" width="7" height="9" rx="1"/>',
+  hide: '<path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.2M6.6 6.6A17 17 0 0 0 2 12s3.5 7 10 7a10 10 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
   maximize: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
   restore: '<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>',
 } as const;

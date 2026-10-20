@@ -2,6 +2,7 @@
 
 import type { Item } from '@visual-editor/contract';
 import type { Mark } from './changes';
+import type { Layout as PanelLayout } from './ui/frame';
 import type { Arrange, Layout } from './layout';
 import type { MemoryEntry } from './memory';
 import type { Tone } from './styles';
@@ -22,7 +23,9 @@ export type ToMap =
   | { type: 'focus'; id: string }
   | { type: 'measure' }
   /** The code colours of the theme on now (type, string, keyword…), for text shown the way the editor colours it. */
-  | { type: 'theme'; tokens: Record<string, string> };
+  | { type: 'theme'; tokens: Record<string, string> }
+  /** How the developer arranged each window's side panels (by window). */
+  | { type: 'layouts'; layouts: Record<string, PanelLayout> };
 
 /** Every line that joins one card to another, on any map (for Focus's side panel). */
 export interface CardLines {
@@ -106,6 +109,8 @@ export type FromMap =
   | { type: 'card'; id?: string }
   /** Every line that joins this card to another, on any map, is wanted. */
   | { type: 'lines'; id: string }
+  /** A window's side panels were arranged: keep it. */
+  | { type: 'layout'; key: string; layout: PanelLayout }
   /** Show a card on its own map (switching maps), chosen and in view. */
   | { type: 'goTo'; id: string }
   | { type: 'addNote'; id: string }
