@@ -39,7 +39,8 @@ const tests = {
   ),
   outdir: 'dist-test',
   outbase: '.',
-  external: ['vscode'],
+  // esbuild runs its own program, found next to its package: tests that build code use it from node_modules.
+  external: ['vscode', 'esbuild'],
 };
 
 if (test) {

@@ -213,6 +213,17 @@ export class Frame {
     this.arrange();
   }
 
+  /** Changes a panel's tab (its count, name, colour) without touching its content. */
+  updatePanel(id: string, change: Partial<Pick<PanelSpec, 'count' | 'name' | 'tint' | 'icon'>>) {
+    const p = this.panels.get(id);
+    if (!p) return;
+    Object.assign(p, change);
+    const b = this.tabButtons.get(id);
+    if (!b?.isConnected) return;
+    const fresh = this.tab(id, this.dockOf(id)!, b.classList.contains('on'));
+    b.replaceWith(fresh);
+  }
+
   /** Shows a panel (opening its dock and choosing its tab). */
   showPanel(id: string) {
     const d = this.dockOf(id);

@@ -55,6 +55,12 @@
         "icon": "$(type-hierarchy-sub)"
       },
       {
+        "command": "visualEditor.previewApp",
+        "title": "Preview the App",
+        "category": "Visual Editor",
+        "icon": "$(preview)"
+      },
+      {
         "command": "visualEditor.openApp",
         "title": "Open the App through Visual Editor",
         "category": "Visual Editor",
