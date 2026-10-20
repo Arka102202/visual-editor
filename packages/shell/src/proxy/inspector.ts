@@ -140,9 +140,8 @@ const PICKER = String.raw`(() => {
   window.addEventListener('mousemove', onMove, true);
   window.addEventListener('click', onClick, true);
   ['mousedown', 'mouseup', 'pointerdown', 'pointerup', 'dblclick', 'contextmenu'].forEach(function (t) { window.addEventListener(t, swallow, true); });
-  window.addEventListener('keydown', function (e) { if (picking && e.key === 'Escape') { picking = false; show(selected); ve.say({ type: 'picking', on: false }); } }, true);
-  window.addEventListener('scroll', function () { if (selected && !picking) show(selected); }, true);
-  window.addEventListener('resize', function () { if (selected && !picking) show(selected); });
+  window.addEventListener('keydown', function (e) { if (picking && e.key === 'Escape') { picking = false; show(null); ve.say({ type: 'picking', on: false }); } }, true);
+
 
   /** How strong a selector is: [ids, classes and the like, tags]. */
   function specificity(sel) {
@@ -265,16 +264,20 @@ const PICKER = String.raw`(() => {
     });
     return rules;
   }
+  /** Outlines only while picking (what's under the mouse); a pick flashes, then the outline goes. */
+  var flash = 0;
   function select(el) {
     selected = el;
     show(el);
+    clearTimeout(flash);
+    flash = setTimeout(function () { if (!picking) show(null); }, 700);
     if (el) ve.say({ type: 'picked', element: info(el) });
     if (el) ve.picked.forEach(function (fn) { try { fn(el); } catch (err) { console.error(err); } });
   }
   window.addEventListener('message', function (e) {
     var m = e.data;
     if (e.source !== window.parent || !m || m.source !== 've-preview') return;
-    if (m.type === 'pick') { picking = !!m.on; if (!picking) show(selected); }
+    if (m.type === 'pick') { picking = !!m.on; if (!picking) show(null); }
     if (m.type === 'refresh' && selected) select(selected.isConnected ? selected : null);
     if (m.type === 'selectUp' && selected) { var t = selected; for (var i = 0; i < m.steps && t.parentElement; i++) t = t.parentElement; select(t); }
     if (m.type === 'unselect') { selected = null; show(null); }

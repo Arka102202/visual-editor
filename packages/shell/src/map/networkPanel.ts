@@ -151,8 +151,10 @@ export class NetworkPanel {
       this.selected = undefined;
       this.render();
     });
-    this.bar.append(views, this.search, this.scenarioPick, tray(el('div')));
-    this.bar.lastElementChild!.append(pages, clear);
+    // The buttons first, then finding a call and the scenario.
+    const tools = tray(el('div'));
+    tools.append(pages, clear);
+    this.bar.append(views, tools, this.search, this.scenarioPick);
     this.body.append(this.bar, this.content);
     this.render();
   }

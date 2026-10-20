@@ -41,6 +41,8 @@ export type ToMap =
   | { type: 'contracts'; contracts: ContractInfo[]; map: Record<string, string> }
   /** Plugins' Preview panels for the shown project: their scripts, and the facts each one needs. */
   | { type: 'panels'; panels: PluginPanel[] }
+  /** A plugin's answer to a panel's question. */
+  | { type: 'panelAnswer'; key: string; id: number; answer?: unknown; error?: string }
   /** An example answer made from a contract (asked for with `contractExample`). */
   | { type: 'contractExample'; ref: ContractRef; status?: number; body?: unknown; error?: string };
 
@@ -155,6 +157,8 @@ export type FromMap =
   | { type: 'contractExample'; ref: ContractRef }
   /** Open the code of a card found by its name (and kind), e.g. a component a plugin panel shows. */
   | { type: 'openItem'; label: string; kind?: string }
+  /** A plugin panel asks its plugin's VS Code side (PreviewPanel.serve); the answer comes back as panelAnswer. */
+  | { type: 'panelAsk'; key: string; id: number; request: unknown }
   /** Open an address in the developer's own browser. */
   | { type: 'openExternal'; url: string }
   /** A window's side panels were arranged: keep it. */

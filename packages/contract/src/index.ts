@@ -162,6 +162,8 @@ export interface PreviewPanel {
   panel: string;
   /** Facts about the project the panel needs (read in VS Code, sent to the panel as `api.facts`), e.g. where its stores are. */
   facts?(project: ProjectInfo, items: Item[]): unknown | Promise<unknown>;
+  /** Work the panel asks for in VS Code (`api.ask`), e.g. reading or writing the project's files. Its answer goes back. */
+  serve?(request: unknown, project: ProjectInfo, items: Item[], links: Link[]): unknown | Promise<unknown>;
 }
 
 /** What `window.visualEditor` gives a panel's page script. Messages are on a channel: "<plugin id>/<panel id>". */
@@ -198,6 +200,14 @@ export interface PreviewPanelApi {
   onShow(handler: () => void): void;
   /** Loads the app's page again (e.g. when the page script doesn't answer: the page was there before the panel). */
   reloadPage(): void;
+  /** Takes the app's page to an address (a path like /settings). */
+  navigate(path: string): void;
+  /** Asks the plugin's VS Code side (PreviewPanel.serve); resolves with its answer. */
+  ask(request: unknown): Promise<unknown>;
+  /** A card the developer opened Preview with (e.g. a component): return true when this panel shows it. */
+  onItem(handler: (item: Item) => boolean): void;
+  /** What the page shows now, in Preview's bar (e.g. "ProjectCard, alone"), with a way back; null: the page itself. */
+  setMode(mode: { label: string; leave(): void } | null): void;
   /** Changes the number on the panel's tab. */
   setCount(count: number | undefined): void;
   /** Opens a place in the code the browser ran (a URL, line and column), in the developer's own file (by source maps). */
