@@ -136,7 +136,7 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
   );
 
   // The map, and choosing which project it shows.
-  const map = new MapPanel(context.extensionUri, index, current, review, changes, memory);
+  const map = new MapPanel(context.extensionUri, index, current, review, changes, memory, context.globalState);
   context.subscriptions.push(
     map,
     vscode.commands.registerCommand('visualEditor.openMap', () => map.show()),

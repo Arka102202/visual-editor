@@ -11,7 +11,8 @@ import type { MemoryEntry } from '../memory';
 import { addStyles, ago, el } from '../ui/dom';
 import { iconButton, installTips, mapIcon, setIcon, tray, type Icon } from '../ui/buttons';
 import { TYPE_CSS, typeText, useThemeTokens } from '../ui/typeText';
-import { WINDOW_CSS, windowControls } from '../ui/windows';
+import { WINDOW_CSS } from '../ui/windows';
+import { Frame, FRAME_CSS, type Layout as PanelLayout, type LayoutStore } from '../ui/frame';
 import type { Tone } from '../styles';
 
 declare function acquireVsCodeApi(): { postMessage(message: FromMap): void };
@@ -97,22 +98,11 @@ addStyles(`
   .empty h2 { margin: 0; font-size: 16px; font-weight: 600; }
   .empty p { margin: 0; opacity: .7; max-width: 420px; }
   /* Focus: one card's immediate neighbours, in a modal over the map. */
-  .nb-back { position: fixed; inset: 0; z-index: 20; background: color-mix(in srgb, #000 55%, transparent); display: flex; align-items: center; justify-content: center; }
-  .nb { position: relative; width: min(1100px, 94vw); height: min(720px, 88vh); display: flex; flex-direction: column; border-radius: 12px; background: var(--vscode-editor-background); border: 1px solid var(--vscode-panel-border, #8885); box-shadow: 0 20px 60px #0008; overflow: hidden; }
-  .nb-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--vscode-panel-border, #8883); flex: none; }
-  .nb-head h2 { margin: 0; font-size: 15px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .nb-head .hint { font-size: 11px; opacity: .6; white-space: nowrap; }
-  .nb-body { position: relative; flex: 1; min-height: 0; }
+  /* Focus: one card's immediate neighbours, in a window over the map. */
   .nb-stage { position: absolute; inset: 0; }
-  /* Focus's side panel: everything joined to the card, in tabs, floating over the map (it takes no room from it). */
-  .nb-side { position: absolute; top: 10px; right: 10px; bottom: 10px; width: min(340px, calc(100% - 20px)); z-index: 2; display: flex; flex-direction: column; border-radius: 10px; overflow: hidden; border: 1px solid var(--vscode-panel-border, #8885); background: color-mix(in srgb, var(--vscode-sideBar-background, var(--vscode-editor-background)) 94%, transparent); box-shadow: 0 8px 28px #0007; }
-  .nb-tabs { padding: 8px 10px; gap: 4px; border-bottom: 1px solid var(--vscode-panel-border, #8883); flex: none; }
-  /* Colourful, in the colours of the VS Code theme in use: each tab has its own (set as --tint). */
-  .nb-tabs button { background: transparent; color: var(--tint, var(--vscode-foreground)); opacity: .75; }
-  .nb-tabs button:hover { opacity: 1; }
-  .nb-tabs button.icon.on { opacity: 1; color: var(--tint, var(--vscode-foreground)); background: color-mix(in srgb, var(--tint, #888) 22%, transparent); box-shadow: inset 0 -2px 0 var(--tint, transparent); }
-  .nb-side h3 { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--tint, inherit); margin: 0; padding: 10px 12px 6px; }
-  .nb-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 10px 10px; }
+  .nb-list { padding: 0 10px 10px; }
+  .nb-list h3 { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--tint, inherit); margin: 0; padding: 10px 2px 6px; }
+  .nb-list .none { font-size: 12px; opacity: .6; padding: 4px 2px; }
   .nb-row { position: relative; display: flex; gap: 8px; align-items: center; padding: 7px 8px 7px 13px; border-radius: 6px; margin-bottom: 4px; background: var(--vscode-editorWidget-background, #8881); font-size: 12px; overflow: hidden; }
   .nb-row.go { cursor: pointer; }
   .nb-row.go:hover { outline: 1px solid var(--vscode-focusBorder, #39f); }
@@ -148,7 +138,7 @@ addStyles(`
   .nb-row.prop.open .full { display: block; margin-top: 6px; padding: 6px 8px; border-radius: 4px; background: color-mix(in srgb, var(--vscode-foreground) 7%, transparent); font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; white-space: pre-wrap; word-break: break-word; cursor: text; user-select: text; }
 ${TYPE_CSS}
 ${WINDOW_CSS}
-  .nb-side .none { font-size: 12px; opacity: .6; padding: 4px 2px; }
+${FRAME_CSS}
 `);
 
 // The page: a bar on top, the stage below, and a message for when there's nothing to draw.
@@ -362,45 +352,36 @@ function drawCard(c: PlacedCard): HTMLElement {
 // Clicking a neighbour moves to it; double-clicking opens its code; Esc closes.
 // ---------------------------------------------------------------------------
 
-const nbBack = el('div', 'nb-back');
-nbBack.hidden = true;
-const nbBox = el('div', 'nb');
-const nbHead = el('div', 'nb-head');
-const nbTitle = el('h2');
-const nbCounts = el('span', 'hint');
+/** Each window's panel layout: kept here for this page, and by the extension for next time. */
+let layouts: Record<string, PanelLayout> = {};
+const layoutStore: LayoutStore = {
+  get: (key) => layouts[key],
+  set: (key, layout) => {
+    layouts[key] = layout;
+    vscode.postMessage({ type: 'layout', key, layout });
+  },
+};
+
+// The window: the map of neighbours in the middle; its panels (what comes in, goes out, other maps, props) float on
+// the right to start with, and go wherever the developer puts them.
+const focus = new Frame('focus', layoutStore, { right: { panels: ['in', 'out', 'map:*', 'props'], float: true, size: 340 } });
+const nbTitle = focus.title;
+const nbCounts = focus.hint;
 const nbZoom = el('span', 'zoom');
 const nbOut = iconButton('zoomOut', 'Zoom out');
 const nbIn = iconButton('zoomIn', 'Zoom in');
 const nbFit = iconButton('fitMap', 'Fit: show all of it');
 const nbOnMap = iconButton('onMap', 'Show on map: close this and go to the card on the map');
-const nbClose = iconButton('close', 'Close (Esc)');
-const nbSideButton = iconButton('sidePanel', 'List: hide or show everything joined to this card', { cls: 'on' });
-nbHead.append(nbTitle, nbCounts, tray(el('div', 'nb-tools')));
-// Moved by its title bar; full screen with a button or a double-click on the title bar.
-const nbWindow = windowControls(nbBox, nbHead);
-nbHead.lastElementChild!.append(nbZoom, nbOut, nbIn, nbFit, nbSideButton, nbOnMap, nbWindow.fullButton, nbClose);
-const nbBody = el('div', 'nb-body');
+focus.addTools(nbZoom, nbOut, nbIn, nbFit, nbOnMap);
 const nbStage = el('div', 'nb-stage');
-const nbSide = el('div', 'nb-side');
-const nbTabs = tray(el('div', 'nb-tabs'));
-const nbList = el('div', 'nb-list');
-nbSide.append(nbTabs, nbList);
-nbBody.append(nbStage, nbSide);
-nbBox.append(nbHead, nbBody);
-nbBack.append(nbBox);
-document.body.append(nbBack);
+focus.main.append(nbStage);
 let nbId: string | undefined;
 const nbView = new MapView(nbStage, look, {
   pick: (id) => id && id !== nbId && openNeighbours(id),
   open: openCode,
   moved: (v) => (nbZoom.textContent = `${Math.round(v.k * 100)}%`),
 });
-nbBack.addEventListener('pointerdown', (e) => {
-  if (e.target === nbBack) closeNeighbours();
-});
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !nbBack.hidden) closeNeighbours();
-});
+focus.onClose = () => (nbId = undefined);
 nbOut.addEventListener('click', () => nbView.zoomAt(undefined, undefined, 1 / 1.25));
 nbIn.addEventListener('click', () => nbView.zoomAt(undefined, undefined, 1.25));
 nbFit.addEventListener('click', () => nbView.fit());
@@ -409,16 +390,9 @@ nbOnMap.addEventListener('click', () => {
   closeNeighbours();
   if (id) focusCard(id);
 });
-nbClose.addEventListener('click', () => closeNeighbours());
-nbSideButton.addEventListener('click', () => {
-  nbSide.hidden = !nbSide.hidden;
-  nbSideButton.classList.toggle('on', !nbSide.hidden);
-  if (!nbSide.hidden) requestAnimationFrame(cutShort);
-});
 
 function closeNeighbours() {
-  nbBack.hidden = true;
-  nbId = undefined;
+  focus.close();
 }
 
 /** Space between the three groups, between columns in a group, and between cards in a column. */
@@ -498,7 +472,7 @@ function neighbourLayout(id: string): { layout: Layout; ins: number; outs: numbe
 function openNeighbours(id: string) {
   if (!mv.placedById.has(id)) return;
   // Shown first, so the layout can take the window's shape.
-  nbBack.hidden = false;
+  focus.open();
   const made = neighbourLayout(id)!;
   nbId = id;
   nbTitle.textContent = mv.placedById.get(id)!.item.label;
@@ -507,16 +481,13 @@ function openNeighbours(id: string) {
   // The card in focus is chosen: its lines show their kind and an arrow; every neighbour stays bright.
   nbView.select(id);
   requestAnimationFrame(() => nbView.fit());
-  // Everything joined to it, on any map, comes from the shell for the side panel.
-  nbTabs.replaceChildren();
-  nbList.replaceChildren(el('div', 'none', 'Reading its lines…'));
+  // Everything joined to it, on any map, comes from the shell for the panels.
+  focus.setPanels([]);
   vscode.postMessage({ type: 'lines', id });
 }
 
-// The side panel: what comes in and goes out on this map, what it's joined to on each other map (API calls,
-// pages…), and its props, one tab at a time.
-/** The tab last chosen, kept while moving from card to card. */
-let nbTab = 'in';
+// The panels: what comes in and goes out on this map, what it's joined to on each other map (API calls, pages…),
+// and its props.
 
 /** Each tab's colour: one of the theme's own code colours (VS Code's chart colours until they arrive). */
 const TINTS = {
@@ -579,39 +550,24 @@ function showLines(m: CardLines) {
         }),
     },
   ];
-  // The tab last chosen, when it has something; otherwise the first that does.
-  const open = tabs.find((t) => t.key === nbTab && t.count) ?? tabs.find((t) => t.count) ?? tabs[0];
-  const choose = (t: SideTab) => {
-    for (const b of nbTabs.children) b.classList.toggle('on', (b as HTMLElement).dataset.key === t.key);
-    const rows = t.fill();
-    nbList.style.setProperty('--tint', t.tint);
-    nbList.replaceChildren(el('h3', undefined, `${t.name.split(':')[0]} (${t.count})`), ...(rows.length ? rows : [el('div', 'none', 'Nothing here.')]));
-    nbList.scrollTop = 0;
-    requestAnimationFrame(cutShort);
-  };
-  nbTabs.replaceChildren(
-    ...tabs.map((t) => {
-      const b = iconButton(t.icon, `${t.name} (${t.count})`, { count: t.count });
-      b.dataset.key = t.key;
-      b.style.setProperty('--tint', t.tint);
-      b.addEventListener('click', () => {
-        nbTab = t.key;
-        choose(t);
-      });
-      return b;
+  focus.setPanels(
+    tabs.map((t) => {
+      const rows = t.fill();
+      const body = el('div', 'nb-list');
+      body.append(el('h3', undefined, `${t.name.split(':')[0]} (${t.count})`), ...(rows.length ? rows : [el('div', 'none', 'Nothing here.')]));
+      return { id: t.key, icon: t.icon, name: t.name, count: t.count, tint: t.tint, body, onShow: () => cutShort(body) };
     }),
   );
-  choose(open);
 }
 
 /**
  * Text the side panel had to cut short: a name shows in full on hover; a prop's value opens in full under it (the row
  * folds open and shut, like an accordion).
  */
-function cutShort() {
+function cutShort(list: HTMLElement) {
   const cut = (e: Element | null): e is HTMLElement => !!e && (e as HTMLElement).scrollWidth > (e as HTMLElement).clientWidth + 1;
-  for (const e of nbList.querySelectorAll<HTMLElement>('.nb-row .l, .nb-row .via, .nb-row .s')) if (cut(e)) e.dataset.tip = e.textContent ?? '';
-  for (const row of nbList.querySelectorAll<HTMLElement>('.nb-row.prop')) {
+  for (const e of list.querySelectorAll<HTMLElement>('.nb-row .l, .nb-row .via, .nb-row .s')) if (cut(e)) e.dataset.tip = e.textContent ?? '';
+  for (const row of list.querySelectorAll<HTMLElement>('.nb-row.prop')) {
     if (row.classList.contains('folds') || !cut(row.querySelector('.v'))) continue;
     row.classList.add('folds');
     // Selecting the full value (to copy it) doesn't fold it shut.
@@ -868,6 +824,7 @@ window.addEventListener('message', (e: MessageEvent<ToMap>) => {
   else if (e.data?.type === 'card') showCard(e.data);
   else if (e.data?.type === 'lines') showLines(e.data);
   else if (e.data?.type === 'theme') useThemeTokens(e.data.tokens);
+  else if (e.data?.type === 'layouts') layouts = { ...e.data.layouts, ...layouts };
   else if (e.data?.type === 'focus') focusCard(e.data.id);
   else if (e.data?.type === 'measure') void measure();
 });
