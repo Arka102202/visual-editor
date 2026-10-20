@@ -2,7 +2,7 @@
 // it), its calls written to Visual Editor's output, and everything stopped when Visual Editor closes.
 
 import * as vscode from 'vscode';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import { DevServer, get } from './devServer';
 import { AppProxy, type Recorded } from './proxy';
@@ -75,6 +75,30 @@ export class AppProxies implements vscode.Disposable {
     }
     if (!existsSync(file)) return void vscode.window.showInformationMessage(`That came from ${served}, which isn't a file in the project.`);
     const position = new vscode.Position(Math.max(0, at.line - 1), Math.max(0, at.column - 1));
+    await vscode.window.showTextDocument(vscode.Uri.file(file), { selection: new vscode.Range(position, position), viewColumn: vscode.ViewColumn.Beside });
+  }
+
+  /**
+   * Opens the stylesheet a CSS rule comes from, at that rule (found by its selector; a rule a tool made, like
+   * Tailwind's, opens the file it comes from at the top).
+   */
+  async openRule(root: string, source: string, selector: string) {
+    let file = source.replace(/\?.*$/, '');
+    if (/^https?:\/\//.test(file)) file = decodeURIComponent(new URL(file).pathname);
+    if (file.startsWith('/@fs/')) file = file.slice(4);
+    if (!(isAbsolute(file) && existsSync(file))) file = join(root, file);
+    if (!existsSync(file)) return void vscode.window.showInformationMessage(`That rule comes from ${source}, which isn't a file in the project.`);
+    let line = 0;
+    try {
+      const lines = readFileSync(file, 'utf8').split('\n');
+      const first = selector.split(',')[0].trim();
+      const squash = (s: string) => s.replace(/\s+/g, '');
+      const at = lines.findIndex((l) => l.includes(first) || (squash(first).length > 2 && squash(l).includes(squash(first))));
+      if (at >= 0) line = at;
+    } catch {
+      // Opened at the top.
+    }
+    const position = new vscode.Position(line, 0);
     await vscode.window.showTextDocument(vscode.Uri.file(file), { selection: new vscode.Range(position, position), viewColumn: vscode.ViewColumn.Beside });
   }
 

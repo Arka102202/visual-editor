@@ -78,6 +78,205 @@ const CONSOLE = String.raw`(() => {
 })();
 `;
 
+/**
+ * The picker and an element's styles, told to the Preview: hovering outlines an element (margin and padding shaded,
+ * its tag, classes and size shown); clicking selects it (the app doesn't get that click). For the selected element:
+ * its path, box model, every rule that applies (with where it comes from: a stylesheet's file, or Tailwind), what's
+ * overridden, and its final values.
+ */
+const PICKER = String.raw`(() => {
+  var ve = window.__veInspector;
+  if (!ve || ve.picker) return;
+  ve.picker = true;
+  var picking = false;
+  var selected = null;
+  var overlay = null;
+  function px(v) { return parseFloat(v) || 0; }
+  function layer(color) { var d = document.createElement('div'); d.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483646;box-sizing:border-box;' + color; return d; }
+  function makeOverlay() {
+    if (overlay) return overlay;
+    overlay = { margin: layer('background:rgba(246,178,107,.35)'), border: layer('background:rgba(255,229,153,.35)'), padding: layer('background:rgba(147,196,125,.4)'), content: layer('background:rgba(111,168,220,.45)'), tag: layer('background:#1e1e1e;color:#fff;font:11px/1.6 ui-monospace,monospace;padding:1px 6px;border-radius:3px;white-space:nowrap;') };
+    return overlay;
+  }
+  function place(d, x, y, w, h) { d.style.left = x + 'px'; d.style.top = y + 'px'; d.style.width = Math.max(0, w) + 'px'; d.style.height = Math.max(0, h) + 'px'; }
+  function label(el) {
+    var t = el.tagName.toLowerCase();
+    if (el.id) t += '#' + el.id;
+    if (typeof el.className === 'string' && el.className.trim()) t += '.' + el.className.trim().split(/\s+/).slice(0, 4).join('.');
+    return t;
+  }
+  function show(el) {
+    var o = makeOverlay();
+    var parts = [o.margin, o.border, o.padding, o.content, o.tag];
+    if (!el) { parts.forEach(function (p) { p.remove(); }); return; }
+    parts.forEach(function (p) { if (!p.isConnected) document.documentElement.appendChild(p); });
+    var r = el.getBoundingClientRect();
+    var cs = getComputedStyle(el);
+    var m = [px(cs.marginTop), px(cs.marginRight), px(cs.marginBottom), px(cs.marginLeft)];
+    var b = [px(cs.borderTopWidth), px(cs.borderRightWidth), px(cs.borderBottomWidth), px(cs.borderLeftWidth)];
+    var p = [px(cs.paddingTop), px(cs.paddingRight), px(cs.paddingBottom), px(cs.paddingLeft)];
+    place(o.margin, r.left - m[3], r.top - m[0], r.width + m[1] + m[3], r.height + m[0] + m[2]);
+    place(o.border, r.left, r.top, r.width, r.height);
+    place(o.padding, r.left + b[3], r.top + b[0], r.width - b[1] - b[3], r.height - b[0] - b[2]);
+    place(o.content, r.left + b[3] + p[3], r.top + b[0] + p[0], r.width - b[1] - b[3] - p[1] - p[3], r.height - b[0] - b[2] - p[0] - p[2]);
+    o.tag.textContent = label(el) + '  ' + Math.round(r.width) + ' × ' + Math.round(r.height);
+    o.tag.style.left = Math.max(0, r.left) + 'px';
+    o.tag.style.top = (r.top > 24 ? r.top - 22 : r.bottom + 4) + 'px';
+    o.tag.style.width = 'auto'; o.tag.style.height = 'auto';
+  }
+  function onMove(e) { if (picking) show(e.target); }
+  function onClick(e) {
+    if (!picking) return;
+    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+    picking = false;
+    ve.say({ type: 'picking', on: false });
+    select(e.target);
+  }
+  function swallow(e) { if (picking) { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); } }
+  window.addEventListener('mousemove', onMove, true);
+  window.addEventListener('click', onClick, true);
+  ['mousedown', 'mouseup', 'pointerdown', 'pointerup', 'dblclick', 'contextmenu'].forEach(function (t) { window.addEventListener(t, swallow, true); });
+  window.addEventListener('keydown', function (e) { if (picking && e.key === 'Escape') { picking = false; show(selected); ve.say({ type: 'picking', on: false }); } }, true);
+  window.addEventListener('scroll', function () { if (selected && !picking) show(selected); }, true);
+  window.addEventListener('resize', function () { if (selected && !picking) show(selected); });
+
+  /** How strong a selector is: [ids, classes and the like, tags]. */
+  function specificity(sel) {
+    var s = sel.replace(/::?(not|is|where|has)\(([^()]*)\)/g, function (m, k, inner) { return k === 'where' ? '' : ' ' + inner + ' '; });
+    var ids = (s.match(/#[\w-]+/g) || []).length;
+    var classes = (s.match(/\.[\w-]+|\[[^\]]*\]|:(?!:)[\w-]+/g) || []).length;
+    var tags = (s.replace(/#[\w-]+|\.[\w-]+|\[[^\]]*\]|::?[\w-]+(\([^)]*\))?/g, ' ').match(/(^|[\s>+~])[a-zA-Z][\w-]*/g) || []).length + (s.match(/::[\w-]+/g) || []).length;
+    return [ids, classes, tags];
+  }
+  function stronger(a, b) { for (var i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i]; return false; }
+  /** "a: b; c: d !important" as declarations (shorthands as written). */
+  function declarations(style) {
+    var out = [];
+    var text = style.cssText;
+    var depth = 0, start = 0;
+    for (var i = 0; i <= text.length; i++) {
+      var ch = text[i];
+      if (ch === '(') depth++;
+      else if (ch === ')') depth--;
+      else if ((ch === ';' && depth === 0) || i === text.length) {
+        var part = text.slice(start, i).trim();
+        start = i + 1;
+        var at = part.indexOf(':');
+        if (at < 1) continue;
+        var name = part.slice(0, at).trim();
+        var value = part.slice(at + 1).trim();
+        var important = /!important$/.test(value);
+        out.push({ name: name, value: value.replace(/\s*!important$/, ''), important: important });
+      }
+    }
+    return out;
+  }
+  function sourceOf(sheet) {
+    var node = sheet.ownerNode;
+    var id = node && node.getAttribute && (node.getAttribute('data-vite-dev-id') || node.getAttribute('data-href'));
+    if (id) return id;
+    if (sheet.href) return sheet.href;
+    return node && node.tagName === 'STYLE' ? '<style> in the page' : '';
+  }
+  function rulesFor(el) {
+    var found = [];
+    var order = 0;
+    function walk(rules, sheet, media) {
+      for (var i = 0; i < rules.length; i++) {
+        var r = rules[i];
+        order++;
+        if (r.type === 1 || r.selectorText) {
+          var parts = String(r.selectorText).split(/,(?![^(]*\))/);
+          var best = null;
+          for (var k = 0; k < parts.length; k++) {
+            try { if (el.matches(parts[k].trim())) { var sp = specificity(parts[k]); if (!best || stronger(sp, best.sp)) best = { sel: parts[k].trim(), sp: sp }; } } catch (e) {}
+          }
+          if (best) found.push({ selector: r.selectorText, matched: best.sel, specificity: best.sp, order: order, media: media.slice(), source: sourceOf(sheet), declarations: declarations(r.style) });
+        } else if (r.media && r.cssRules) {
+          var mt = r.media.mediaText;
+          if (!mt || matchMedia(mt).matches) walk(r.cssRules, sheet, media.concat(['@media ' + mt]));
+        } else if (r.conditionText !== undefined && r.cssRules && /supports/i.test(r.constructor.name)) {
+          if (CSS.supports(r.conditionText)) walk(r.cssRules, sheet, media.concat(['@supports ' + r.conditionText]));
+        } else if (r.cssRules) {
+          walk(r.cssRules, sheet, r.name ? media.concat(['@layer ' + r.name]) : media);
+        }
+      }
+    }
+    for (var s = 0; s < document.styleSheets.length; s++) {
+      var sheet = document.styleSheets[s];
+      try { walk(sheet.cssRules, sheet, []); } catch (e) {}
+    }
+    // Strongest first: !important, then how strong the selector is, then which comes later.
+    found.sort(function (a, b) { return stronger(b.specificity, a.specificity) ? 1 : stronger(a.specificity, b.specificity) ? -1 : b.order - a.order; });
+    if (el.style && el.style.cssText) found.unshift({ selector: 'element.style', matched: 'style=""', specificity: [1, 0, 0, 0], order: Infinity, media: [], source: 'inline', declarations: declarations(el.style) });
+    // What's overridden: a property set by a stronger rule (or an !important one) already.
+    var won = {};
+    found.forEach(function (rule) { rule.declarations.forEach(function (d) { if (d.important && !won[d.name + '!']) won[d.name + '!'] = rule; }); });
+    found.forEach(function (rule) {
+      rule.declarations.forEach(function (d) {
+        var imp = won[d.name + '!'];
+        if (imp && imp !== rule) { d.overridden = true; return; }
+        if (!d.important) { if (won[d.name]) d.overridden = true; else won[d.name] = rule; }
+      });
+    });
+    return found;
+  }
+  var COMPUTED = ['display', 'position', 'top', 'right', 'bottom', 'left', 'z-index', 'box-sizing', 'width', 'height', 'min-width', 'max-width', 'min-height', 'max-height', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width', 'border-style', 'border-color', 'border-radius', 'flex-direction', 'flex-wrap', 'justify-content', 'align-items', 'align-self', 'gap', 'flex-grow', 'flex-shrink', 'flex-basis', 'grid-template-columns', 'grid-template-rows', 'font-family', 'font-size', 'font-weight', 'line-height', 'letter-spacing', 'text-align', 'text-transform', 'white-space', 'color', 'background-color', 'background-image', 'opacity', 'box-shadow', 'overflow', 'cursor', 'transform', 'transition'];
+  function info(el) {
+    var cs = getComputedStyle(el);
+    var r = el.getBoundingClientRect();
+    var path = [];
+    for (var n = el; n && n.nodeType === 1; n = n.parentElement) path.unshift(label(n));
+    var all = {};
+    for (var i = 0; i < cs.length; i++) all[cs[i]] = cs.getPropertyValue(cs[i]);
+    var key = {};
+    COMPUTED.forEach(function (k) { key[k] = cs.getPropertyValue(k); });
+    return {
+      label: label(el),
+      tag: el.tagName.toLowerCase(),
+      classes: typeof el.className === 'string' ? el.className.trim().split(/\s+/).filter(Boolean) : [],
+      path: path,
+      size: { width: r.width, height: r.height },
+      box: {
+        margin: [cs.marginTop, cs.marginRight, cs.marginBottom, cs.marginLeft].map(px),
+        border: [cs.borderTopWidth, cs.borderRightWidth, cs.borderBottomWidth, cs.borderLeftWidth].map(px),
+        padding: [cs.paddingTop, cs.paddingRight, cs.paddingBottom, cs.paddingLeft].map(px),
+        content: { width: r.width - px(cs.paddingLeft) - px(cs.paddingRight) - px(cs.borderLeftWidth) - px(cs.borderRightWidth), height: r.height - px(cs.paddingTop) - px(cs.paddingBottom) - px(cs.borderTopWidth) - px(cs.borderBottomWidth) },
+      },
+      rules: withVariables(rulesFor(el), cs),
+      computed: key,
+      all: all,
+      text: (el.textContent || '').trim().slice(0, 80),
+    };
+  }
+  /** What each var(--x) in the rules stands for on this element. */
+  function withVariables(rules, cs) {
+    rules.forEach(function (rule) {
+      rule.declarations.forEach(function (d) {
+        var names = d.value.match(/--[\w-]+/g);
+        if (!names) return;
+        d.vars = {};
+        names.forEach(function (n) { d.vars[n] = cs.getPropertyValue(n).trim(); });
+      });
+    });
+    return rules;
+  }
+  function select(el) {
+    selected = el;
+    show(el);
+    if (el) ve.say({ type: 'picked', element: info(el) });
+  }
+  window.addEventListener('message', function (e) {
+    var m = e.data;
+    if (e.source !== window.parent || !m || m.source !== 've-preview') return;
+    if (m.type === 'pick') { picking = !!m.on; if (!picking) show(selected); }
+    if (m.type === 'refresh' && selected) select(selected.isConnected ? selected : null);
+    if (m.type === 'selectUp' && selected) { var t = selected; for (var i = 0; i < m.steps && t.parentElement; i++) t = t.parentElement; select(t); }
+    if (m.type === 'unselect') { selected = null; show(null); }
+  });
+})();
+`;
+
 export const INSPECTOR = `(() => {
   if (window.__veInspector) return;
   window.__veInspector = { version: 1 };
@@ -135,4 +334,4 @@ export const INSPECTOR = `(() => {
     if (m.type === 'reload') location.reload();
   });
 })();
-` + CONSOLE;
+` + CONSOLE + PICKER;

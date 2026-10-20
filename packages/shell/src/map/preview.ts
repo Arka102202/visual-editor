@@ -8,6 +8,7 @@ import { el } from '../ui/dom';
 import { iconButton, tray, type Icon } from '../ui/buttons';
 import { Frame, type LayoutStore } from '../ui/frame';
 import { ConsolePanel, type ConsoleEntry } from './consolePanel';
+import { CssPanel, type Picked } from './cssPanel';
 
 export const PREVIEW_CSS = `
   .pv-main { position: absolute; inset: 0; display: flex; flex-direction: column; }
@@ -57,6 +58,9 @@ export class PreviewWindow {
   private readonly deviceButtons = new Map<string, HTMLButtonElement>();
   private readonly fitButton = iconButton('fitMap', 'Zoom to fit: the whole screen size in view (off: real size, scroll to see it all)', { cls: 'on' });
   private readonly console: ConsolePanel;
+  private readonly css: CssPanel;
+  private readonly pickButton = iconButton('pick', 'Pick an element: hover the page to see it, click to see its CSS (Esc stops)');
+  private picking = false;
   private iframe: HTMLIFrameElement | undefined;
   /** The app's address through the proxy, once it's running. */
   private app: string | undefined;
@@ -67,11 +71,20 @@ export class PreviewWindow {
   private fit = true;
 
   constructor(private readonly deps: Deps) {
-    this.frame = new Frame('preview', deps.store, { bottom: { panels: ['console'], size: 220 } }, { size: { width: 'min(1400px, 96vw)', height: 'min(900px, 92vh)' } });
+    this.frame = new Frame('preview', deps.store, { bottom: { panels: ['console'], size: 220 }, right: { panels: ['css'], size: 380 } }, { size: { width: 'min(1400px, 96vw)', height: 'min(900px, 92vh)' } });
     this.frame.title.textContent = 'Preview';
     this.console = new ConsolePanel((url, line, column) => deps.post({ type: 'openSource', url, line, column }));
     this.console.onCounts = (all, errors) => this.frame.updatePanel('console', { count: errors || all, name: errors ? `Console: ${errors} error${errors === 1 ? '' : 's'}, ${all} message${all === 1 ? '' : 's'} in all` : `Console: everything the page logs (${all})`, tint: errors ? 'var(--vscode-errorForeground, #f48771)' : undefined });
-    this.frame.setPanels([{ id: 'console', icon: 'console', name: 'Console: everything the page logs', body: this.console.body }]);
+    this.css = new CssPanel(
+      (m) => this.toPage(m),
+      () => this.setPicking(true),
+      (source, selector) => deps.post({ type: 'openRule', source, selector }),
+    );
+    this.frame.setPanels([
+      { id: 'console', icon: 'console', name: 'Console: everything the page logs', body: this.console.body },
+      { id: 'css', icon: 'css', name: 'CSS: the picked element’s rules, box model and final values', body: this.css.body },
+    ]);
+    this.pickButton.addEventListener('click', () => this.setPicking(!this.picking));
 
     // The bar: back, forward, reload, the address; responsive mode; open in the browser.
     const bar = el('div', 'pv-bar');
@@ -131,7 +144,7 @@ export class PreviewWindow {
     });
     const open = iconButton('popOut', 'Open in your browser (through Visual Editor, so its calls are seen there too)');
     open.addEventListener('click', () => this.app && deps.post({ type: 'openExternal', url: this.currentUrl() }));
-    bar.append(nav, this.address, devices, size, rotate, this.fitButton, this.zoomText, tray(el('div')));
+    bar.append(nav, this.pickButton, this.address, devices, size, rotate, this.fitButton, this.zoomText, tray(el('div')));
     bar.lastElementChild!.append(open);
 
     this.stage.append(this.device);
@@ -173,12 +186,21 @@ export class PreviewWindow {
     if (!this.iframe || source !== this.iframe.contentWindow) return;
     if (data.type === 'hello') {
       this.wait.hidden = true;
+      this.css.empty();
+      // A new page: picking goes on where it was.
+      if (this.picking) this.toPage({ type: 'pick', on: true });
       this.console.page(this.pathOf(String(data.url)));
       this.address.value = this.pathOf(String(data.url));
     } else if (data.type === 'location') {
       this.address.value = this.pathOf(String(data.url));
     } else if (data.type === 'console') {
       this.console.add(data.entries as ConsoleEntry[]);
+    } else if (data.type === 'picked') {
+      this.css.show(data.element as Picked);
+      this.frame.showPanel('css');
+    } else if (data.type === 'picking') {
+      this.picking = !!data.on;
+      this.pickButton.classList.toggle('on', this.picking);
     }
   }
 
@@ -210,6 +232,13 @@ export class PreviewWindow {
       this.layout();
     }
     this.iframe.src = `${this.app}${p}`;
+  }
+
+  /** Picking an element in the page: on or off. */
+  private setPicking(on: boolean) {
+    this.picking = on;
+    this.pickButton.classList.toggle('on', on);
+    this.toPage({ type: 'pick', on });
   }
 
   private reload() {

@@ -15,6 +15,7 @@ import { WINDOW_CSS } from '../ui/windows';
 import { Frame, FRAME_CSS, type Layout as PanelLayout, type LayoutStore } from '../ui/frame';
 import { PREVIEW_CSS, PreviewWindow } from './preview';
 import { CONSOLE_CSS } from './consolePanel';
+import { CSS_PANEL_CSS } from './cssPanel';
 import type { Tone } from '../styles';
 
 declare function acquireVsCodeApi(): { postMessage(message: FromMap): void };
@@ -143,6 +144,7 @@ ${WINDOW_CSS}
 ${FRAME_CSS}
 ${PREVIEW_CSS}
 ${CONSOLE_CSS}
+${CSS_PANEL_CSS}
 `);
 
 // The page: a bar on top, the stage below, and a message for when there's nothing to draw.
