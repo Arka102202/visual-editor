@@ -3,6 +3,7 @@
 import * as vscode from 'vscode';
 import { SHELL_EXTENSION_ID, type ShellApi } from '@visual-editor/contract';
 import { reactPlugin } from './plugin';
+import { appPanel, builtScripts } from './previewPanel';
 import { readingWorker } from './workerClient';
 
 export async function activate(context: vscode.ExtensionContext) {
@@ -12,7 +13,9 @@ export async function activate(context: vscode.ExtensionContext) {
     return;
   }
   const api = await shell.activate();
-  context.subscriptions.push(api.register(reactPlugin));
+  // The App panel in Preview (its scripts are built next to this file).
+  const scripts = builtScripts(__dirname);
+  context.subscriptions.push(api.register({ ...reactPlugin, ...(scripts ? { previewPanels: [appPanel(scripts)] } : {}) }));
 }
 
 /** The reading worker stops with the extension. */
