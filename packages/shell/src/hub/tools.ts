@@ -8,7 +8,6 @@ import type { Item } from '@visual-editor/contract';
 import { forCard, rulesText, type MemoryEntry } from '../memory';
 import type { ProjectState } from '../projectIndex';
 import { newId, parseProposal, type Proposal } from '../proposals';
-import type { CardPicture, PictureOptions } from '../cardPictures';
 
 export const SERVER_NAME = 'visual-editor';
 
@@ -26,8 +25,6 @@ export interface HubHost {
   /** Saves a new proposal; Review shows it and tells the developer. */
   propose(root: string, p: Proposal): void;
   remember(root: string, e: MemoryEntry): void;
-  /** Pictures of a card as its plugin draws it (saved in the project); undefined when pictures can't be taken here. */
-  pictures?(root: string, id: string, opts: PictureOptions): Promise<CardPicture[]>;
 }
 
 /** Assistants send technical names ("claude-code"); show them nicely. */
@@ -45,8 +42,6 @@ between them), its rules and decisions, and the history of reviewed changes.
   sends it back with a note, or rejects it. Then call proposal_status; if it was sent back, read the note and propose
   again.
 - When you and the developer agree on something worth keeping, call remember.
-- To see how a card looks (and its other versions), call pictures. Look before saying a change to what people see is
-  done, and fix what looks wrong first.
 Card ids look like "react:component:src/Card.tsx#Card". Several projects may be open: pass project (its name) when it
 matters; otherwise the one on the map is used.`;
 
@@ -158,43 +153,6 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       const remembered = forCard(host.memory(s.project.root), item);
       if (remembered.length) out.push('Remembered:', ...remembered.slice(0, 15).map(entryLine));
       return reply(out.join('\n'));
-    },
-  );
-
-  server.registerTool(
-    'pictures',
-    {
-      title: 'Pictures of a card',
-      description:
-        "How a card looks, drawn by its plugin (as in the Preview tab): pictures at mobile, tablet and desktop width, in the situations asked for (normal, empty, loading, error…; 'all' for every one), and its other versions next to it when versions is true. Saved in .visual-editor/pictures/ too. Use it to check your own changes to what people see.",
-      inputSchema: {
-        id: z.string().describe('The card id, from list_cards'),
-        project: projectArg,
-        situations: z.union([z.array(z.string()), z.literal('all')]).optional().describe("Situations to draw it in; default its first (usually normal); 'all' for every one"),
-        sizes: z.array(z.enum(['mobile', 'tablet', 'desktop'])).optional().describe('Default: all three'),
-        versions: z.boolean().optional().describe('Its other versions too, next to how it is now'),
-        theme: z.enum(['light', 'dark']).optional(),
-      },
-      annotations: { readOnlyHint: true, openWorldHint: false },
-    },
-    async ({ id, project, situations, sizes, versions, theme }) => {
-      const s = await pick(project);
-      if (typeof s === 'string') return fail(s);
-      if (!host.pictures) return fail('Pictures can\'t be taken here.');
-      if (!s.items.some((i) => i.id === id)) return fail(`No card "${id}" in ${s.project.name}. Use list_cards to find it.`);
-      try {
-        const pics = await host.pictures(s.project.root, id, { situations, sizes, versions, theme });
-        const lines = pics.map((p) => `- ${p.label} · ${p.situation} · ${p.size}${p.width ? ` (${p.width}×${p.height})` : ''}${p.file ? ` → ${p.file}` : ''}${p.error ? ` · problem: ${p.error}` : ''}`);
-        const images = pics.filter((p) => p.png).slice(0, 12);
-        return {
-          content: [
-            { type: 'text' as const, text: [`${pics.length} picture${pics.length === 1 ? '' : 's'}${images.length < pics.filter((p) => p.png).length ? ` (the first ${images.length} shown; the rest are in the files)` : ''}:`, ...lines].join('\n') },
-            ...images.map((p) => ({ type: 'image' as const, data: p.png!.toString('base64'), mimeType: 'image/png' })),
-          ],
-        };
-      } catch (e) {
-        return fail(e instanceof Error ? e.message : String(e));
-      }
     },
   );
 

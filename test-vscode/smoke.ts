@@ -194,35 +194,7 @@ export async function run() {
     await until(() => t.hub.claudeState() === 'off', 'the hub to be gone from Claude Code settings', 15_000);
   });
 
-  await step('the preview frame shows the card, in any situation, size and theme', async () => {
-    await t.preview.show({ root, item: 'hello:card' });
-    const seen = listen(t.preview.panel);
-    await until(() => t.preview.ready, 'the preview page');
-    const shown = () => seen.filter((m) => m.type === 'show').at(-1);
-    t.preview.receive({ type: 'reload' });
-    await until(() => !!shown()?.frames[0]?.url, 'a drawn preview');
-    const html = await (await fetch(shown().frames[0].url)).text();
-    if (!html.includes('Hello, demo') || !html.includes('README.md')) throw new Error(`page: ${html.slice(0, 200)}`);
-    await until(() => t.preview.shownFrames === 1, 'the preview on screen');
-    await wait(1500);
-    await shot('11-preview');
-    t.preview.receive({ type: 'situation', name: 'empty' });
-    t.preview.receive({ type: 'size', size: 'mobile', width: 375 });
-    t.preview.receive({ type: 'theme', theme: 'light' });
-    await until(() => shown()?.situation === 'empty' && shown()?.size === 'mobile' && shown()?.theme === 'light', 'empty, mobile, light');
-    const empty = await (await fetch(shown().frames[0].url)).text();
-    if (!empty.includes('No files to show') || !empty.includes('375px wide')) throw new Error(`page: ${empty.slice(0, 300)}`);
-    await wait(1500);
-    await shot('12-preview-mobile-empty-light');
-  });
-
-  await step('the preview and the map pop out into their own window and come back', async () => {
-    const seen = listen(t.preview.panel);
-    t.preview.receive({ type: 'window' });
-    await until(() => seen.some((m) => m.type === 'show' && m.floating === true), 'the preview in its own window');
-    await wait(1000);
-    t.preview.receive({ type: 'window' });
-    await until(() => seen.filter((m) => m.type === 'show').at(-1)?.floating === false, 'the preview back');
+  await step('the map pops out into its own window and comes back', async () => {
     t.map.show();
     const mapSeen2 = listen(t.map.panel);
     t.map.receive({ type: 'window' });
@@ -230,28 +202,6 @@ export async function run() {
     await wait(1000);
     t.map.receive({ type: 'window' });
     await until(() => mapSeen2.filter((m) => m.type === 'show').at(-1)?.floating === false, 'the map back');
-  });
-
-  await step('a proposal is previewed Before and After, side by side, without changing the file', async () => {
-    const original = readFileSync(readme, 'utf8');
-    await t.review.tryExample();
-    const p = t.review.proposals(root)[0];
-    t.preview.receive({ type: 'situation', name: 'normal' });
-    t.preview.receive({ type: 'size', size: 'fit', width: 600 });
-    t.preview.receive({ type: 'theme', theme: 'dark' });
-    const seen = listen(t.preview.panel);
-    await t.preview.show({ root, item: 'hello:card', proposal: p.id });
-    await until(() => seen.some((m) => m.type === 'show' && m.frames.length === 2 && m.frames.every((f: any) => f.url)), 'Before and After');
-    const both = seen.filter((m) => m.type === 'show' && m.frames.length === 2).at(-1);
-    const [b, a] = await Promise.all(both.frames.map(async (f: any) => (await fetch(f.url)).text()));
-    const lines = (html: string) => Number(/README\.md<\/span><b>(\d+) lines/.exec(html)?.[1]);
-    if (!(lines(a) > lines(b))) throw new Error(`before ${lines(b)}, after ${lines(a)}`);
-    if (readFileSync(readme, 'utf8') !== original) throw new Error('the file changed');
-    await until(() => t.preview.shownFrames === 2, 'Before and After on screen');
-    await wait(1500);
-    await shot('13-preview-before-after');
-    t.review.store(root).mark(p, 'rejected', 'only a test');
-    t.review.reload(root, false);
   });
 
   if (process.env.VISUAL_EDITOR_CLAUDE === '1') {

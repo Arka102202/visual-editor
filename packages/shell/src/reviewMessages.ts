@@ -22,8 +22,6 @@ export interface ReviewItem {
   files: ReviewFile[];
   /** Why it can't be applied (or undone) as it stands. */
   conflicts: string[];
-  /** Cards it touches that can be previewed (Before and After). */
-  previews: { id: string; label: string }[];
 }
 
 /** Shell → review page. */
@@ -46,5 +44,4 @@ export type FromReview =
   | { type: 'sendBack'; id: string }
   | { type: 'reject'; id: string }
   | { type: 'undo'; id: string }
-  | { type: 'preview'; id: string; item: string }
   | { type: 'open'; path: string; line?: number };

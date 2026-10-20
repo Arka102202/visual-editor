@@ -1,4 +1,4 @@
-// Windows over a page (Focus, Preview): moved by dragging their title bar, and made full screen (and back) with a
+// Windows over a page (Focus): moved by dragging their title bar, and made full screen (and back) with a
 // button or by double-clicking the title bar. Plain DOM; the window sits in a backdrop that centres it.
 
 import { iconButton, setIcon } from './buttons';

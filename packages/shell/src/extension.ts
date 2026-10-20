@@ -18,9 +18,6 @@ import type { MemoryEntry } from './memory';
 import { Hub } from './hub/hub';
 import { AssistantsView, chooseAssistant } from './hub/assistantsView';
 import { vscodeFiles } from './vscodeFiles';
-import { PreviewServer } from './previewServer';
-import { PicturesService } from './picturesService';
-import { PreviewPanel, type PreviewTarget } from './previewPanel';
 
 export function activate(context: vscode.ExtensionContext): ShellApi {
   const registry = new PluginRegistry();
@@ -139,7 +136,7 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
   );
 
   // The map, and choosing which project it shows.
-  const map = new MapPanel(context.extensionUri, index, current, review, changes, memory, context.workspaceState);
+  const map = new MapPanel(context.extensionUri, index, current, review, changes, memory);
   context.subscriptions.push(
     map,
     vscode.commands.registerCommand('visualEditor.openMap', () => map.show()),
@@ -187,25 +184,6 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     }),
   );
 
-  // The preview frame: how a card looks, drawn by its plugin; Before and After for proposals.
-  const previewServer = new PreviewServer();
-  const preview = new PreviewPanel(context.extensionUri, index, review, changes, previewServer, current);
-  // Pictures of previews: for the developer (the camera button) and for assistants (the hub's pictures tool).
-  const pictures = new PicturesService(index, changes, previewServer);
-  preview.pictures = pictures;
-  const openPreview = (target: PreviewTarget) => void preview.show(target);
-  map.openPreview = openPreview;
-  review.openPreview = openPreview;
-  context.subscriptions.push(
-    preview,
-    pictures,
-    { dispose: () => void previewServer.stop() },
-    vscode.commands.registerCommand('visualEditor.preview', (item?: string) => {
-      const root = current.get()?.project.root;
-      if (root && typeof item === 'string') openPreview({ root, item });
-    }),
-  );
-
   // The assistant hub: Claude Code reads the map, rules and memory, and proposes changes into Review.
   const hub = new Hub(context, {
     projects: () => index.snapshot(),
@@ -216,7 +194,6 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     readFile: (root, path) => vscodeFiles(root, changes).read(path),
     propose: (root, p) => review.receiveProposal(root, p),
     remember: (root, e) => memory.update(root, e),
-    pictures: (root, id, opts) => pictures.take(root, id, opts),
   }, log);
   void hub.start();
   const assistantsView = new AssistantsView(hub);
@@ -251,7 +228,7 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     },
   };
   // The VS Code test (npm run test:vscode) reaches inside; never switched on otherwise.
-  if (process.env.VISUAL_EDITOR_TEST === '1') return Object.assign(api, { _test: { index, current, review, memory, changes, map, hub, preview } });
+  if (process.env.VISUAL_EDITOR_TEST === '1') return Object.assign(api, { _test: { index, current, review, memory, changes, map, hub } });
   return api;
 }
 
