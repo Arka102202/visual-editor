@@ -18,6 +18,7 @@ import { CONSOLE_CSS } from './consolePanel';
 import { CSS_PANEL_CSS } from './cssPanel';
 import { NETWORK_CSS } from './networkPanel';
 import { PLUGIN_PANELS_CSS } from './pluginPanels';
+import { Playground, PLAYGROUND_CSS } from './playground';
 import type { Tone } from '../styles';
 
 declare function acquireVsCodeApi(): { postMessage(message: FromMap): void };
@@ -149,6 +150,7 @@ ${CONSOLE_CSS}
 ${CSS_PANEL_CSS}
 ${NETWORK_CSS}
 ${PLUGIN_PANELS_CSS}
+${PLAYGROUND_CSS}
 `);
 
 // The page: a bar on top, the stage below, and a message for when there's nothing to draw.
@@ -277,6 +279,12 @@ function showCard(m: CardMemory) {
   const look = iconButton('preview', item.kind === 'route' ? `Preview: open ${item.label} in the running app` : `Preview: show ${item.label} in the running app (a component alone, inside the app’s providers)`, { cls: 'primary' });
   look.addEventListener('click', () => openPreview(item));
   buttons.prepend(look);
+  // A component (not a page or an API call): every case of its data, as tiles.
+  if (item.source && item.kind !== 'route' && !/api/i.test(item.map)) {
+    const board = iconButton('board', `Playground: ${item.label} with each of its data cases, side by side`);
+    board.addEventListener('click', () => playground.open(item));
+    look.after(board);
+  }
   const inOut = iconButton('focus', 'Focus: only what comes into this card and what goes out of it (its immediate neighbours)');
   inOut.addEventListener('click', () => openNeighbours(item.id));
   buttons.append(inOut);
@@ -394,6 +402,8 @@ nbPreview.addEventListener('click', () => {
 
 /** The running app, over everything (opened from a card, Focus, or the Preview command). */
 const preview = new PreviewWindow({ post: (m) => vscode.postMessage(m), store: layoutStore });
+/** A component's cases as tiles on a board. */
+const playground = new Playground({ post: (m) => vscode.postMessage(m), store: layoutStore });
 
 /** Opens Preview: a page card at its own address (its :params left to fill in), anything else where it was. */
 function openPreview(item?: Item) {
@@ -850,13 +860,20 @@ picker.addEventListener('change', () => vscode.postMessage({ type: 'choose', roo
 window.addEventListener('message', (e: MessageEvent<ToMap>) => {
   // The app in Preview talks through the inspector the proxy adds to its pages.
   const fromPage = e.data as unknown as { source?: string } | undefined;
-  if (fromPage?.source === 've-inspector') return preview.fromPage(e.data as unknown as Record<string, unknown>, e.source);
+  if (fromPage?.source === 've-inspector') {
+    playground.fromPage(e.data as unknown as Record<string, unknown>, e.source);
+    return preview.fromPage(e.data as unknown as Record<string, unknown>, e.source);
+  }
   if (e.data?.type === 'show') show(e.data);
   else if (e.data?.type === 'card') showCard(e.data);
   else if (e.data?.type === 'lines') showLines(e.data);
   else if (e.data?.type === 'theme') useThemeTokens(e.data.tokens);
   else if (e.data?.type === 'layouts') layouts = { ...e.data.layouts, ...layouts };
-  else if (e.data?.type === 'app') preview.receiveApp(e.data);
+  else if (e.data?.type === 'app') {
+    preview.receiveApp(e.data);
+    playground.receiveApp(e.data);
+  } else if (e.data?.type === 'playground') playground.receive(e.data);
+  else if (e.data?.type === 'casesSaved') playground.casesSaved(e.data);
   else if (e.data?.type === 'preview') preview.open(e.data.path);
   else if (e.data?.type === 'panels') preview.setPluginPanels(e.data.panels);
   else if (e.data?.type === 'panelAnswer') preview.pluginAnswer(e.data);

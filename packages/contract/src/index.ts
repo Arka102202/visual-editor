@@ -181,6 +181,20 @@ export interface PreviewPageApi {
   highlight(elements: Element[] | null, label?: string): void;
   /** The developer picked an element with Preview's picker (one picker for every panel). */
   onPicked(handler: (element: Element) => void): void;
+  /**
+   * Draws a project component alone, on request (the Playground's tiles): a plugin that can registers here. `show`
+   * resolves when it's drawn (with an error in words when it couldn't be); `target` is the element it drew.
+   */
+  drawAlone(handler: AloneDrawer): void;
+}
+
+/** A plugin's way to draw a component alone in its page (see PreviewPageApi.drawAlone). */
+export interface AloneDrawer {
+  show(request: { file: string; name: string; props: Record<string, unknown>; fill?: boolean }): Promise<{ error?: string }>;
+  leave(): void;
+  target(): Element | null;
+  /** The props a copy of it has on this page now (real data, as JSON: functions as {"$action": "name"}), if one's there. */
+  propsOnPage?(request: { file: string; name: string }): Promise<Record<string, unknown> | null>;
 }
 
 /** What a panel's script gets, in Visual Editor's window. */

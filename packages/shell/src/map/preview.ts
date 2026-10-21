@@ -188,7 +188,8 @@ export class PreviewWindow {
     if (!m.url) return;
     this.app = m.url.replace(/\/$/, '');
     this.frame.hint.textContent = this.app.replace(/^https?:\/\//, '');
-    this.go(this.pending);
+    // Only when Preview is open (the Playground asks for the app too).
+    if (this.frame.isOpen) this.go(this.pending);
   }
 
   /** Calls the app made, the project's fakes and contracts (from the extension). */
