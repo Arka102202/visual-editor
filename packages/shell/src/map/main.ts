@@ -14,6 +14,7 @@ import { TYPE_CSS, typeText, useThemeTokens } from '../ui/typeText';
 import { WINDOW_CSS } from '../ui/windows';
 import { Frame, FRAME_CSS, type Layout as PanelLayout, type LayoutStore } from '../ui/frame';
 import { WEBVIEW_CSS, Webview } from './webview';
+import { PLAYGROUND_CSS, Playground } from './playground';
 import { PREVIEW_CSS, PreviewWindow } from './previewWindow';
 import { CONSOLE_CSS } from './consolePanel';
 import { CSS_PANEL_CSS } from './cssPanel';
@@ -151,6 +152,7 @@ ${TYPE_CSS}
 ${WINDOW_CSS}
 ${FRAME_CSS}
 ${WEBVIEW_CSS}
+${PLAYGROUND_CSS}
 ${PREVIEW_CSS}
 ${CONSOLE_CSS}
 ${CSS_PANEL_CSS}
@@ -283,13 +285,18 @@ function showCard(m: CardMemory) {
     open.addEventListener('click', () => vscode.postMessage({ type: 'open', path: item.source!.path, line: item.source!.line }));
     buttons.append(open);
   }
+  drawerToggles = [];
   if (item.preview) {
-    // Highlighted only while it's on: Preview open, showing this card.
-    const look = iconButton('board', `Preview: ${item.label}’s every variant in every state, with fixed data (no network)`);
-    look.classList.toggle('on', preview.shows(item.id));
-    look.addEventListener('click', () => preview.open(item));
-    previewButton = { button: look, id: item.id };
-    buttons.append(look);
+    const one = iconButton('single', previewTip(item.label));
+    one.addEventListener('click', () => preview.open(item));
+    const all = iconButton('board', playgroundTip(item.label));
+    all.addEventListener('click', () => playground.open(item));
+    drawerToggles = [
+      { button: one, id: () => item.id, win: preview },
+      { button: all, id: () => item.id, win: playground },
+    ];
+    buttons.append(one, all);
+    refreshToggles();
   }
   const inOut = iconButton('focus', 'Focus: only what comes into this card and what goes out of it (its immediate neighbours)');
   inOut.addEventListener('click', () => openNeighbours(item.id));
@@ -429,15 +436,46 @@ const nbOut = iconButton('zoomOut', 'Zoom out');
 const nbIn = iconButton('zoomIn', 'Zoom in');
 const nbFit = iconButton('fitMap', 'Fit: show all of it');
 const nbOnMap = iconButton('onMap', 'Show on map: close this and go to the card on the map');
-focus.addTools(nbZoom, nbOut, nbIn, nbFit, nbOnMap);
+const nbPreview = iconButton('single', 'Preview');
+const nbPlayground = iconButton('board', 'Playground');
+focus.addTools(nbPreview, nbPlayground, nbZoom, nbOut, nbIn, nbFit, nbOnMap);
 
 /** The Webview: the running app, over everything (from the map's top bar, or its command), to try whole pages. */
 const webview = new Webview({ post: (m) => vscode.postMessage(m), store: layoutStore });
-/** Preview: a card's variants in every fixed-data state (for cards that have them). */
+/** Preview: one variant of a card on its own, in one fixed-data state, at a screen size (for cards that have variants). */
 const preview = new PreviewWindow({ post: (m) => vscode.postMessage(m), store: layoutStore });
-/** The drawer's Preview button (it shows whether Preview is open on its card). */
-let previewButton: { button: HTMLButtonElement; id: string } | undefined;
-preview.onToggle = () => previewButton?.button.classList.toggle('on', preview.shows(previewButton.id));
+/** Playground: a card's every variant in every fixed-data state; a chosen tile opens in Preview. */
+const playground = new Playground({ post: (m) => vscode.postMessage(m), store: layoutStore, preview: (item, variant, state) => preview.open(item, variant, state) });
+const previewTip = (label: string) => `Preview: ${label} on its own (the variant in use), with fixed data, at a screen size`;
+const playgroundTip = (label: string) => `Playground: ${label}’s every variant in every state, side by side, with fixed data`;
+
+/** Buttons that open Preview or the Playground for a card (the drawer's, Focus's): each on only while its window shows that card. */
+interface Toggle {
+  button: HTMLButtonElement;
+  id: () => string | undefined;
+  win: { shows(id: string): boolean };
+}
+let drawerToggles: Toggle[] = [];
+const focusToggles: Toggle[] = [
+  { button: nbPreview, id: () => nbId, win: preview },
+  { button: nbPlayground, id: () => nbId, win: playground },
+];
+function refreshToggles() {
+  for (const t of [...drawerToggles, ...focusToggles]) {
+    const id = t.id();
+    t.button.classList.toggle('on', !!id && t.win.shows(id));
+  }
+}
+preview.onToggle = refreshToggles;
+playground.onToggle = refreshToggles;
+nbPreview.addEventListener('click', () => {
+  const item = nbId ? mv.placedById.get(nbId)?.item : undefined;
+  if (item?.preview) preview.open(item);
+});
+nbPlayground.addEventListener('click', () => {
+  const item = nbId ? mv.placedById.get(nbId)?.item : undefined;
+  if (item?.preview) playground.open(item);
+});
 const nbStage = el('div', 'nb-stage');
 focus.main.append(nbStage);
 let nbId: string | undefined;
@@ -446,7 +484,10 @@ const nbView = new MapView(nbStage, look, {
   open: openCode,
   moved: (v) => (nbZoom.textContent = `${Math.round(v.k * 100)}%`),
 });
-focus.onClose = () => (nbId = undefined);
+focus.onClose = () => {
+  nbId = undefined;
+  refreshToggles();
+};
 nbOut.addEventListener('click', () => nbView.zoomAt(undefined, undefined, 1 / 1.25));
 nbIn.addEventListener('click', () => nbView.zoomAt(undefined, undefined, 1.25));
 nbFit.addEventListener('click', () => nbView.fit());
@@ -540,7 +581,15 @@ function openNeighbours(id: string) {
   focus.open();
   const made = neighbourLayout(id)!;
   nbId = id;
-  nbTitle.textContent = mv.placedById.get(id)!.item.label;
+  const item = mv.placedById.get(id)!.item;
+  nbTitle.textContent = item.label;
+  // Preview and Playground, for a card that has variants.
+  nbPreview.hidden = nbPlayground.hidden = !item.preview;
+  for (const [b, tip] of [[nbPreview, previewTip(item.label)], [nbPlayground, playgroundTip(item.label)]] as const) {
+    b.dataset.tip = tip;
+    b.setAttribute('aria-label', tip);
+  }
+  refreshToggles();
   nbCounts.textContent = `${made.ins} in · ${made.outs} out`;
   nbView.setLayout(made.layout);
   // The card in focus is chosen: its lines show their kind and an arrow; every neighbour stays bright.
@@ -888,7 +937,10 @@ window.addEventListener('message', (e: MessageEvent<ToMap>) => {
   // The app in the Webview talks through the inspector the proxy adds to its pages.
   const fromPage = e.data as unknown as { source?: string } | undefined;
   if (fromPage?.source === 've-inspector') return webview.fromPage(e.data as unknown as Record<string, unknown>, e.source);
-  if (fromPage?.source === 've-preview-page') return preview.fromPage(e.data as unknown as Record<string, unknown>, e.source);
+  if (fromPage?.source === 've-preview-page') {
+    playground.fromPage(e.data as unknown as Record<string, unknown>, e.source);
+    return preview.fromPage(e.data as unknown as Record<string, unknown>, e.source);
+  }
   if (e.data?.type === 'show') show(e.data);
   else if (e.data?.type === 'card') showCard(e.data);
   else if (e.data?.type === 'lines') showLines(e.data);
@@ -896,6 +948,7 @@ window.addEventListener('message', (e: MessageEvent<ToMap>) => {
   else if (e.data?.type === 'layouts') layouts = { ...e.data.layouts, ...layouts };
   else if (e.data?.type === 'app') {
     webview.receiveApp(e.data);
+    playground.receiveApp(e.data);
     preview.receiveApp(e.data);
   }
   else if (e.data?.type === 'webview') webview.open(e.data.path);
