@@ -86,6 +86,7 @@ addStyles(`
   .drawer .entry .t { font-weight: 600; font-size: 13px; }
   .drawer .entry.in-use { box-shadow: inset 3px 0 0 var(--tok-function, #b180d7); }
   .drawer .states { font-size: 12px; line-height: 1.6; }
+  .drawer .entry.problem { line-height: 1.45; box-shadow: inset 3px 0 0 var(--vscode-editorWarning-foreground, #cca700); }
   .drawer .entry .d { opacity: .85; margin-top: 2px; }
   .drawer .entry .m { opacity: .6; margin-top: 3px; font-size: 11px; }
   .drawer .none { font-size: 12px; opacity: .6; }
@@ -100,6 +101,7 @@ addStyles(`
   .card .field .n { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .card .field .v { opacity: .65; font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 50%; }
   .card .field.previewable { color: var(--tok-function, #b180d7); border-top: 1px dashed color-mix(in srgb, currentColor 30%, transparent); }
+  .card .field.previewable.problems .v { color: var(--vscode-editorWarning-foreground, #cca700); opacity: 1; }
   .card .field .t { font-size: 10px; padding: 0 5px; border-radius: 6px; background: #8883; }
   .card .more { opacity: .6; font-style: italic; }
   .map-empty { position: absolute; inset: 40px 0 0 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; gap: 6px; }
@@ -289,6 +291,11 @@ function showCard(m: CardMemory) {
 
   // Its looks (variants) and the fixed-data states Preview shows them with.
   if (item.preview) {
+    // What breaks the variant folder's rules, first: each says what to do.
+    if (item.preview.problems?.length) {
+      drawer.append(el('h3', undefined, `Problems (${item.preview.problems.length})`));
+      for (const p of item.preview.problems) drawer.append(el('div', 'entry problem', p));
+    }
     drawer.append(el('h3', undefined, 'Variants'));
     for (const v of item.preview.variants) {
       const row = el('div', `entry link${v.inUse ? ' in-use' : ''}`);
@@ -376,9 +383,10 @@ function drawCard(c: PlacedCard): HTMLElement {
     const p = item.preview;
     const inUse = p.variants.find((v) => v.inUse);
     const fields = card.querySelector('.fields') ?? card.appendChild(el('div', 'fields'));
-    const row = el('div', 'field previewable');
+    const row = el('div', `field previewable${p.problems?.length ? ' problems' : ''}`);
     row.append(el('span', 'n', `${p.variants.length} variant${p.variants.length === 1 ? '' : 's'} · ${p.states.length} state${p.states.length === 1 ? '' : 's'}`));
-    if (inUse) row.append(el('span', 'v', `${inUse.name} in use`));
+    if (p.problems?.length) row.append(el('span', 'v', `${p.problems.length} problem${p.problems.length === 1 ? '' : 's'}`));
+    else if (inUse) row.append(el('span', 'v', `${inUse.name} in use`));
     fields.append(row);
   }
   card.title = [item.label, n ? `Used by ${n} card${n === 1 ? '' : 's'}` : linked.has(item.id) ? '' : 'No lines to other cards', item.source ? 'Double-click to open its code' : ''].filter(Boolean).join('\n');
