@@ -26,6 +26,12 @@ test('preview page: the page loads the helper and the chooser, with the states a
   assert.deepEqual({ ...config, css: undefined }, { name: 'ProjectCard', chooser: '/src/cards/ProjectCard/index.tsx', helper: '/src/visual-editor.tsx', css: undefined, states: ['default', 'long name'], columns: 2 });
   assert.match(html, /Preview is static: no network calls/);
   assert.match(html, /\/@vite\/client/);
+  // Preview: one variant in one state, from the page's address (?variant=…&state=…).
+  assert.match(html, /asked\.get\('variant'\)/);
+  assert.match(html, /data-ve-single/);
+  // Its fixed data, for Details: the mock file next to the chooser.
+  const withMock = { ...project, files: [...project.files, 'src/cards/ProjectCard/ProjectCard.mock.ts', 'src/cards/Other.mock.ts'] };
+  assert.equal(JSON.parse(/const config = (\{.*\});/.exec(previewPage(item, withMock)!)![1]).mock, '/src/cards/ProjectCard/ProjectCard.mock.ts');
   // A card without variants has no page.
   assert.equal(previewPage({ ...item, preview: undefined }, project), undefined);
 });

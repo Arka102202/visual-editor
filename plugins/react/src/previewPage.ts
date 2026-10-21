@@ -2,7 +2,9 @@
 // gives it the project's own styles and code. It loads the app's global CSS (what its entry file imports), Visual
 // Editor's helper and the component's chooser, and draws every variant in every mock state with fixed data. Calls
 // to the network are blocked (and reported: a variant must be static); the dev server's live reload is kept, so a
-// saved variant shows at once. It talks to Preview (the window around it) with postMessage, source "ve-preview-page".
+// saved variant shows at once. Two ways: the Playground's board (every variant in every state), or, with ?variant=…&state=…
+// in its address, Preview's one variant in one state, drawn like a page of the app. It talks to the window around it with
+// postMessage, source "ve-preview-page"; the Playground answers with source "ve-preview" (the tile chosen, Compare).
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
@@ -33,13 +35,21 @@ export function globalCss(project: ProjectInfo, read: (path: string) => string |
   return out;
 }
 
+/** The component's fixed data (Name.mock.ts, next to its chooser), if it has one. */
+export function mockFile(item: Item, project: ProjectInfo): string | undefined {
+  if (!item.source) return undefined;
+  const dir = posix.dirname(item.source.path);
+  return project.files.find((f) => posix.dirname(f) === dir && /\.mock\.[cm]?[jt]sx?$/.test(f));
+}
+
 /** The page's HTML, or a page that says what's missing. */
 export function previewPage(item: Item, project: ProjectInfo): string | undefined {
   if (!item.preview || !item.source) return undefined;
   const helper = helperFile(project);
   const css = globalCss(project);
   const columns = item.preview.variants.length;
-  const config = { name: item.label, chooser: `/${item.source.path}`, helper: helper ? `/${helper}` : undefined, css, states: item.preview.states.length ? item.preview.states : ['default'], columns };
+  const mock = mockFile(item, project);
+  const config = { name: item.label, chooser: `/${item.source.path}`, helper: helper ? `/${helper}` : undefined, mock: mock ? `/${mock}` : undefined, css, states: item.preview.states.length ? item.preview.states : ['default'], columns };
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -94,6 +104,15 @@ try {
   [data-ve-variant]::before { content: attr(data-ve-variant-name); display: block; font: 600 11px/1.4 ui-sans-serif, system-ui, sans-serif; opacity: .55; margin-bottom: 8px; }
   [data-ve-variant][data-ve-selected]::before { content: attr(data-ve-variant-name) "  · in use"; }
   [data-ve-variant-error] { font: 12px/1.5 ui-monospace, monospace; color: #b42318; max-width: 280px; white-space: pre-wrap; }
+  [data-ve-grid] { width: max-content; }
+  /* Preview: one variant in one state, like a page of the app (no names, no board). */
+  html[data-ve-single] body { padding: 16px; }
+  html[data-ve-single] [data-ve-grid] { width: auto; display: block !important; }
+  html[data-ve-single] [data-ve-state], html[data-ve-single] [data-ve-variant]::before { display: none !important; }
+  /* A tile is chosen by its name (or an empty spot in it); what's inside works as in the app. */
+  [data-ve-state], [data-ve-variant]::before { cursor: pointer; }
+  [data-ve-chosen] { outline: 2px solid #3b82f6; outline-offset: 8px; border-radius: 2px; }
+  [data-ve-chosen]::before { color: #2563eb; opacity: 1; }
   #ve-note { font: 14px/1.6 ui-sans-serif, system-ui, sans-serif; max-width: 560px; opacity: .8; }
 </style>
 </head>
@@ -101,6 +120,15 @@ try {
 <div id="ve-preview"></div>
 <script type="module">
 const config = ${JSON.stringify(config)};
+// Preview: one variant, one state (from the address); otherwise the Playground's board.
+const asked = new URLSearchParams(location.search);
+const single = asked.get('variant') ? { variant: asked.get('variant'), state: asked.get('state') || config.states[0] } : undefined;
+if (single) {
+  document.documentElement.setAttribute('data-ve-single', '');
+  const only = document.createElement('style');
+  only.textContent = '[data-ve-variant]:not([data-ve-variant="' + CSS.escape(single.variant) + '"]) { display: none !important; }';
+  document.head.append(only);
+}
 const tell = (m) => parent !== window && parent.postMessage({ source: 've-preview-page', ...m }, '*');
 const note = (text) => { document.getElementById('ve-preview').innerHTML = '<p id="ve-note"></p>'; document.getElementById('ve-note').textContent = text; };
 try {
@@ -115,18 +143,92 @@ try {
       tell({ type: 'missing', what: 'mountPreview' });
     } else {
       const chooser = await import(/* @vite-ignore */ config.chooser);
-      helper.mountPreview(document.getElementById('ve-preview'), chooser.default, { states: config.states, columns: config.columns });
+      helper.mountPreview(document.getElementById('ve-preview'), chooser.default, single ? { states: [single.state], columns: 1 } : { states: config.states, columns: config.columns });
+      if (!single) board();
       // Tell Preview what was drawn (and any variant that stopped), once it has settled.
       setTimeout(() => {
         const cells = [...document.querySelectorAll('[data-ve-variant]')];
-        const broken = [...document.querySelectorAll('[data-ve-variant-error]')].map((e) => ({ id: e.getAttribute('data-ve-variant-error'), text: e.textContent }));
-        tell({ type: 'drawn', cells: cells.length, broken, size: { w: document.body.scrollWidth, h: document.body.scrollHeight } });
+        const broken = [...document.querySelectorAll('[data-ve-variant-error]')].map((e) => ({ id: e.getAttribute('data-ve-variant-error'), text: e.textContent })).filter((b) => !single || b.id === single.variant);
+        tell({ type: 'drawn', cells: cells.length, broken, found: !single || cells.some((c) => c.getAttribute('data-ve-variant') === single.variant) });
+        const grid = document.querySelector('[data-ve-grid]');
+        if (grid) new ResizeObserver(size).observe(grid);
+        size();
       }, 600);
+      // The fixed data, for Preview's Details (functions and elements said in words).
+      if (config.mock) import(/* @vite-ignore */ config.mock).then((m) => tell({ type: 'data', file: config.mock.slice(1), states: plain(m.states ?? {}) })).catch(() => {});
     }
   }
 } catch (e) {
   note(config.name + ' couldn’t be drawn: ' + (e && e.message || e));
   tell({ type: 'error', text: String(e && e.message || e) });
+}
+
+/** The board's size (what Preview's Fit uses), with the page's margins. */
+function size() {
+  const grid = document.querySelector('[data-ve-grid]');
+  if (!grid) return;
+  const r = grid.getBoundingClientRect();
+  tell({ type: 'size', w: Math.ceil(r.width) + 56, h: Math.ceil(r.height) + 72 });
+}
+
+/** Choosing a tile (its name, or an empty spot in it; a state's name keeps the variant), and Compare from Preview. */
+function board() {
+  let chosen;
+  const grid = () => document.querySelector('[data-ve-grid]');
+  const stateOf = (cell) => {
+    let n = cell;
+    while (n.parentElement && n.parentElement !== grid()) n = n.parentElement;
+    for (let s = n.previousElementSibling; s; s = s.previousElementSibling) if (s.hasAttribute('data-ve-state')) return s.getAttribute('data-ve-state');
+    return config.states[0];
+  };
+  const mark = (scroll) => {
+    for (const c of document.querySelectorAll('[data-ve-chosen]')) c.removeAttribute('data-ve-chosen');
+    const cell = chosen && [...document.querySelectorAll('[data-ve-variant]')].find((c) => c.getAttribute('data-ve-variant') === chosen.variant && stateOf(c) === chosen.state);
+    if (!cell) return;
+    cell.setAttribute('data-ve-chosen', '');
+    if (scroll) cell.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+  };
+  const choose = (variant, state) => {
+    chosen = { variant, state };
+    mark(false);
+    tell({ type: 'chosen', variant, state });
+  };
+  document.addEventListener('click', (e) => {
+    const t = e.target;
+    if (!(t instanceof Element)) return;
+    const state = t.closest('[data-ve-state]');
+    if (state) {
+      const first = document.querySelector('[data-ve-variant][data-ve-selected]') ?? document.querySelector('[data-ve-variant]');
+      const variant = chosen?.variant ?? first?.getAttribute('data-ve-variant');
+      if (variant) choose(variant, state.getAttribute('data-ve-state'));
+    } else if (t.hasAttribute('data-ve-variant')) choose(t.getAttribute('data-ve-variant'), stateOf(t));
+  });
+  const compare = document.createElement('style');
+  document.head.append(compare);
+  window.addEventListener('message', (e) => {
+    const m = e.data;
+    if (e.source !== parent || !m || m.source !== 've-preview') return;
+    if (m.type === 'choose') {
+      chosen = m.variant ? { variant: m.variant, state: m.state } : undefined;
+      mark(true);
+    } else if (m.type === 'compare') {
+      // Only these variants, side by side (the one in use and the chosen one).
+      compare.textContent = m.variants ? '[data-ve-variant]' + m.variants.map((v) => ':not([data-ve-variant="' + CSS.escape(v) + '"])').join('') + ' { display: none !important; } [data-ve-grid] { grid-template-columns: max-content repeat(' + m.variants.length + ', max-content) !important; }' : '';
+    }
+  });
+}
+
+/** Fixed data as plain values (what postMessage can carry and Details can show). */
+function plain(v, depth = 0, seen = new WeakSet()) {
+  if (typeof v === 'function') return '(a function)';
+  if (v === undefined) return '(nothing)';
+  if (v === null || typeof v !== 'object') return typeof v === 'bigint' || typeof v === 'symbol' ? String(v) : v;
+  if (v instanceof Date) return v.toISOString();
+  if (v.$$typeof) return '(a React element)';
+  if (seen.has(v) || depth > 8) return '(…)';
+  seen.add(v);
+  if (Array.isArray(v)) return v.map((x) => plain(x, depth + 1, seen));
+  return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, plain(x, depth + 1, seen)]));
 }
 </script>
 </body>
