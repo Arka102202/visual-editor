@@ -181,20 +181,6 @@ export interface PreviewPageApi {
   highlight(elements: Element[] | null, label?: string): void;
   /** The developer picked an element with Preview's picker (one picker for every panel). */
   onPicked(handler: (element: Element) => void): void;
-  /**
-   * Draws a project component alone, on request (the Playground's tiles): a plugin that can registers here. `show`
-   * resolves when it's drawn (with an error in words when it couldn't be); `target` is the element it drew.
-   */
-  drawAlone(handler: AloneDrawer): void;
-}
-
-/** A plugin's way to draw a component alone in its page (see PreviewPageApi.drawAlone). */
-export interface AloneDrawer {
-  show(request: { file: string; name: string; props: Record<string, unknown>; fill?: boolean }): Promise<{ error?: string }>;
-  leave(): void;
-  target(): Element | null;
-  /** The props a copy of it has on this page now (real data, as JSON: functions as {"$action": "name"}), if one's there. */
-  propsOnPage?(request: { file: string; name: string }): Promise<Record<string, unknown> | null>;
 }
 
 /** What a panel's script gets, in Visual Editor's window. */
@@ -214,14 +200,8 @@ export interface PreviewPanelApi {
   onShow(handler: () => void): void;
   /** Loads the app's page again (e.g. when the page script doesn't answer: the page was there before the panel). */
   reloadPage(): void;
-  /** Takes the app's page to an address (a path like /settings). */
-  navigate(path: string): void;
   /** Asks the plugin's VS Code side (PreviewPanel.serve); resolves with its answer. */
   ask(request: unknown): Promise<unknown>;
-  /** A card the developer opened Preview with (e.g. a component): return true when this panel shows it. */
-  onItem(handler: (item: Item) => boolean): void;
-  /** What the page shows now, in Preview's bar (e.g. "ProjectCard, alone"), with a way back; null: the page itself. */
-  setMode(mode: { label: string; leave(): void } | null): void;
   /** Changes the number on the panel's tab. */
   setCount(count: number | undefined): void;
   /** Opens a place in the code the browser ran (a URL, line and column), in the developer's own file (by source maps). */

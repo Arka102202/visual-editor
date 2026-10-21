@@ -291,71 +291,7 @@ const PLUGINS = String.raw`(() => {
   if (!ve || window.visualEditor) return;
   var handlers = {};
   var outline = null;
-  var drawer = null;
 
-  /** Every computed style of an element, written out (a picture is drawn without the page's style sheets). */
-  function styleOf(el) {
-    var cs = getComputedStyle(el);
-    var out = '';
-    for (var i = 0; i < cs.length; i++) out += cs[i] + ':' + cs.getPropertyValue(cs[i]) + ';';
-    return out;
-  }
-  /** Images as data (a picture can't load anything): through the proxy, so another address's images come too. */
-  function asData(src) {
-    var url = src;
-    try { var u = new URL(src, location.href); if (u.origin !== location.origin && /^https?:$/.test(u.protocol)) url = location.origin + '/__ve/x/' + encodeURIComponent(u.origin) + u.pathname + u.search; } catch (e) {}
-    return fetch(url).then(function (r) { return r.blob(); }).then(function (b) {
-      return new Promise(function (resolve) { var f = new FileReader(); f.onload = function () { resolve(f.result); }; f.onerror = function () { resolve(''); }; f.readAsDataURL(b); });
-    }).catch(function () { return ''; });
-  }
-  /** A picture (PNG, as data) of an element as drawn: its copy with every style written out, in an SVG. */
-  function snap(el) {
-    if (!el || !el.getBoundingClientRect) return Promise.resolve(null);
-    var r = el.getBoundingClientRect();
-    var w = Math.ceil(r.width), h = Math.ceil(r.height);
-    if (!w || !h) return Promise.resolve({ w: w, h: h, empty: true });
-    var copy = el.cloneNode(true);
-    var waits = [];
-    (function walk(a, b) {
-      if (a.nodeType !== 1) return;
-      b.setAttribute('style', styleOf(a));
-      b.removeAttribute('class');
-      if (a.tagName === 'IMG' && a.currentSrc) waits.push(asData(a.currentSrc).then(function (d) { if (d) b.setAttribute('src', d); }));
-      if (a.tagName === 'CANVAS') { try { var im = document.createElement('img'); im.setAttribute('src', a.toDataURL()); im.setAttribute('style', styleOf(a)); b.replaceWith(im); return; } catch (e) {} }
-      if (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA') b.setAttribute('value', a.value);
-      for (var i = 0; i < a.childNodes.length; i++) walk(a.childNodes[i], b.childNodes[i]);
-    })(el, copy);
-    copy.style.margin = '0';
-    var bg = '';
-    for (var p = el; p && !bg; p = p.parentElement) { var c = getComputedStyle(p).backgroundColor; if (c && !/rgba\(0, 0, 0, 0\)|transparent/.test(c)) bg = c; }
-    return Promise.all(waits).then(function () {
-      var html = new XMLSerializer().serializeToString(copy);
-      var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '"><foreignObject width="100%" height="100%">' + html + '</foreignObject></svg>';
-      var src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
-      return new Promise(function (resolve) {
-        var img = new Image();
-        img.onload = function () {
-          try {
-            var scale = Math.min(2, window.devicePixelRatio || 1);
-            var canvas = document.createElement('canvas');
-            canvas.width = w * scale; canvas.height = h * scale;
-            var ctx = canvas.getContext('2d');
-            ctx.scale(scale, scale);
-            if (bg) { ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h); }
-            ctx.drawImage(img, 0, 0);
-            resolve({ w: w, h: h, src: canvas.toDataURL('image/png') });
-          } catch (e) { resolve({ w: w, h: h, src: src }); }
-        };
-        img.onerror = function () { resolve({ w: w, h: h, empty: true }); };
-        img.src = src;
-      });
-    });
-  }
-  function box() {
-    var d = document.createElement('div');
-    d.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483645;box-sizing:border-box;border:2px solid #4f8cff;background:rgba(79,140,255,.14);border-radius:2px';
-    return d;
-  }
   window.visualEditor = {
     version: 1,
     on: function (channel, fn) { (handlers[channel] = handlers[channel] || []).push(fn); },
@@ -386,32 +322,10 @@ const PLUGINS = String.raw`(() => {
       }
     },
     onPicked: function (fn) { ve.picked.push(fn); },
-    drawAlone: function (handler) { drawer = handler; },
   };
   window.addEventListener('message', function (e) {
     var m = e.data;
     if (e.source !== window.parent || !m || m.source !== 've-preview') return;
-    if (m.type === 'aloneShow') {
-      if (!drawer) return ve.say({ type: 'aloneShown', id: m.id, error: 'No plugin here can show a component on its own.' });
-      Promise.resolve(drawer.show({ file: m.file, name: m.name, props: m.props || {}, fill: !!m.fill }))
-        .then(function (r) { return r || {}; }, function (err) { return { error: String(err && err.message || err) }; })
-        .then(function (r) {
-          // A picture of what it drew, once it has settled.
-          setTimeout(function () {
-            var target = drawer.target();
-            snap(target).then(function (pic) { ve.say({ type: 'aloneShown', id: m.id, error: r.error, picture: pic }); });
-          }, m.settle || 350);
-        });
-      return;
-    }
-    if (m.type === 'aloneLeave') { if (drawer) drawer.leave(); return; }
-    if (m.type === 'aloneProps') {
-      Promise.resolve(drawer && drawer.propsOnPage ? drawer.propsOnPage({ file: m.file, name: m.name }) : null)
-        .catch(function () { return null; })
-        .then(function (props) { ve.say({ type: 'aloneProps', id: m.id, props: props }); });
-      return;
-    }
-    if (m.type === 'snapshot') { snap(drawer && drawer.target()).then(function (pic) { ve.say({ type: 'snapshot', id: m.id, picture: pic }); }); return; }
     if (m.type !== 'plugin') return;
     (handlers[m.channel] || []).forEach(function (fn) { try { fn(m.data); } catch (err) { console.error(err); } });
   });

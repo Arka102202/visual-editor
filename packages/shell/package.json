@@ -55,8 +55,8 @@
         "icon": "$(type-hierarchy-sub)"
       },
       {
-        "command": "visualEditor.previewApp",
-        "title": "Preview the App",
+        "command": "visualEditor.openWebview",
+        "title": "Open the Webview (the running app)",
         "category": "Visual Editor",
         "icon": "$(preview)"
       },

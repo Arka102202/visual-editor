@@ -13,12 +13,11 @@ import { iconButton, installTips, mapIcon, setIcon, tray, type Icon } from '../u
 import { TYPE_CSS, typeText, useThemeTokens } from '../ui/typeText';
 import { WINDOW_CSS } from '../ui/windows';
 import { Frame, FRAME_CSS, type Layout as PanelLayout, type LayoutStore } from '../ui/frame';
-import { PREVIEW_CSS, PreviewWindow } from './preview';
+import { WEBVIEW_CSS, Webview } from './webview';
 import { CONSOLE_CSS } from './consolePanel';
 import { CSS_PANEL_CSS } from './cssPanel';
 import { NETWORK_CSS } from './networkPanel';
 import { PLUGIN_PANELS_CSS } from './pluginPanels';
-import { Playground, PLAYGROUND_CSS } from './playground';
 import type { Tone } from '../styles';
 
 declare function acquireVsCodeApi(): { postMessage(message: FromMap): void };
@@ -145,12 +144,11 @@ addStyles(`
 ${TYPE_CSS}
 ${WINDOW_CSS}
 ${FRAME_CSS}
-${PREVIEW_CSS}
+${WEBVIEW_CSS}
 ${CONSOLE_CSS}
 ${CSS_PANEL_CSS}
 ${NETWORK_CSS}
 ${PLUGIN_PANELS_CSS}
-${PLAYGROUND_CSS}
 `);
 
 // The page: a bar on top, the stage below, and a message for when there's nothing to draw.
@@ -183,9 +181,11 @@ for (const [mode, words] of [['flow', 'Flow'], ['folders', 'Folders']] as const)
   arrangeGroup.append(b);
   arrangeButtons.push([b, mode]);
 }
+const webviewButton = iconButton('preview', 'Webview: your running app, to try whole pages without a browser (Console, CSS, Network, App)');
+webviewButton.addEventListener('click', () => webview.open());
 const windowButton = iconButton('popOut', 'Pop out: the map in its own window');
 windowButton.addEventListener('click', () => vscode.postMessage({ type: 'window' }));
-bar.append(picker, projectName, chips, tabs, find, arrangeGroup, proposedBadge, changedBadge, zoomText, fitButton, windowButton);
+bar.append(picker, projectName, chips, tabs, find, arrangeGroup, proposedBadge, changedBadge, webviewButton, zoomText, fitButton, windowButton);
 // One line always: when there's no room, the bar scrolls sideways (no scrollbar). Every button names itself on hover.
 tray(bar);
 installTips();
@@ -275,15 +275,6 @@ function showCard(m: CardMemory) {
     const open = iconButton('code', 'Open code');
     open.addEventListener('click', () => vscode.postMessage({ type: 'open', path: item.source!.path, line: item.source!.line }));
     buttons.append(open);
-  }
-  const look = iconButton('preview', item.kind === 'route' ? `Preview: open ${item.label} in the running app` : `Preview: show ${item.label} in the running app (a component alone, inside the app’s providers)`, { cls: 'primary' });
-  look.addEventListener('click', () => openPreview(item));
-  buttons.prepend(look);
-  // A component (not a page or an API call): every case of its data, as tiles.
-  if (item.source && item.kind !== 'route' && !/api/i.test(item.map)) {
-    const board = iconButton('board', `Playground: ${item.label} with each of its data cases, side by side`);
-    board.addEventListener('click', () => playground.open(item));
-    look.after(board);
   }
   const inOut = iconButton('focus', 'Focus: only what comes into this card and what goes out of it (its immediate neighbours)');
   inOut.addEventListener('click', () => openNeighbours(item.id));
@@ -393,24 +384,10 @@ const nbOut = iconButton('zoomOut', 'Zoom out');
 const nbIn = iconButton('zoomIn', 'Zoom in');
 const nbFit = iconButton('fitMap', 'Fit: show all of it');
 const nbOnMap = iconButton('onMap', 'Show on map: close this and go to the card on the map');
-const nbPreview = iconButton('preview', 'Preview: open the running app (at this page, for a page card)');
-focus.addTools(nbZoom, nbOut, nbIn, nbFit, nbPreview, nbOnMap);
-nbPreview.addEventListener('click', () => {
-  const item = nbId ? mv.placedById.get(nbId)?.item : undefined;
-  openPreview(item);
-});
+focus.addTools(nbZoom, nbOut, nbIn, nbFit, nbOnMap);
 
-/** The running app, over everything (opened from a card, Focus, or the Preview command). */
-const preview = new PreviewWindow({ post: (m) => vscode.postMessage(m), store: layoutStore });
-/** A component's cases as tiles on a board. */
-const playground = new Playground({ post: (m) => vscode.postMessage(m), store: layoutStore });
-
-/** Opens Preview: a page card at its own address (its :params left to fill in), anything else where it was. */
-function openPreview(item?: Item) {
-  // A page card opens at its address; any other card goes to a plugin panel that can show it (a component, alone).
-  if (item?.kind === 'route' && item.label.startsWith('/')) return preview.open(item.label);
-  preview.open(undefined, item);
-}
+/** The Webview: the running app, over everything (from the map's top bar, or its command), to try whole pages. */
+const webview = new Webview({ post: (m) => vscode.postMessage(m), store: layoutStore });
 const nbStage = el('div', 'nb-stage');
 focus.main.append(nbStage);
 let nbId: string | undefined;
@@ -860,24 +837,17 @@ picker.addEventListener('change', () => vscode.postMessage({ type: 'choose', roo
 window.addEventListener('message', (e: MessageEvent<ToMap>) => {
   // The app in Preview talks through the inspector the proxy adds to its pages.
   const fromPage = e.data as unknown as { source?: string } | undefined;
-  if (fromPage?.source === 've-inspector') {
-    playground.fromPage(e.data as unknown as Record<string, unknown>, e.source);
-    return preview.fromPage(e.data as unknown as Record<string, unknown>, e.source);
-  }
+  if (fromPage?.source === 've-inspector') return webview.fromPage(e.data as unknown as Record<string, unknown>, e.source);
   if (e.data?.type === 'show') show(e.data);
   else if (e.data?.type === 'card') showCard(e.data);
   else if (e.data?.type === 'lines') showLines(e.data);
   else if (e.data?.type === 'theme') useThemeTokens(e.data.tokens);
   else if (e.data?.type === 'layouts') layouts = { ...e.data.layouts, ...layouts };
-  else if (e.data?.type === 'app') {
-    preview.receiveApp(e.data);
-    playground.receiveApp(e.data);
-  } else if (e.data?.type === 'playground') playground.receive(e.data);
-  else if (e.data?.type === 'casesSaved') playground.casesSaved(e.data);
-  else if (e.data?.type === 'preview') preview.open(e.data.path);
-  else if (e.data?.type === 'panels') preview.setPluginPanels(e.data.panels);
-  else if (e.data?.type === 'panelAnswer') preview.pluginAnswer(e.data);
-  else if (e.data?.type === 'calls' || e.data?.type === 'fakes' || e.data?.type === 'contracts' || e.data?.type === 'contractExample') preview.receiveNetwork(e.data);
+  else if (e.data?.type === 'app') webview.receiveApp(e.data);
+  else if (e.data?.type === 'webview') webview.open(e.data.path);
+  else if (e.data?.type === 'panels') webview.setPluginPanels(e.data.panels);
+  else if (e.data?.type === 'panelAnswer') webview.pluginAnswer(e.data);
+  else if (e.data?.type === 'calls' || e.data?.type === 'fakes' || e.data?.type === 'contracts' || e.data?.type === 'contractExample') webview.receiveNetwork(e.data);
   else if (e.data?.type === 'focus') focusCard(e.data.id);
   else if (e.data?.type === 'measure') void measure();
 });

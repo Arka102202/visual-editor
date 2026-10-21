@@ -22,7 +22,7 @@ export class OutsideChanges {
 
   /** A file in a project changed. `path` is relative to `root`; `absolute` is the full path. */
   note(root: string, path: string, absolute: string) {
-    // Visual Editor's own files (fakes, contracts, a component's cases) aren't changes to the app's code.
+    // Visual Editor's own files (fakes, contracts) aren't changes to the app's code.
     if (isVisualEditorFile(path)) return;
     const until = this.ownWrites.get(absolute);
     if (until !== undefined && until > Date.now()) return;
@@ -54,9 +54,9 @@ export class OutsideChanges {
   }
 }
 
-/** Files that are Visual Editor's: .visual-editor/ (fakes, contracts…) and Name.variants.json (a component's cases). */
+/** Files that are Visual Editor's: .visual-editor/ (fakes, contracts…). */
 export function isVisualEditorFile(path: string): boolean {
-  return /(^|[\\/])\.visual-editor[\\/]/.test(path) || /\.variants\.json$/.test(path);
+  return /(^|[\\/])\.visual-editor[\\/]/.test(path);
 }
 
 /** The mark on each card: a waiting proposal wins over a change outside review. */
