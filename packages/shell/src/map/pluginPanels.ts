@@ -2,7 +2,7 @@
 // nonce), it calls VisualEditor.definePanel(key, factory), and gets the api it draws with. Messages between it and its
 // page script (in the app) go through Preview, on the panel's channel ("<plugin>/<panel>").
 
-import type { Item, PreviewPanelApi } from '@visual-editor/contract';
+import type { PreviewPanelApi } from '@visual-editor/contract';
 import type { FromMap, PluginPanel } from '../mapMessages';
 import { el } from '../ui/dom';
 import { addIcon, iconButton, tray, type Icon } from '../ui/buttons';
@@ -25,7 +25,6 @@ interface Instance {
   onFacts: ((facts: unknown) => void)[];
   onPage: ((url: string) => void)[];
   onShow: (() => void)[];
-  onItem: ((item: Item) => boolean)[];
 }
 
 interface Host {
@@ -36,12 +35,6 @@ interface Host {
   changed(): void;
   /** Loads the app's page again. */
   reload(): void;
-  /** What the page shows now (a plugin's mode), or the page itself. */
-  setMode(mode: { label: string; leave(): void } | null): void;
-  /** Brings a panel forward. */
-  showPanel(id: string): void;
-  /** Takes the page to an address of the app. */
-  navigate(path: string): void;
   setCount(id: string, count: number | undefined): void;
 }
 
@@ -74,7 +67,7 @@ export class PluginPanels {
         continue;
       }
       addIcon(this.iconName(info.key), info.icon);
-      const inst: Instance = { info, body: el('div', 'pp'), defined: false, onMessage: [], onFacts: [], onPage: [], onShow: [], onItem: [] };
+      const inst: Instance = { info, body: el('div', 'pp'), defined: false, onMessage: [], onFacts: [], onPage: [], onShow: [] };
       this.all.set(info.key, inst);
       this.load(inst);
       changed = true;
@@ -112,19 +105,6 @@ export class PluginPanels {
     this.waiting.delete(m.id);
     if (m.error) w.reject(new Error(m.error));
     else w.resolve(m.answer);
-  }
-
-  /** Preview was opened with a card (not a page): the first panel that shows it comes forward. True when one did. */
-  showItem(item: Item): boolean {
-    for (const inst of this.all.values()) {
-      let taken = false;
-      for (const h of inst.onItem) this.safely(inst, () => (taken = h(item) || taken));
-      if (taken) {
-        this.host.showPanel(this.id(inst.info.key));
-        return true;
-      }
-    }
-    return false;
   }
 
   id(key: string): string {
@@ -166,15 +146,12 @@ export class PluginPanels {
       onShow: (h) => void inst.onShow.push(h),
       setCount: (count) => this.host.setCount(this.id(key), count),
       reloadPage: () => this.host.reload(),
-      navigate: (path) => this.host.navigate(path),
       ask: (request) =>
         new Promise((resolve, reject) => {
           const id = ++this.asked;
           this.waiting.set(id, { resolve, reject });
           this.host.post({ type: 'panelAsk', key, id, request });
         }),
-      onItem: (h) => void inst.onItem.push(h),
-      setMode: (mode) => this.host.setMode(mode),
       openSource: (url, line, column) => this.host.post({ type: 'openSource', url, line, column }),
       openFile: (path, line) => this.host.post({ type: 'open', path, ...(line ? { line } : {}) }),
       openItem: (label, kind) => this.host.post({ type: 'openItem', label, ...(kind ? { kind } : {}) }),

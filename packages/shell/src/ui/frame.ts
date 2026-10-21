@@ -1,4 +1,4 @@
-// A window over a page (Focus, Preview, Playground): a title bar with its tools (moved by dragging, full screen with a
+// A window over a page (Focus, Webview): a title bar with its tools (moved by dragging, full screen with a
 // button or a double-click), Esc to close (the window on top first: they stack), and side panels the developer
 // arranges. Panels sit in docks (left, right, bottom), as tabs; a dock sits beside the content or floats over it, and
 // is resized by dragging its inner edge. A panel moves to another dock by dragging its tab there (or to an empty side),

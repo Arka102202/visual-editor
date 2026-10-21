@@ -78,3 +78,13 @@ test('fakes: the proxy answers, changes the answer, fails, or passes with the de
     backend.close();
   }
 });
+
+test('fakes: Visual Editor’s own files are never "changed outside review"', async () => {
+  const { OutsideChanges, isVisualEditorFile } = await import('../src/changes');
+  assert.ok(isVisualEditorFile('.visual-editor/api/get-api-orders.json'));
+  assert.ok(!isVisualEditorFile('src/cards/ProjectCard.tsx'));
+  const changes = new OutsideChanges();
+  changes.note('/p', '.visual-editor/contracts.json', '/p/.visual-editor/contracts.json');
+  changes.note('/p', 'src/cards/ProjectCard.tsx', '/p/src/cards/ProjectCard.tsx');
+  assert.deepEqual([...changes.get('/p')], ['src/cards/ProjectCard.tsx']);
+});

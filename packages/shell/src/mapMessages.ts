@@ -6,7 +6,6 @@ import type { Layout as PanelLayout } from './ui/frame';
 import type { Recorded } from './proxy/proxy';
 import type { FakeEndpoint, Scenarios } from './proxy/fakes';
 import type { ContractInfo, ContractRef } from './contracts/contracts';
-import type { DataCase } from './cases';
 import type { Arrange, Layout } from './layout';
 import type { MemoryEntry } from './memory';
 import type { Tone } from './styles';
@@ -32,8 +31,8 @@ export type ToMap =
   | { type: 'layouts'; layouts: Record<string, PanelLayout> }
   /** The app's address through Visual Editor's proxy (for Preview), how starting it goes, or why it can't start. */
   | { type: 'app'; url?: string; progress?: string; error?: string }
-  /** Open Preview (from the command): at this address of the app. */
-  | { type: 'preview'; path?: string }
+  /** Open the Webview (from the command): at this address of the app. */
+  | { type: 'webview'; path?: string }
   /** Calls the app made (new ones as they happen; `all`: these are all of them so far). */
   | { type: 'calls'; calls: Recorded[]; all?: boolean }
   /** The project's fakes, its scenarios, and the names of the headers the proxy adds (their values stay hidden). */
@@ -44,10 +43,6 @@ export type ToMap =
   | { type: 'panels'; panels: PluginPanel[] }
   /** A plugin's answer to a panel's question. */
   | { type: 'panelAnswer'; key: string; id: number; answer?: unknown; error?: string }
-  /** The Playground for a component: its kept cases, suggested ones, and the pages it's drawn on. */
-  | { type: 'playground'; item: Item; file?: string; cases: DataCase[]; example: Record<string, unknown>; suggestions: DataCase[]; pages: string[] }
-  /** Its cases were kept (in `file`). */
-  | { type: 'casesSaved'; id: string; file: string; cases: DataCase[] }
   /** An example answer made from a contract (asked for with `contractExample`). */
   | { type: 'contractExample'; ref: ContractRef; status?: number; body?: unknown; error?: string };
 
@@ -162,10 +157,6 @@ export type FromMap =
   | { type: 'contractExample'; ref: ContractRef }
   /** Open the code of a card found by its name (and kind), e.g. a component a plugin panel shows. */
   | { type: 'openItem'; label: string; kind?: string }
-  /** Open the Playground for a card (a component). */
-  | { type: 'playground'; id: string }
-  /** Keep a component's cases (Name.variants.json next to it). */
-  | { type: 'saveCases'; id: string; cases: DataCase[] }
   /** A plugin panel asks its plugin's VS Code side (PreviewPanel.serve); the answer comes back as panelAnswer. */
   | { type: 'panelAsk'; key: string; id: number; request: unknown }
   /** Open an address in the developer's own browser. */

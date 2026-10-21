@@ -5,8 +5,8 @@
 //   VSCODE_PATH=…    VS Code elsewhere
 //   TEST=look PROJECT=<folder> [PLUGINS=react,hello] [CARD=<label>]
 //                    open a real project instead and take screenshots of its map (changes nothing)
-//   TEST=preview PROJECT=<folder> DEBUG_PORT=<port>
-//                    open a real project's app in Preview and hold it open, to be driven through Chrome's debugging
+//   TEST=webview PROJECT=<folder> DEBUG_PORT=<port>
+//                    open a real project's app in the Webview and hold it open, to be driven through Chrome's debugging
 //                    protocol on that port (the test's own window only); <requests>/stop ends it
 
 import * as esbuild from 'esbuild';

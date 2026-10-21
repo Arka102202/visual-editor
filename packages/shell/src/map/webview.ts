@@ -1,9 +1,8 @@
-// Preview: the running app in a window over the map, through Visual Editor's proxy (so its calls are seen, and later
-// faked). A bar with back, forward, reload, the address, and responsive mode (fill, phone, tablet, laptop, desktop,
-// rotate, zoom to fit); side panels the developer arranges, starting with the Console. The page
-// talks to it through the inspector the proxy adds. Plain DOM.
+// The Webview: the running app in a window over the map, through Visual Editor's proxy (so its calls are seen, and
+// can be faked), to try whole pages without a browser. A bar with back, forward, reload, the address, and responsive
+// mode (fill, phone, tablet, laptop, desktop, rotate, zoom to fit); side panels the developer arranges: Console, CSS,
+// Network, and plugins' (React's App panel). The page talks to it through the inspector the proxy adds. Plain DOM.
 
-import type { Item } from '@visual-editor/contract';
 import type { FromMap, PluginPanel } from '../mapMessages';
 import { el } from '../ui/dom';
 import { iconButton, tray, type Icon } from '../ui/buttons';
@@ -14,7 +13,7 @@ import { NetworkPanel } from './networkPanel';
 import type { CardNetwork } from './previewTypes';
 import { PluginPanels } from './pluginPanels';
 
-export const PREVIEW_CSS = `
+export const WEBVIEW_CSS = `
   .pv-main { position: absolute; inset: 0; display: flex; flex-direction: column; }
   .pv-bar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--vscode-panel-border, #8883); flex: none; }
   .pv-bar input { font: inherit; font-size: 12px; padding: 4px 8px; border-radius: 5px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, #8884); }
@@ -31,9 +30,6 @@ export const PREVIEW_CSS = `
   .pv-device iframe { position: absolute; left: 0; top: 0; border: 0; background: #fff; transform-origin: 0 0; }
   .pv-stage:not(.fill) .pv-device iframe { box-shadow: 0 0 0 1px color-mix(in srgb, var(--vscode-foreground) 25%, transparent), 0 10px 30px #0006; border-radius: 4px; }
   .pv-stage.fill .pv-device iframe { width: 100% !important; height: 100% !important; transform: none !important; }
-  .pv-mode { display: flex; align-items: center; gap: 4px; flex: none; max-width: 40%; padding: 0 2px 0 9px; border-radius: 12px; font-size: 11px; color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
-  .pv-mode .label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-  .pv-mode button.icon { width: 22px; height: 22px; background: transparent; color: inherit; }
   .pv-wait { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; }
   .pv-wait h3 { margin: 0 0 6px; font-size: 15px; }
   .pv-wait p { margin: 0; opacity: .7; font-size: 12px; white-space: pre-wrap; max-width: 560px; }
@@ -53,7 +49,7 @@ interface Deps {
   store: LayoutStore;
 }
 
-export class PreviewWindow {
+export class Webview {
   readonly frame: Frame;
   private readonly address = el('input', 'address');
   private readonly zoomText = el('span', 'zoom');
@@ -66,10 +62,6 @@ export class PreviewWindow {
   private readonly css: CssPanel;
   private readonly network: NetworkPanel;
   private readonly plugins: PluginPanels;
-  /** What the page shows when a plugin changed it (one component alone), and the way back. */
-  private readonly mode = el('div', 'pv-mode');
-  private readonly modeLabel = el('span', 'label');
-  private leaveMode: (() => void) | undefined;
   private readonly pickButton = iconButton('pick', 'Pick an element: hover the page to see it, click to choose it: its CSS, and its component in the App panel (Esc stops)');
   private picking = false;
   private iframe: HTMLIFrameElement | undefined;
@@ -83,7 +75,7 @@ export class PreviewWindow {
 
   constructor(private readonly deps: Deps) {
     this.frame = new Frame('preview', deps.store, { bottom: { panels: ['console', 'network'], size: 240 }, right: { panels: ['css', 'plugin:*'], size: 380 } }, { size: { width: 'min(1400px, 96vw)', height: 'min(900px, 92vh)' } });
-    this.frame.title.textContent = 'Preview';
+    this.frame.title.textContent = 'Webview';
     this.console = new ConsolePanel((url, line, column) => deps.post({ type: 'openSource', url, line, column }));
     this.console.onCounts = (all, errors) => this.frame.updatePanel('console', { count: errors || all, name: errors ? `Console: ${errors} error${errors === 1 ? '' : 's'}, ${all} message${all === 1 ? '' : 's'} in all` : `Console: everything the page logs (${all})`, tint: errors ? 'var(--vscode-errorForeground, #f48771)' : undefined });
     this.css = new CssPanel(
@@ -97,9 +89,6 @@ export class PreviewWindow {
       toPage: (m) => this.toPage(m),
       changed: () => this.arrangePanels(),
       reload: () => this.reload(),
-      setMode: (mode) => this.setMode(mode),
-      showPanel: (id) => this.frame.showPanel(id),
-      navigate: (path) => this.go(path),
       setCount: (id, count) => this.frame.updatePanel(id, { count }),
     });
     this.arrangePanels();
@@ -146,11 +135,7 @@ export class PreviewWindow {
     });
     const open = iconButton('popOut', 'Open in your browser (through Visual Editor, so its calls are seen there too)');
     open.addEventListener('click', () => this.app && deps.post({ type: 'openExternal', url: this.currentUrl() }));
-    const leave = iconButton('close', 'Back to the page');
-    leave.addEventListener('click', () => this.leaveMode?.());
-    this.mode.append(this.modeLabel, leave);
-    this.mode.hidden = true;
-    bar.append(nav, this.pickButton, this.address, this.mode, devices, rotate, this.fitButton, this.zoomText, tray(el('div')));
+    bar.append(nav, this.pickButton, this.address, devices, rotate, this.fitButton, this.zoomText, tray(el('div')));
     bar.lastElementChild!.append(open);
 
     this.stage.append(this.device);
@@ -165,11 +150,8 @@ export class PreviewWindow {
     return this.frame.isOpen;
   }
 
-  /** Opens Preview at an address of the app (the proxy and dev server start when needed). */
-  /** Opens Preview: at an address of the app, or with a card a plugin panel shows (a component, alone). */
-  open(path?: string, item?: Item) {
-    // A card a plugin panel shows: on the page that's open (not loaded again: the panel is talking to it).
-    if (item) this.showItem(item);
+  /** Opens the Webview at an address of the app, or where it was (the proxy and dev server start when needed). */
+  open(path?: string) {
     if (path) this.pending = path;
     this.frame.open();
     if (this.app) {
@@ -188,7 +170,6 @@ export class PreviewWindow {
     if (!m.url) return;
     this.app = m.url.replace(/\/$/, '');
     this.frame.hint.textContent = this.app.replace(/^https?:\/\//, '');
-    // Only when Preview is open (the Playground asks for the app too).
     if (this.frame.isOpen) this.go(this.pending);
   }
 
@@ -198,13 +179,6 @@ export class PreviewWindow {
     else if (m.type === 'fakes') this.network.setFakes(m.endpoints, m.scenarios, m.headers);
     else if (m.type === 'contracts') this.network.setContracts(m.contracts, m.map);
     else this.network.showExample(m);
-  }
-
-  /** What the page shows now (a plugin's mode, e.g. one component alone), with a way back. */
-  private setMode(mode: { label: string; leave(): void } | null) {
-    this.leaveMode = mode?.leave;
-    this.modeLabel.textContent = mode?.label ?? '';
-    this.mode.hidden = !mode;
   }
 
   /** Answers from plugins to their panels' questions. */
@@ -293,10 +267,6 @@ export class PreviewWindow {
     if (!this.toPage({ type: 'reload' }) && this.iframe) this.iframe.src = this.iframe.src;
   }
 
-  /** Preview opened with a card that isn't a page (a component): a plugin panel shows it. */
-  showItem(item: Item): boolean {
-    return this.plugins.showItem(item);
-  }
 
   /** A message to the page's inspector (false when there's no page). */
   private toPage(m: Record<string, unknown>): boolean {
@@ -314,7 +284,7 @@ export class PreviewWindow {
     this.wait.hidden = false;
   }
 
-  private setSize(size: PreviewWindow['size']) {
+  private setSize(size: Webview['size']) {
     this.size = size;
     const on = size.fill ? 'fill' : (size.device ?? '');
     for (const [id, b] of this.deviceButtons) b.classList.toggle('on', id === on);
