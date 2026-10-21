@@ -17,6 +17,8 @@ export interface VariantFolder {
   /** The id of the variant in use. */
   selected?: string;
   states: string[];
+  /** What breaks the folder's rules, in words (variantChecks.ts). */
+  problems?: string[];
 }
 
 const SWITCHER = /^(.*\/)?([^/]+)\.switcher\.[jt]sx?$/;

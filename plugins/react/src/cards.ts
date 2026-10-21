@@ -6,6 +6,7 @@ import { analyzeProject, IGNORED_FILE } from './read/analyzer';
 import type { FeComponent, FeModel } from './read/model';
 import { loadAliases } from './read/resolve';
 import { readVariantFolders } from './read/variants';
+import { checkFolder } from './read/variantChecks';
 
 const CODE = /\.[cm]?[jt]sx?$/;
 /** Files that say how imports like "@/components/Card" resolve. */
@@ -35,7 +36,8 @@ export function wantsFile(path: string): boolean {
 export function readModel(files: SourceFile[]): FeModel {
   const code = files.filter((f) => CODE.test(f.path) && !CONFIG.test(f.path));
   const configs = files.filter((f) => CONFIG.test(f.path));
-  return { ...analyzeProject(code, loadAliases(configs)), variantFolders: readVariantFolders(code) };
+  const model = analyzeProject(code, loadAliases(configs));
+  return { ...model, variantFolders: readVariantFolders(code).map((f) => ({ ...f, problems: checkFolder(f, code, model.components) })) };
 }
 
 const WHEN: Record<string, string> = { load: 'on load', action: 'on click' };
@@ -63,7 +65,7 @@ export function toMaps(model: FeModel): ReadResult {
     if (!chooser) continue;
     const inFolder = (p: string) => (f.dir ? p.startsWith(`${f.dir}/`) && !p.slice(f.dir.length + 1).includes('/') : !p.includes('/'));
     for (const c of model.components) if (c.id !== chooser.id && inFolder(c.path)) partOf.set(c.id, chooser.id);
-    preview.set(chooser.id, { variants: f.variants.map((v) => ({ ...v, inUse: v.id === f.selected })), states: f.states });
+    preview.set(chooser.id, { variants: f.variants.map((v) => ({ ...v, inUse: v.id === f.selected })), states: f.states, ...(f.problems?.length ? { problems: f.problems } : {}) });
     dataFile.set(chooser.id, f.files.data);
   }
   const own = (id: string) => partOf.get(id) ?? id;
