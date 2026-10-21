@@ -1,4 +1,4 @@
-// The Network panel: every call the app in Preview makes (through Visual Editor's proxy), and the fakes that answer
+// The Network panel: every call the app in the Webview makes (through Visual Editor's proxy), and the fakes that answer
 // instead of the backend. Calls: method, address, status, time, size, and which fake answered; a click shows the
 // request and the answer, and "Fake this" turns a real answer into a case (or makes an empty one, an error, a slow
 // one, a dropped connection). Fakes: each endpoint with the case it uses (a switch), its cases (edited here), the
