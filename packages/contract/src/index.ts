@@ -70,6 +70,16 @@ export interface Item {
   fields?: Field[];
   /** Where it is defined, for "Open code". */
   source?: { path: string; line?: number };
+  /** Contract 8: it can be shown in Preview: its variants (looks) and the fixed-data states each is shown with. */
+  preview?: ItemPreview;
+}
+
+/** What Preview can show of a card (a component or page made previewable: docs/variants.md for React). */
+export interface ItemPreview {
+  /** Its looks, the one in use marked. */
+  variants: { id: string; name: string; path: string; inUse: boolean }[];
+  /** The fixed-data states every variant is shown with (default, empty, long name…). */
+  states: string[];
 }
 
 export interface Field {

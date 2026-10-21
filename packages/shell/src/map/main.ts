@@ -84,6 +84,8 @@ addStyles(`
   .drawer .entry.link { cursor: pointer; }
   .drawer .entry.link:hover { outline: 1px solid var(--vscode-focusBorder, #39f); }
   .drawer .entry .t { font-weight: 600; font-size: 13px; }
+  .drawer .entry.in-use { box-shadow: inset 3px 0 0 var(--tok-function, #b180d7); }
+  .drawer .states { font-size: 12px; line-height: 1.6; }
   .drawer .entry .d { opacity: .85; margin-top: 2px; }
   .drawer .entry .m { opacity: .6; margin-top: 3px; font-size: 11px; }
   .drawer .none { font-size: 12px; opacity: .6; }
@@ -97,6 +99,7 @@ addStyles(`
   .card .field { display: flex; gap: 6px; height: 22px; align-items: center; padding: 0 12px; font-size: 12px; }
   .card .field .n { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .card .field .v { opacity: .65; font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 50%; }
+  .card .field.previewable { color: var(--tok-function, #b180d7); border-top: 1px dashed color-mix(in srgb, currentColor 30%, transparent); }
   .card .field .t { font-size: 10px; padding: 0 5px; border-radius: 6px; background: #8883; }
   .card .more { opacity: .6; font-style: italic; }
   .map-empty { position: absolute; inset: 40px 0 0 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; gap: 6px; }
@@ -284,6 +287,20 @@ function showCard(m: CardMemory) {
   buttons.append(note);
   drawer.append(buttons);
 
+  // Its looks (variants) and the fixed-data states Preview shows them with.
+  if (item.preview) {
+    drawer.append(el('h3', undefined, 'Variants'));
+    for (const v of item.preview.variants) {
+      const row = el('div', `entry link${v.inUse ? ' in-use' : ''}`);
+      row.append(el('div', 't', v.name), el('div', 'm', v.inUse ? `In use · ${v.path.split('/').pop()}` : (v.path.split('/').pop() ?? v.path)));
+      row.dataset.tip = `Open ${v.path}`;
+      row.addEventListener('click', () => vscode.postMessage({ type: 'open', path: v.path }));
+      drawer.append(row);
+    }
+    drawer.append(el('h3', undefined, `States (${item.preview.states.length})`));
+    drawer.append(el('div', item.preview.states.length ? 'states' : 'none', item.preview.states.length ? item.preview.states.join(' · ') : 'No fixed-data states yet (Name.mock.ts).'));
+  }
+
   const notes = m.entries.filter((e) => e.kind !== 'change');
   const changes = m.entries.filter((e) => e.kind === 'change');
   drawer.append(el('h3', undefined, 'Notes'));
@@ -353,6 +370,16 @@ function drawCard(c: PlacedCard): HTMLElement {
     }
     if (item.fields.length > MAX_FIELDS) fields.append(el('div', 'field more', `+ ${item.fields.length - MAX_FIELDS} more`));
     card.append(fields);
+  }
+  if (item.preview) {
+    // It can be shown in Preview: how many looks, how many states, which look is in use.
+    const p = item.preview;
+    const inUse = p.variants.find((v) => v.inUse);
+    const fields = card.querySelector('.fields') ?? card.appendChild(el('div', 'fields'));
+    const row = el('div', 'field previewable');
+    row.append(el('span', 'n', `${p.variants.length} variant${p.variants.length === 1 ? '' : 's'} · ${p.states.length} state${p.states.length === 1 ? '' : 's'}`));
+    if (inUse) row.append(el('span', 'v', `${inUse.name} in use`));
+    fields.append(row);
   }
   card.title = [item.label, n ? `Used by ${n} card${n === 1 ? '' : 's'}` : linked.has(item.id) ? '' : 'No lines to other cards', item.source ? 'Double-click to open its code' : ''].filter(Boolean).join('\n');
   return card;

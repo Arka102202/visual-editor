@@ -51,7 +51,9 @@ export interface Layout {
 
 export function cardHeight(item: Item): number {
   const n = item.fields?.length ?? 0;
-  return CARD_HEAD + Math.min(n, MAX_FIELDS) * FIELD_ROW + (n > MAX_FIELDS ? FIELD_ROW : 0) + (n ? 8 : 0);
+  // One more row when it can be previewed ("2 variants · 4 states").
+  const rows = Math.min(n, MAX_FIELDS) + (n > MAX_FIELDS ? 1 : 0) + (item.preview ? 1 : 0);
+  return CARD_HEAD + rows * FIELD_ROW + (rows ? 8 : 0);
 }
 
 export function layoutMap(items: Item[], links: Link[], maps: MapDefinition[], arrange: Arrange = 'flow'): Layout {
