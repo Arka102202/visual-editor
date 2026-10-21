@@ -80,6 +80,8 @@ export interface ItemPreview {
   variants: { id: string; name: string; path: string; inUse: boolean }[];
   /** The fixed-data states every variant is shown with (default, empty, long name…). */
   states: string[];
+  /** What breaks the rules (in words, with what to do): e.g. a variant that calls an API. */
+  problems?: string[];
 }
 
 export interface Field {
