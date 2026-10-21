@@ -14,6 +14,7 @@ import { TYPE_CSS, typeText, useThemeTokens } from '../ui/typeText';
 import { WINDOW_CSS } from '../ui/windows';
 import { Frame, FRAME_CSS, type Layout as PanelLayout, type LayoutStore } from '../ui/frame';
 import { WEBVIEW_CSS, Webview } from './webview';
+import { PREVIEW_CSS, PreviewWindow } from './previewWindow';
 import { CONSOLE_CSS } from './consolePanel';
 import { CSS_PANEL_CSS } from './cssPanel';
 import { NETWORK_CSS } from './networkPanel';
@@ -150,6 +151,7 @@ ${TYPE_CSS}
 ${WINDOW_CSS}
 ${FRAME_CSS}
 ${WEBVIEW_CSS}
+${PREVIEW_CSS}
 ${CONSOLE_CSS}
 ${CSS_PANEL_CSS}
 ${NETWORK_CSS}
@@ -280,6 +282,14 @@ function showCard(m: CardMemory) {
     const open = iconButton('code', 'Open code');
     open.addEventListener('click', () => vscode.postMessage({ type: 'open', path: item.source!.path, line: item.source!.line }));
     buttons.append(open);
+  }
+  if (item.preview) {
+    // Highlighted only while it's on: Preview open, showing this card.
+    const look = iconButton('board', `Preview: ${item.label}’s every variant in every state, with fixed data (no network)`);
+    look.classList.toggle('on', preview.shows(item.id));
+    look.addEventListener('click', () => preview.open(item));
+    previewButton = { button: look, id: item.id };
+    buttons.append(look);
   }
   const inOut = iconButton('focus', 'Focus: only what comes into this card and what goes out of it (its immediate neighbours)');
   inOut.addEventListener('click', () => openNeighbours(item.id));
@@ -423,6 +433,11 @@ focus.addTools(nbZoom, nbOut, nbIn, nbFit, nbOnMap);
 
 /** The Webview: the running app, over everything (from the map's top bar, or its command), to try whole pages. */
 const webview = new Webview({ post: (m) => vscode.postMessage(m), store: layoutStore });
+/** Preview: a card's variants in every fixed-data state (for cards that have them). */
+const preview = new PreviewWindow({ post: (m) => vscode.postMessage(m), store: layoutStore });
+/** The drawer's Preview button (it shows whether Preview is open on its card). */
+let previewButton: { button: HTMLButtonElement; id: string } | undefined;
+preview.onToggle = () => previewButton?.button.classList.toggle('on', preview.shows(previewButton.id));
 const nbStage = el('div', 'nb-stage');
 focus.main.append(nbStage);
 let nbId: string | undefined;
@@ -873,12 +888,16 @@ window.addEventListener('message', (e: MessageEvent<ToMap>) => {
   // The app in the Webview talks through the inspector the proxy adds to its pages.
   const fromPage = e.data as unknown as { source?: string } | undefined;
   if (fromPage?.source === 've-inspector') return webview.fromPage(e.data as unknown as Record<string, unknown>, e.source);
+  if (fromPage?.source === 've-preview-page') return preview.fromPage(e.data as unknown as Record<string, unknown>, e.source);
   if (e.data?.type === 'show') show(e.data);
   else if (e.data?.type === 'card') showCard(e.data);
   else if (e.data?.type === 'lines') showLines(e.data);
   else if (e.data?.type === 'theme') useThemeTokens(e.data.tokens);
   else if (e.data?.type === 'layouts') layouts = { ...e.data.layouts, ...layouts };
-  else if (e.data?.type === 'app') webview.receiveApp(e.data);
+  else if (e.data?.type === 'app') {
+    webview.receiveApp(e.data);
+    preview.receiveApp(e.data);
+  }
   else if (e.data?.type === 'webview') webview.open(e.data.path);
   else if (e.data?.type === 'panels') webview.setPluginPanels(e.data.panels);
   else if (e.data?.type === 'panelAnswer') webview.pluginAnswer(e.data);

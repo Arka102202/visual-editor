@@ -138,6 +138,8 @@ export class Frame {
     this.controls = windowControls(this.box, this.head);
     this.head.append(this.title, this.hint, el('span', 'grow'), this.tools);
     this.tools.append(this.panelsButton, this.controls.fullButton, close);
+    // Shown only once the window has panels to arrange.
+    this.panelsButton.hidden = true;
     this.panelsButton.addEventListener('click', (e) => {
       e.stopPropagation();
       if (this.menu) this.closeMenu();
@@ -264,6 +266,7 @@ export class Frame {
 
   /** Puts every dock and panel where the layout says. */
   private arrange() {
+    this.panelsButton.hidden = this.panels.size === 0;
     for (const d of DOCKS) {
       const dock = this.docks.get(d)!;
       const spec = this.layout.docks[d];
