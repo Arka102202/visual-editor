@@ -72,12 +72,6 @@ const CSS = `
   .ra .ra-add input, .ra .ra-edit input { min-width: 0; font: inherit; font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; padding: 2px 6px; border-radius: 4px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, #8884); }
   .ra .ra-add input.k { flex: 0 1 30%; }
   .ra .ra-add input.v, .ra .ra-edit input { flex: 1; }
-  .ra .ra-why { padding: 10px 12px; margin: 8px 0; border-radius: 6px; line-height: 1.5; background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 13%, transparent); }
-  .ra .ra-why b { display: block; margin-bottom: 4px; }
-  .ra .ra-why p { margin: 4px 0; }
-  .ra .ra-why .tray { margin-top: 6px; }
-  .ra .ra-json { width: 100%; box-sizing: border-box; min-height: 140px; resize: vertical; font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, #8884); border-radius: 4px; padding: 6px 8px; }
-  .ra .ra-err pre, .ra pre.ra-err { white-space: pre-wrap; margin: 6px 0; font-size: 11px; }
   .ra .ra-edit { display: flex; gap: 6px; align-items: center; padding: 1px 0; min-width: 0; }
   .ra .ra-edit > .ra-name { color: var(--tok-property, #9cdcfe); font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; white-space: nowrap; }
   .ra .ra-empty { padding: 12px; }
@@ -117,13 +111,6 @@ const CSS = `
   let storageInfo: any;
   let records: any;
   let editing: { index: number } | undefined;
-  /** The component shown alone (component mode), and one waiting for the page to be ready. */
-  let alone: { name: string; json: Record<string, unknown>; kept: string[]; fill: boolean; note?: string; empty?: string; error?: string; jsonError?: string; action?: string; data: { name: string; props: Record<string, unknown> }[]; file?: string; draft?: string } | undefined;
-  let pendingOpen: { file: string; name: string; props: Record<string, unknown> } | undefined;
-  /** The pages a component opened from the map is drawn on (from the map's lines), and what was opened. */
-  let openedPages: string[] = [];
-  let lastOpen: { file: string; name: string; props: Record<string, unknown> } | undefined;
-  let aloneError = '';
   /** The storage key or record being changed ("local:theme", "rec:archflow/projects:\"id\""). */
   let storageEditing: string | undefined;
   let storageError = '';
@@ -196,23 +183,6 @@ const CSS = `
     if (view === 'route') send({ type: 'route' });
     if (view === 'storage') send({ type: 'storage' });
   }
-  // A component card opened in Preview (from the map): shown alone, with props made from its types.
-  api.onItem((item) => {
-    if (item.map !== 'components' || !item.source) return false;
-    void api.ask({ type: 'component', name: item.label }).then((r: any) => {
-      if (!r?.found) return;
-      const first = r.data?.[0];
-      pendingOpen = { file: r.file, name: item.label, props: first?.props ?? r.example ?? {} };
-      lastOpen = pendingOpen;
-      openedPages = r.pages ?? [];
-      aloneError = '';
-      view = 'components';
-      if (alive) send({ type: 'watch' });
-      render();
-    });
-    return true;
-  });
-
   api.onShow(() => {
     shown = true;
     check();
@@ -220,10 +190,6 @@ const CSS = `
   });
   api.onPage(() => {
     alive = false;
-    if (alone) {
-      alone = undefined;
-      api.setMode(null);
-    }
     if (shown) setTimeout(check, 400);
     roots = [];
     detail = undefined;
@@ -236,55 +202,7 @@ const CSS = `
   api.on((m: any) => {
     alive = true;
     warn.hidden = true;
-    if (m.type === 'ready') {
-      // A component opened from the map waits for the app to draw (its providers come from there).
-      if (pendingOpen) send({ type: 'watch' });
-      return;
-    }
-    if (m.type === 'tree' && pendingOpen && m.roots?.length) {
-      const p = pendingOpen;
-      pendingOpen = undefined;
-      send({ type: 'openAlone', file: p.file, name: p.name, props: p.props });
-    }
-    if (m.type === 'alone') {
-      aloneError = '';
-      if (!m.name) {
-        alone = undefined;
-        api.setMode(null);
-      } else {
-        alone = { name: m.name, json: m.json, kept: m.kept, fill: m.fill, ...(m.note ? { note: m.note } : {}), data: [] };
-        view = 'components';
-        api.setMode({ label: `${m.name}, alone`, leave: () => send({ type: 'leaveAlone' }) });
-        void api.ask({ type: 'component', name: m.name }).then((r: any) => {
-          if (!alone || alone.name !== m.name) return;
-          alone.data = r?.data ?? [];
-          alone.file = r?.found ? r.variants : undefined;
-          if (view === 'components') render();
-        });
-      }
-      render();
-      return;
-    }
-    if (m.type === 'aloneError') {
-      if (alone) alone.error = m.text;
-      else aloneError = m.text;
-      render();
-      return;
-    }
-    if (m.type === 'aloneSize') {
-      if (alone) {
-        alone.empty = m.empty ? `It drew itself ${m.size ?? 'with no size'}: it’s closed or empty right now (its own state, a store or its props decide). Open it on the page (for a sidebar, choose what it shows), or change its props.` : undefined;
-        render();
-      }
-      return;
-    }
-    if (m.type === 'action') {
-      if (alone) {
-        alone.action = `${m.name}(…) was called`;
-        render();
-      }
-      return;
-    }
+    if (m.type === 'ready') return;
     if (m.type === 'tree') {
       roots = m.roots;
       if (view === 'components') renderTree();
@@ -335,11 +253,7 @@ const CSS = `
     for (const [v, b] of viewButtons) b.classList.toggle('on', v === view);
     search.hidden = view !== 'components';
     mine.hidden = view !== 'components';
-    if (view === 'components' && (alone || pendingOpen || aloneError)) {
-      const page = el('div', 'ra-page');
-      body.replaceChildren(page);
-      drawAlone(page);
-    } else if (view === 'components') {
+    if (view === 'components') {
       body.replaceChildren(el('div', 'ra-tree'), ...(selected !== undefined ? [el('div', 'ra-detail')] : []));
       renderTree();
       if (selected !== undefined) renderDetail();
@@ -454,13 +368,6 @@ const CSS = `
       scroll.addEventListener('click', () => send({ type: 'scroll', id: d.id }));
       acts.append(scroll);
     }
-    const solo = button('focus', 'Show it alone: its real props, inside the providers above it (router, theme…)');
-    solo.addEventListener('click', () => {
-      openedPages = [];
-      lastOpen = undefined;
-      send({ type: 'alone', id: d.id });
-    });
-    acts.append(solo);
     const log = button(ICONS.log, 'Log it in the Console (and as $r in the page)');
     log.addEventListener('click', () => send({ type: 'log', id: d.id }));
     acts.append(log);
@@ -556,189 +463,6 @@ const CSS = `
     }
     row.append(el('span', 'ra-name', `${name}:`), val);
     return row;
-  }
-
-  /**
-   * Why a component can't be shown on its own here, and what to do, in words (never the error itself). A page it's
-   * on (from the map) can be gone to, and it opens there by itself.
-   */
-  function explain(error: string, name: string): HTMLElement {
-    const lib = /React Flow|zustand provider/i.test(error) ? 'React Flow’s canvas' : /<Router>|useNavigate|useLocation|useHref|useRoutes|useParams|useMatch/i.test(error) ? 'the router' : /QueryClient/i.test(error) ? 'TanStack Query’s client' : /react-redux|could not find "store"/i.test(error) ? 'the Redux store' : '';
-    const pages = openedPages.length ? openedPages.join(', ') : '';
-    let why: string;
-    let what: string;
-    let canGo = false;
-    if (lib || /provider|ancestor|must be (used|rendered) (within|inside)|outside (of )?(a|the) |context/i.test(error)) {
-      why = `It uses something the page around it sets up (${lib || 'a provider above it'}), and the page open now doesn’t have it.`;
-      what = pages ? `Open a page it’s on (${pages}), then open it again, or pick it there and use “Show it alone”.` : 'Open a page it’s drawn on, then pick it there and use “Show it alone”.';
-      canGo = true;
-    } else if (/isn’t exported/.test(error)) {
-      why = 'It isn’t exported from its file, so it can’t be loaded by itself.';
-      what = 'Pick it on a page where it’s drawn, and use “Show it alone”.';
-    } else if (/React’s modules|modules don’t look/.test(error)) {
-      why = 'Showing a component alone needs the app running on Vite’s dev server, and this one isn’t.';
-      what = 'Pick components on the page to look at them instead.';
-    } else if (/Cannot read propert|undefined is not|is not a function|is not iterable|of null|of undefined/i.test(error)) {
-      why = 'It needs data in its props that these props don’t have.';
-      what = 'Fill in its props below (they’re made up from its types), or open it where it has real data: pick it on a page and use “Show it alone”.';
-    } else {
-      why = 'It stopped while drawing on its own.';
-      what = pages ? `Open a page it’s on (${pages}), pick it there and use “Show it alone”.` : 'Open a page it’s on, pick it there and use “Show it alone”.';
-      canGo = true;
-    }
-    const box = el('div', 'ra-why');
-    box.append(el('b', undefined, `${name} can’t be shown on its own here`), el('p', undefined, `Why: ${why}`), el('p', undefined, `What to do: ${what}`));
-    // A page without :params can be opened as it is: go there, and it opens there by itself.
-    const plain = openedPages.find((p) => !p.includes(':') && !p.includes('*'));
-    if (canGo && plain && lastOpen) {
-      const t = tray(el('div'));
-      const go = button('goForward', `Go to ${plain} and open ${name} there`);
-      go.addEventListener('click', () => {
-        pendingOpen = lastOpen;
-        aloneError = '';
-        if (alone) send({ type: 'leaveAlone' });
-        api.navigate(plain);
-        render();
-      });
-      t.append(go);
-      box.append(t);
-    }
-    return box;
-  }
-
-  /** One component alone: its props (as JSON), how it sits, and its saved variants. */
-
-  function drawAlone(page: HTMLElement) {
-    if (!alone) {
-      if (aloneError) {
-        page.append(explain(aloneError, lastOpen?.name ?? 'It'));
-        const back = button('close', 'Back to the tree');
-        back.addEventListener('click', () => {
-          aloneError = '';
-          render();
-        });
-        const t = tray(el('div'));
-        t.append(back);
-        page.append(t);
-      } else page.append(el('div', 'ra-empty', 'Opening it alone… (once the app has drawn)'));
-      return;
-    }
-    const a = alone;
-    const title = el('div', 'ra-title');
-    title.append(el('b', undefined, a.name), el('span', 'ra-hint', 'alone'));
-    const acts = tray(el('div'));
-    const fill = button('fill', a.fill ? 'Its own size, in the middle' : 'Fill the page (for layouts and full-width parts)', a.fill ? { cls: 'on' } : {});
-    fill.addEventListener('click', () => {
-      a.fill = !a.fill;
-      send({ type: 'aloneFill', fill: a.fill });
-      render();
-    });
-    const code = button('code', `Open ${a.name}’s code`);
-    code.addEventListener('click', () => api.openItem(a.name, 'components'));
-    const back = button('close', 'Back to the page');
-    back.addEventListener('click', () => send({ type: 'leaveAlone' }));
-    acts.append(fill, code, back);
-    title.append(acts);
-    page.append(title);
-    if (a.note) page.append(el('div', 'ra-hint', a.note));
-    if (a.error) page.append(explain(a.error, a.name));
-    else if (a.empty) page.append(el('div', 'ra-warn', a.empty));
-    if (a.jsonError) page.append(el('div', 'ra-err', a.jsonError));
-
-    page.append(el('h4', undefined, 'Props'));
-    page.append(el('div', 'ra-hint', a.kept.length ? `As JSON. Kept as the page gave them: ${a.kept.join(', ')}. A function you add: {"$action": "name"}.` : 'As JSON. A function: {"$action": "name"} (it says when it’s called).'));
-    const box = el('textarea', 'ra-json');
-    box.spellcheck = false;
-    box.value = a.draft ?? JSON.stringify(a.json, null, 2);
-    box.addEventListener('input', () => (a.draft = box.value));
-    const apply = () => {
-      try {
-        const props = JSON.parse(box.value);
-        a.json = props;
-        a.draft = undefined;
-        a.error = undefined;
-        a.jsonError = undefined;
-        send({ type: 'aloneProps', props });
-        render();
-      } catch {
-        a.jsonError = 'That isn’t JSON yet.';
-        render();
-      }
-    };
-    box.addEventListener('keydown', (e) => {
-      e.stopPropagation();
-      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) apply();
-    });
-    page.append(box);
-    const row = tray(el('div'));
-    const applyB = button('choose', 'Draw it with these props (⌘ Enter)');
-    applyB.addEventListener('click', apply);
-    row.append(applyB);
-    page.append(row);
-    if (a.action) page.append(el('div', 'ra-hint', a.action));
-
-    page.append(el('h4', undefined, `Variants (${a.data.length})`));
-    page.append(el('div', 'ra-hint', a.file ? `Kept in ${a.file}, to commit and share.` : 'Only the project’s own components keep variants.'));
-    for (const v of a.data) {
-      const r = el('div', 'ra-row2');
-      r.append(el('span', undefined, v.name));
-      r.dataset.tip = `Draw it with “${v.name}”`;
-      r.addEventListener('click', () => {
-        a.json = v.props;
-        a.draft = undefined;
-        send({ type: 'aloneProps', props: v.props });
-        render();
-      });
-      const t = tray(el('div'));
-      t.style.marginLeft = 'auto';
-      const del = button('trash', `Remove the variant “${v.name}”`);
-      del.addEventListener('click', (e) => {
-        e.stopPropagation();
-        void api.ask({ type: 'removeVariant', name: a.name, variant: v.name }).then((res: any) => {
-          a.data = res?.data ?? a.data;
-          render();
-        });
-      });
-      t.append(del);
-      r.append(t);
-      page.append(r);
-    }
-    if (a.file) {
-      const add = el('div', 'ra-add');
-      const name = el('input', 'v');
-      name.placeholder = 'A name for these props, e.g. long title, empty, error';
-      const save = () => {
-        let props: Record<string, unknown>;
-        try {
-          props = JSON.parse(box.value);
-        } catch {
-          a.jsonError = 'The props aren’t JSON yet.';
-          return render();
-        }
-        // Functions the page gave become actions (they say when they're called).
-        for (const k of a.kept) if (!(k in props) && k !== 'children') props[k] = { $action: k };
-        void api.ask({ type: 'saveVariant', name: a.name, variant: name.value, props }).then(
-          (res: any) => {
-            a.data = res?.data ?? a.data;
-            render();
-          },
-          (e: Error) => {
-            a.jsonError = e.message;
-            render();
-          },
-        );
-      };
-      name.addEventListener('keydown', (e) => {
-        e.stopPropagation();
-        if (e.key === 'Enter') save();
-      });
-      const t = tray(el('div'));
-      const saveB = button('add', 'Save these props as a variant');
-      saveB.addEventListener('click', save);
-      t.append(saveB);
-      add.append(name, t);
-      page.append(add);
-    }
   }
 
   function drawStores(page: HTMLElement) {
