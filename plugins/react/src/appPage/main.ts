@@ -12,6 +12,7 @@ interface PageApi {
   copy(value: unknown, options?: { depth?: number; replace?: (value: unknown) => unknown }): unknown;
   highlight(elements: Element[] | null, label?: string): void;
   onPicked(handler: (element: Element) => void): void;
+  drawAlone?(handler: { show(r: { file: string; name: string; props: Record<string, unknown>; fill?: boolean }): Promise<{ error?: string }>; leave(): void; target(): Element | null; propsOnPage?(r: { file: string; name: string }): Promise<Record<string, unknown> | null> }): void;
 }
 
 (() => {
@@ -491,6 +492,8 @@ interface PageApi {
     fill: boolean;
   }
   let alone: Alone | undefined;
+  /** The last reason a component couldn't be drawn alone (for the Playground's tiles). */
+  let lastError = '';
   let reactModules: { React: any; createRoot: any } | undefined;
 
   /** React and react-dom/client as the app loaded them (Vite's dev server serves each once: the same instance). */
@@ -659,7 +662,8 @@ interface PageApi {
     for (let i = a.providers.length - 1; i >= 0; i--) el = React.createElement(a.providers[i].type, { value: a.providers[i].value }, el);
     // Over the page (which stays as it is underneath: laid out, its state kept), in the page's own background.
     const bg = [document.body, document.documentElement].map((e) => getComputedStyle(e).backgroundColor).find((c) => c && !/rgba\(0, 0, 0, 0\)|transparent/.test(c)) ?? '#fff';
-    a.stage.style.cssText = `position:fixed;inset:0;z-index:2147483000;overflow:auto;background:${bg};` + (a.fill ? '' : 'display:flex;padding:32px;box-sizing:border-box;');
+    // Centred by the stage itself (safe: never pushed off an edge), so it keeps its own size (not stretched).
+    a.stage.style.cssText = `position:fixed;inset:0;z-index:2147483000;overflow:auto;background:${bg};` + (a.fill ? '' : 'display:flex;align-items:safe center;justify-content:safe center;padding:32px;box-sizing:border-box;');
     // In the middle, but never pushed off the edge when it's wider than the page (it scrolls instead).
     const first = a.stage.firstElementChild as HTMLElement | null;
     if (first) first.style.setProperty('margin', a.fill ? '0' : 'auto', 'important');
@@ -713,7 +717,10 @@ interface PageApi {
       watch.observe(document.body, { childList: true });
       const frame = buildFrame(stage, frameFrom ? frameOf(frameFrom) : []);
       // Its errors go to the App panel (in words), not to the Console.
-      const quiet = (error: unknown) => say({ type: 'aloneError', text: error instanceof Error ? `${error.message}\n${error.stack ?? ''}` : String(error) });
+      const quiet = (error: unknown) => {
+        lastError = error instanceof Error ? error.message : String(error);
+        say({ type: 'aloneError', text: error instanceof Error ? `${error.message}\n${error.stack ?? ''}` : String(error) });
+      };
       const root = createRoot(frame[frame.length - 1] ?? stage, { onCaughtError: quiet, onUncaughtError: quiet, onRecoverableError: () => {} });
       alone = { name, type, base: props, providers, frame, props, root, stage, watch, fill: false };
       draw();
@@ -751,9 +758,42 @@ interface PageApi {
       const copy = onPage(type);
       await showAlone(name, type, fromJson(props) as Record<string, unknown>, copy ? providersOf(copy) : allProviders(), copy, props);
     } catch (e) {
-      say({ type: 'aloneError', text: e instanceof Error ? e.message : String(e) });
+      lastError = e instanceof Error ? e.message : String(e);
+      say({ type: 'aloneError', text: lastError });
     }
   }
+
+  // The Playground's tiles: a component drawn alone on request (the shell takes its picture).
+  ve.drawAlone?.({
+    show: async (r) => {
+      lastError = '';
+      await openAlone(r.file, r.name, r.props);
+      if (alone && !!r.fill !== alone.fill) {
+        alone.fill = !!r.fill;
+        draw();
+      }
+      // Errors come once React has tried to draw it.
+      await new Promise((done) => setTimeout(done, 150));
+      return lastError ? { error: lastError } : {};
+    },
+    leave: () => leaveAlone(),
+    target: () => (alone ? ((alone.frame[alone.frame.length - 1] ?? alone.stage).firstElementChild as Element | null) : null),
+    // The props a copy of it has on this page (real data), as JSON: functions as {"$action"}, elements left out.
+    propsOnPage: async (r) => {
+      try {
+        const mod = await import(/* @vite-ignore */ `/${r.file}`);
+        const type = mod[r.name] ?? (mod.default && nameOfType(mod.default) === r.name ? mod.default : undefined);
+        const copy = type ? onPage(type) : undefined;
+        if (!copy) return null;
+        const props = (copy.memoizedProps ?? {}) as Record<string, unknown>;
+        const { json, kept: left } = jsonable(props);
+        for (const k of left) if (typeof props[k] === 'function') json[k] = { $action: k };
+        return json;
+      } catch {
+        return null;
+      }
+    },
+  });
 
   // ---- Talking to the panel ----
 
