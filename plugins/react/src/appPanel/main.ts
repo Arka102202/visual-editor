@@ -1,4 +1,4 @@
-// The App panel (React), in Preview: what the running app is made of right now.
+// The App panel (React), in the Webview: what the running app is made of right now.
 //   Components: the tree (your own components; library parts hidden unless asked), pick one in the page or the tree,
 //               and see its props, hooks and state (a useState value can be changed), the contexts it reads, and what
 //               drew it. Hovering outlines it in the page.
@@ -286,7 +286,7 @@ const CSS = `
     const keep = box.scrollTop;
     box.replaceChildren();
     if (!roots.length) {
-      box.append(el('div', 'ra-empty', 'Waiting for React… (the app has to be open in Preview; the panel reads it as it draws)'));
+      box.append(el('div', 'ra-empty', 'Waiting for React… (the app has to be open in the Webview; the panel reads it as it draws)'));
       return;
     }
     const q = search.value.trim().toLowerCase();

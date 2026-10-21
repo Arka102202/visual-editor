@@ -13,7 +13,7 @@ export async function activate(context: vscode.ExtensionContext) {
     return;
   }
   const api = await shell.activate();
-  // The App panel in Preview (its scripts are built next to this file).
+  // The App panel in the Webview (its scripts are built next to this file).
   const scripts = builtScripts(__dirname);
   context.subscriptions.push(api.register({ ...reactPlugin, ...(scripts ? { previewPanels: [appPanel(scripts)] } : {}) }));
 }
