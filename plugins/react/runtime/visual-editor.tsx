@@ -10,7 +10,8 @@
 //   Name.variant.tsx, Name.<name>.variant.tsx   looks only: NameView in, JSX out (UI state like "menu open" is fine;
 //                             reading or changing app data is not).
 
-import { Component, createContext, lazy, Suspense, useContext, useMemo, type ComponentType, type ReactNode } from 'react';
+import { Component, createContext, Fragment, lazy, Suspense, useContext, useMemo, type ComponentType, type ReactNode } from 'react';
+import { createRoot } from 'react-dom/client';
 
 /**
  * real: the app (real data, the variant in use).
@@ -118,3 +119,25 @@ export function makeSwitcher<V extends object>(Selected: ComponentType<V>, selec
     );
   };
 }
+
+/**
+ * Preview's page (Visual Editor serves it): a component drawn with every variant (side by side) in every state (one
+ * row each), with fixed data. Each variant is labelled; anything inside shows its own variant in use.
+ */
+export function mountPreview(container: HTMLElement, Chooser: ComponentType<Record<string, never>>, options: { states: string[]; columns: number }) {
+  const root = createRoot(container);
+  root.render(
+    <div data-ve-grid="" style={{ display: 'grid', gridTemplateColumns: `max-content repeat(${Math.max(1, options.columns)}, max-content)`, gap: '28px 32px', alignItems: 'start' }}>
+      {options.states.map((state) => (
+        <Fragment key={state}>
+          <div data-ve-state={state}>{state}</div>
+          <VariantKeyProvider value="mock" state={state}>
+            <Chooser />
+          </VariantKeyProvider>
+        </Fragment>
+      ))}
+    </div>,
+  );
+  return root;
+}
+

@@ -4,6 +4,7 @@
 import { CONTRACT_VERSION, type MapDefinition, type Plugin } from '@visual-editor/contract';
 import { reactPackage, SHARED_FROM_WORDS, wantsFile } from './cards';
 import { readingWorker } from './workerClient';
+import { previewPage } from './previewPage';
 
 export * from './cards';
 
@@ -50,6 +51,7 @@ export const reactPlugin: Plugin = {
     return pkg ? { reason: `${pkg} is in package.json` } : undefined;
   },
   maps: MAPS,
+  previewPage,
   readers: [
     {
       id: 'react',
