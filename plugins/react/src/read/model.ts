@@ -1,5 +1,7 @@
 // The React model: components, routes and API calls, as read from source. Pure: no Node or VS Code imports.
 
+import type { VariantFolder } from './variants';
+
 export interface PropInfo {
   name: string;
   /** Type as written in code, when known. */
@@ -164,4 +166,6 @@ export interface FeModel {
   /** Problems that concern all API calls, not one endpoint (scattered calls, mixed clients). */
   apiIssues: ApiIssue[];
   stats: { files: number; parseErrors: string[] };
+  /** Folders made previewable (docs/variants.md). */
+  variantFolders?: VariantFolder[];
 }
