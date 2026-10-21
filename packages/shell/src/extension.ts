@@ -27,6 +27,13 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
   // Plugins' Preview panels add their page scripts to the pages of the projects they detected.
   const proxies = new AppProxies(log, context.secrets, (root) =>
     (index.snapshot().find((s) => s.project.root === root)?.detected ?? []).flatMap(({ plugin }) => (plugin.previewPanels ?? []).map((p) => ({ key: `${plugin.id}/${p.id}`, code: p.page }))),
+    // Preview's page for a card: made by the plugin whose card it is.
+    (root, id) => {
+      const state = index.snapshot().find((s) => s.project.root === root);
+      const item = state?.items.find((i) => i.id === id);
+      const plugin = item && state?.detected.find(({ plugin: p }) => item.id.startsWith(`${p.id}:`))?.plugin;
+      return item && plugin?.previewPage?.(item, state!.project);
+    },
   );
   context.subscriptions.push(proxies);
 

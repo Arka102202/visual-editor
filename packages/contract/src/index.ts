@@ -143,8 +143,13 @@ export interface Plugin {
   detect(project: ProjectInfo): Detection | undefined | Promise<Detection | undefined>;
   readers?: Reader[];
   maps?: MapDefinition[];
-  /** Contract 8: panels the plugin adds to Preview (the running app), e.g. React's App panel. */
+  /** Contract 8: panels the plugin adds to the Webview (the running app), e.g. React's App panel. */
   previewPanels?: PreviewPanel[];
+  /**
+   * Contract 8: the page Preview shows for a card that has `preview` (its variants with fixed data), as HTML served
+   * at the app's address (through its dev server, so its styles and code load as the app's do). Undefined: none.
+   */
+  previewPage?(item: Item, project: ProjectInfo): string | undefined;
 }
 
 // ---------------------------------------------------------------------------

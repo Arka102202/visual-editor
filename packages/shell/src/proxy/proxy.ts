@@ -69,6 +69,8 @@ export class AppProxy {
       contracts?: () => Contracts | undefined;
       /** Plugins' page scripts (their Preview panels'), added to pages right after the inspector: key ("react/app") → code. */
       pageScripts?: () => { key: string; code: string }[];
+      /** Preview's page for a card (its variants with fixed data), from the plugin that read it. */
+      previewPage?: (itemId: string) => string | undefined;
     } = {},
   ) {}
 
@@ -113,6 +115,13 @@ export class AppProxy {
     if (path === `${VE_PATH}/inspector.js`) {
       res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
       res.end(INSPECTOR);
+      return;
+    }
+    if (path.startsWith(`${VE_PATH}/preview?`) || path === `${VE_PATH}/preview`) {
+      const id = new URL(path, 'http://x').searchParams.get('item') ?? '';
+      const html = this.options.previewPage?.(id);
+      res.writeHead(html ? 200 : 404, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(html ?? '<!doctype html><meta charset="utf-8"><p style="font:14px system-ui;padding:24px">Nothing to preview for this card.</p>');
       return;
     }
     if (path.startsWith(`${VE_PATH}/plugin/`)) {

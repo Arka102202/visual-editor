@@ -28,6 +28,8 @@ export class AppProxies implements vscode.Disposable {
     private readonly secrets?: vscode.SecretStorage,
     /** Plugins' page scripts for a project (their Preview panels'): key ("react/app") → code. */
     private readonly pageScripts?: (root: string) => { key: string; code: string }[],
+    /** Preview's page for a card of a project (its variants with fixed data). */
+    private readonly previewPage?: (root: string, itemId: string) => string | undefined,
   ) {}
 
   /** Each call (or page) a project's app makes, as it's recorded. */
@@ -229,7 +231,7 @@ export class AppProxies implements vscode.Disposable {
     let entry = this.running.get(root);
     if (!entry) {
       const dev = new DevServer(root);
-      const proxy = new AppProxy(() => dev.ensure(), { fakes: () => this.fakesOf(root), headers: () => this.headers.get(root) ?? {}, contracts: () => this.contracts.get(root)?.contracts, pageScripts: () => this.pageScripts?.(root) ?? [] });
+      const proxy = new AppProxy(() => dev.ensure(), { fakes: () => this.fakesOf(root), headers: () => this.headers.get(root) ?? {}, contracts: () => this.contracts.get(root)?.contracts, pageScripts: () => this.pageScripts?.(root) ?? [], previewPage: (id) => this.previewPage?.(root, id) });
       proxy.onRecord((r) => {
         this.write(r);
         for (const l of this.callListeners) l(root, r);

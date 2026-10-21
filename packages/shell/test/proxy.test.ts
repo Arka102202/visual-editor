@@ -156,3 +156,17 @@ test('proxy: cookies the page can keep (in Preview’s frame only "SameSite=None
   assert.equal(cookieFor('t=1; Domain=api.shop.test; Secure; SameSite=None', { routed: true, framed: true }), 't=1; SameSite=None; Secure');
   assert.equal(cookieFor('t=1; Domain=api.shop.test; Secure; SameSite=None', { routed: true, framed: false }), 't=1; SameSite=Lax');
 });
+
+test('proxy: serves Preview’s page for a card (from its plugin)', async () => {
+  const proxy = new AppProxy(async () => 'http://127.0.0.1:1', { previewPage: (id) => (id === 'react:component:x' ? '<p>the page</p>' : undefined) });
+  const at = await proxy.start(5698);
+  try {
+    const ok = await fetch(`${at}/__ve/preview?item=${encodeURIComponent('react:component:x')}`);
+    assert.equal(ok.status, 200);
+    assert.equal(await ok.text(), '<p>the page</p>');
+    assert.equal((await fetch(`${at}/__ve/preview?item=other`)).status, 404);
+  } finally {
+    await proxy.stop();
+  }
+});
+
