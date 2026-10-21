@@ -1,4 +1,4 @@
-// The CSS panel: the element picked in Preview's page. Its path (click a part to pick that parent), its box model,
+// The CSS panel: the element picked in the Webview's page. Its path (click a part to pick that parent), its box model,
 // every rule that applies (strongest first, with @media, what's overridden struck through, and where each comes from:
 // a click opens that file at that rule), what each of its classes does (Tailwind's too), and its final values (the
 // usual ones by group; all of them, searchable). Plain DOM.
@@ -103,7 +103,7 @@ export class CssPanel {
   }
 
   /** Nothing picked (a new page, or not yet). */
-  empty(text = 'Pick an element to see its CSS: the picker in Preview’s bar (the arrow), then click anything in the page.') {
+  empty(text = 'Pick an element to see its CSS: the picker in the Webview’s bar (the arrow), then click anything in the page.') {
     this.element = undefined;
     const bar = el('div', 'bar');
     bar.append(el('span', 'empty', text));

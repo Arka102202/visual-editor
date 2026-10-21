@@ -1,4 +1,4 @@
-// The Console panel: everything the page in Preview logs (console.log/info/warn/error/debug, uncaught errors, failed
+// The Console panel: everything the page in the Webview logs (console.log/info/warn/error/debug, uncaught errors, failed
 // promises), as the inspector tells it. Messages are filled in as the browser would (React's "%s" messages), objects
 // open like a tree, repeats are counted, and each message says where it came from: a click opens that place in the
 // developer's own file. Filter by level, search, clear. Plain DOM.

@@ -835,7 +835,7 @@ changedBadge.addEventListener('click', () => vscode.postMessage({ type: 'clearCh
 picker.addEventListener('change', () => vscode.postMessage({ type: 'choose', root: picker.value }));
 
 window.addEventListener('message', (e: MessageEvent<ToMap>) => {
-  // The app in Preview talks through the inspector the proxy adds to its pages.
+  // The app in the Webview talks through the inspector the proxy adds to its pages.
   const fromPage = e.data as unknown as { source?: string } | undefined;
   if (fromPage?.source === 've-inspector') return webview.fromPage(e.data as unknown as Record<string, unknown>, e.source);
   if (e.data?.type === 'show') show(e.data);
