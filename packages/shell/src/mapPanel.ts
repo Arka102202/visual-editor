@@ -16,6 +16,7 @@ import { forCard } from './memory';
 import type { ProjectMemory } from './memoryView';
 import { onThemeChange, themeTokenColours } from './themeColours';
 import type { AppProxies } from './proxy/appProxies';
+import { exampleProps, pagesOf, readCases, suggestCases, variantsPath, writeCases } from './variants';
 
 export class MapPanel {
   private panel: vscode.WebviewPanel | undefined;
@@ -93,7 +94,7 @@ export class MapPanel {
     });
     panel.iconPath = vscode.Uri.joinPath(this.extensionUri, 'media', 'icon.svg');
     // Preview shows the app through Visual Editor's proxy, on this computer.
-    panel.webview.html = webviewPage(panel.webview, vscode.Uri.joinPath(dist, 'map.js'), 'Visual Editor', 'frame-src http://127.0.0.1:* http://localhost:*;');
+    panel.webview.html = webviewPage(panel.webview, vscode.Uri.joinPath(dist, 'map.js'), 'Visual Editor', 'frame-src http://127.0.0.1:* http://localhost:*; img-src data: blob:;');
     panel.webview.onDidReceiveMessage((m: FromMap) => this.receive(m), undefined, this.subscriptions);
     panel.onDidDispose(() => {
       this.panel = undefined;
@@ -188,6 +189,23 @@ export class MapPanel {
       else if (m.type === 'mapType') void p.mapType(root, m.operation, m.typeName);
       else if (m.type === 'fakeFromContract') void p.fakeFromContract(root, m.operations, m.status);
       else void p.contractExample(root, m.ref).then((r) => this.panel?.webview.postMessage({ type: 'contractExample', ref: m.ref, ...r } satisfies ToMap));
+    } else if (m.type === 'playground' || m.type === 'saveCases') {
+      const state = this.current.get();
+      const item = state?.items.find((i) => i.id === m.id);
+      if (!state || !item) return;
+      const post = (x: ToMap) => void this.panel?.webview.postMessage(x);
+      if (m.type === 'playground') {
+        // Suggestions change the first kept case (real data) when there is one, else props made from the types.
+        const cases = readCases(state.project.root, item);
+        const example = exampleProps(item.fields ?? []);
+        post({ type: 'playground', item, file: variantsPath(item), cases, example, suggestions: suggestCases(item.fields ?? [], cases[0]?.props ?? example), pages: pagesOf(item, state.items, state.links) });
+      } else {
+        try {
+          post({ type: 'casesSaved', id: m.id, file: writeCases(state.project.root, item, m.cases), cases: m.cases });
+        } catch (e) {
+          void vscode.window.showWarningMessage(e instanceof Error ? e.message : String(e));
+        }
+      }
     } else if (m.type === 'panelAsk') {
       void this.panelAsk(m.key, m.id, m.request);
     } else if (m.type === 'openItem') {
