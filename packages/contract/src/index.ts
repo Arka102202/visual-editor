@@ -156,17 +156,22 @@ export interface Plugin {
    * Contract 8: the change that makes another of a card's variants the one in use (only the plugin knows where that's
    * said), for the developer to review. A string says why it can't be done.
    */
-  useVariant?(item: Item, variant: string, project: ProjectInfo): VariantChoice | string;
+  useVariant?(item: Item, variant: string, project: ProjectInfo): ProposedChange | string;
+  /**
+   * Contract 8: adds or updates what the project needs for Preview from this plugin (React: Visual Editor's helper,
+   * src/visual-editor.tsx), as a change to review. A string says why not (e.g. it's up to date).
+   */
+  updateHelper?(project: ProjectInfo): ProposedChange | string;
 }
 
-/** Contract 8: making another variant the one in use, as a change to review. */
-export interface VariantChoice {
+/** Contract 8: a change a plugin works out (e.g. making another variant the one in use), for the developer to review. */
+export interface ProposedChange {
   /** Plain words, e.g. "ProjectCard: use Wide instead of Compact". */
   title: string;
   why: string;
-  /** Each file's whole text before and after. */
-  changes: { path: string; before: string; after: string }[];
-  /** A page at the app's address showing the variant in use and the new one side by side (Review shows it). */
+  /** Each file's whole text before (null: a new file) and after. */
+  changes: { path: string; before: string | null; after: string }[];
+  /** A page at the app's address showing how it looks, before and after (Review shows it). */
   look?: string;
 }
 
