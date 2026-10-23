@@ -21,6 +21,8 @@ export const PLAYGROUND_CSS = `
   .vp-bar .sep { width: 1px; align-self: stretch; margin: 2px 4px; background: var(--vscode-panel-border, #8884); }
   .vp-notes { flex: none; display: flex; flex-direction: column; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--vscode-panel-border, #8883); max-height: 30%; overflow: auto; }
   .vp-notes:empty { display: none; }
+  .vp-note button.icon { float: right; margin: -3px -4px 0 8px; }
+  .vp-toast { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: 80%; padding: 7px 12px; border-radius: 6px; background: var(--vscode-editorWidget-background, #252526); color: var(--vscode-editorWidget-foreground, inherit); border: 1px solid var(--vscode-widget-border, #8884); box-shadow: 0 4px 16px #0005; font-size: 12px; z-index: 2; pointer-events: none; }
   .vp-note { white-space: pre-line; padding: 7px 10px; border-radius: 6px; font-size: 12px; line-height: 1.5; background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 13%, transparent); }
   .vp-stage { position: relative; flex: 1; min-height: 0; overflow: auto; display: flex; background: color-mix(in srgb, var(--vscode-foreground) 4%, var(--vscode-editor-background)); }
   .vp-device { flex: none; position: relative; margin: 0 auto; overflow: hidden; }
@@ -47,6 +49,22 @@ interface Deps {
   preview(item: Item, variant: string, state: string): void;
   /** "Use this design": proposes making this variant the one in use. */
   useVariant(item: Item, variant: string): void;
+  /** "Update the helper": proposes what Preview needs from the card's plugin. */
+  updateHelper(item: Item): void;
+}
+
+/** A short message at the bottom of a window that goes away by itself. */
+export function makeToast(host: HTMLElement): (text: string) => void {
+  const box = el('div', 'vp-toast');
+  box.hidden = true;
+  host.append(box);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return (text) => {
+    box.textContent = text;
+    box.hidden = false;
+    clearTimeout(timer);
+    timer = setTimeout(() => (box.hidden = true), 3500);
+  };
 }
 
 /** What a variants page says, in words (a call it blocked, something missing, a variant that stopped). */
@@ -85,6 +103,7 @@ export class Playground {
   private item: Item | undefined;
   private app: string | undefined;
   private readonly said = new Set<string>();
+  private toast: (text: string) => void = () => {};
   /** Called when it opens or closes (a button that opens it shows whether it's open). */
   onToggle: (() => void) | undefined;
 
@@ -119,11 +138,14 @@ export class Playground {
       const v = this.chosen && this.item?.preview?.variants.find((x) => x.id === this.chosen!.variant);
       if (this.item && v && !v.inUse) deps.useVariant(this.item, v.id);
     });
-    bar.append(zoomOut, this.zoomText, zoomIn, this.fitButton, el('span', 'sep'), this.compareButton, this.previewButton, this.useButton);
+    const reset = iconButton('undo', 'Reset: every tile back to its starting data (what you clicked or typed is undone)');
+    reset.addEventListener('click', () => this.toPage({ type: 'reset' }));
+    bar.append(zoomOut, this.zoomText, zoomIn, this.fitButton, el('span', 'sep'), reset, el('span', 'sep'), this.compareButton, this.previewButton, this.useButton);
 
     const main = el('div', 'vp-main');
     this.stage.append(this.device, this.wait);
     main.append(bar, this.notes, this.stage);
+    this.toast = makeToast(main);
     this.frame.main.append(main);
     this.frame.setPanels([{ id: 'details', icon: 'props', name: 'Details: the chosen tile’s variant, its state and its fixed data (read-only)', body: this.details }]);
     new ResizeObserver(() => this.layout()).observe(this.stage);
@@ -192,6 +214,7 @@ export class Playground {
     if (!this.iframe || source !== this.iframe.contentWindow) return;
     const note = pageNote(data, this.item?.label ?? 'It');
     if (note) this.say(note);
+    this.fromPageExtra(data);
     if (data.type === 'drawn') {
       // Drawn again (a reload): the chosen tile and Compare go on.
       if (this.chosen) this.toPage({ type: 'choose', ...this.chosen });
@@ -335,10 +358,24 @@ export class Playground {
     this.showDetails();
   }
 
-  private say(text: string) {
+  /** A note above the page (once each); with a button when there's something to do about it. */
+  private say(text: string, action?: HTMLButtonElement) {
     if (this.said.has(text)) return;
     this.said.add(text);
-    this.notes.append(el('div', 'vp-note', text));
+    const note = el('div', 'vp-note', text);
+    if (action) note.append(action);
+    this.notes.append(note);
+  }
+
+  /** What the page says that this window acts on: where the prototype would go, an older helper. */
+  private fromPageExtra(data: Record<string, unknown>) {
+    if (data.type === 'goto') this.toast(`Would open ${String(data.path) || 'another page'}. A preview is one page, so it stays here.`);
+    else if (data.type === 'old' && this.item) {
+      const item = this.item;
+      const update = iconButton('add', 'Update the helper: a proposal you review first');
+      update.addEventListener('click', () => this.deps.updateHelper(item));
+      this.say(`This project’s helper (src/visual-editor.tsx) is version ${String(data.version ?? 1)}. Version 2 gives each tile its own prototype, Reset, and links that stay on the page.`, update);
+    }
   }
 
   private showWait(text: string) {

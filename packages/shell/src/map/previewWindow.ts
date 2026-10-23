@@ -8,7 +8,7 @@ import type { FromMap } from '../mapMessages';
 import { el } from '../ui/dom';
 import { iconButton, tray, type Icon } from '../ui/buttons';
 import { Frame, type LayoutStore } from '../ui/frame';
-import { pageNote } from './playground';
+import { makeToast, pageNote } from './playground';
 
 export const PREVIEW_CSS = `
   .vq-stage.fill .vp-device { margin: 0; }
@@ -28,6 +28,8 @@ interface Deps {
   store: LayoutStore;
   /** "Use this design": proposes making this variant the one in use. */
   useVariant(item: Item, variant: string): void;
+  /** "Update the helper": proposes what Preview needs from the card's plugin. */
+  updateHelper(item: Item): void;
 }
 
 export class PreviewWindow {
@@ -47,6 +49,7 @@ export class PreviewWindow {
   private state = '';
   private app: string | undefined;
   private readonly said = new Set<string>();
+  private toast: (text: string) => void = () => {};
   private data: { file: string; states: Record<string, unknown> } | undefined;
   private size: { fill: true } | { fill: false; width: number; height: number; device?: string } = { fill: true };
   private fit = true;
@@ -86,11 +89,14 @@ export class PreviewWindow {
       const v = this.item?.preview?.variants.find((x) => x.id === this.variant);
       if (this.item && v && !v.inUse) deps.useVariant(this.item, v.id);
     });
-    bar.append(sizes, rotate, el('span', 'sep'), this.fitButton, this.zoomText, el('span', 'sep'), this.useButton);
+    const reset = iconButton('undo', 'Reset: back to the starting data (what you clicked or typed is undone)');
+    reset.addEventListener('click', () => this.iframe?.contentWindow?.postMessage({ source: 've-preview', type: 'reset' }, '*'));
+    bar.append(sizes, rotate, el('span', 'sep'), this.fitButton, this.zoomText, el('span', 'sep'), reset, el('span', 'sep'), this.useButton);
 
     const main = el('div', 'vp-main');
     this.stage.append(this.device, this.wait);
     main.append(bar, this.notes, this.stage);
+    this.toast = makeToast(main);
     this.frame.main.append(main);
     this.frame.setPanels([{ id: 'details', icon: 'props', name: 'Details: the variant and state shown (switch them here), and the state’s fixed data', body: this.details }]);
     new ResizeObserver(() => this.layout()).observe(this.stage);
@@ -152,6 +158,7 @@ export class PreviewWindow {
     if (!this.iframe || source !== this.iframe.contentWindow) return;
     const note = pageNote(data, this.item?.label ?? 'It');
     if (note) this.say(note);
+    this.fromPageExtra(data);
     if (data.type === 'drawn' && data.found === false) this.say(`There’s no variant “${this.variant}” any more: choose another in Details.`);
     if (data.type === 'data') {
       this.data = { file: String(data.file), states: (data.states ?? {}) as Record<string, unknown> };
@@ -244,10 +251,24 @@ export class PreviewWindow {
     this.load();
   }
 
-  private say(text: string) {
+  /** A note above the page (once each); with a button when there's something to do about it. */
+  private say(text: string, action?: HTMLButtonElement) {
     if (this.said.has(text)) return;
     this.said.add(text);
-    this.notes.append(el('div', 'vp-note', text));
+    const note = el('div', 'vp-note', text);
+    if (action) note.append(action);
+    this.notes.append(note);
+  }
+
+  /** What the page says that this window acts on: where the prototype would go, an older helper. */
+  private fromPageExtra(data: Record<string, unknown>) {
+    if (data.type === 'goto') this.toast(`Would open ${String(data.path) || 'another page'}. A preview is one page, so it stays here.`);
+    else if (data.type === 'old' && this.item) {
+      const item = this.item;
+      const update = iconButton('add', 'Update the helper: a proposal you review first');
+      update.addEventListener('click', () => this.deps.updateHelper(item));
+      this.say(`This project’s helper (src/visual-editor.tsx) is version ${String(data.version ?? 1)}. Version 2 gives each tile its own prototype, Reset, and links that stay on the page.`, update);
+    }
   }
 
   private showWait(text: string) {

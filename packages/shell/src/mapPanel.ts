@@ -2,7 +2,7 @@
 // and when another project is chosen.
 
 import * as vscode from 'vscode';
-import type { MapDefinition } from '@visual-editor/contract';
+import type { MapDefinition, ProposedChange } from '@visual-editor/contract';
 import { webviewPage } from './webviewPage';
 import { isAbsolute, join } from 'node:path';
 import { cardMarks, type OutsideChanges } from './changes';
@@ -211,6 +211,8 @@ export class MapPanel {
       void this.addNote(m.id);
     } else if (m.type === 'useVariant') {
       this.useVariant(m.id, m.variant);
+    } else if (m.type === 'updateHelper') {
+      this.updateHelper(m.id);
     } else if (m.type === 'window') {
       void this.toggleWindow();
     } else if (m.type === 'clearChanged') {
@@ -244,6 +246,22 @@ export class MapPanel {
     if (!state || !item) return;
     const choice = plugin?.useVariant?.(item, variant, state.project);
     if (!choice) return void vscode.window.showInformationMessage(`${plugin?.name ?? 'Its plugin'} can't change which variant ${item.label} uses.`);
+    this.proposeChange(state.project.root, choice, item.id);
+  }
+
+  /** "Update the helper": the card's plugin adds or updates what Preview needs, as a proposal. */
+  private updateHelper(id: string) {
+    const state = this.current.get();
+    const item = state?.items.find((i) => i.id === id);
+    const plugin = item && state?.detected.find(({ plugin: p }) => item.id.startsWith(`${p.id}:`))?.plugin;
+    if (!state || !item) return;
+    const change = plugin?.updateHelper?.(state.project);
+    if (!change) return void vscode.window.showInformationMessage(`${plugin?.name ?? 'Its plugin'} has nothing to add for Preview.`);
+    this.proposeChange(state.project.root, change, item.id);
+  }
+
+  /** A change a plugin worked out, made in the editor: to Review, as a proposal (a string says why not). */
+  private proposeChange(root: string, choice: ProposedChange | string, card: string) {
     if (typeof choice === 'string') return void vscode.window.showInformationMessage(choice);
     const now = new Date().toISOString();
     const p: Proposal = {
@@ -254,11 +272,11 @@ export class MapPanel {
       createdAt: now,
       status: 'proposed',
       changes: choice.changes,
-      items: [item.id],
+      items: [card],
       ...(choice.look ? { look: choice.look } : {}),
       history: [{ at: now, status: 'proposed' }],
     };
-    this.review.proposeHere(state.project.root, p);
+    this.review.proposeHere(root, p);
   }
 
   private async addNote(id: string) {
