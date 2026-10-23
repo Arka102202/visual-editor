@@ -32,6 +32,8 @@ test('variants: on the map, the folder is one card that knows its variants (its 
   const card = items.find((i) => i.label === 'ProjectCard')!;
   assert.deepEqual(card.preview?.variants.map((v) => `${v.id}${v.inUse ? ' (in use)' : ''}`), ['default (in use)', 'compact']);
   assert.equal(card.preview?.states.length, 4);
+  // Its other files belong to it (a hand edit to the switcher marks this card).
+  assert.deepEqual(card.preview?.files?.map((f) => f.split('/').pop()), ['ProjectCard.compact.variant.tsx', 'ProjectCard.data.tsx', 'ProjectCard.mock.ts', 'ProjectCard.switcher.tsx', 'ProjectCard.types.ts', 'ProjectCard.variant.tsx']);
   assert.ok(card.source?.path.endsWith('ProjectCard/index.tsx'));
   const byLabel = new Map(items.map((i) => [i.id, i.label]));
   assert.deepEqual((links ?? []).map((l) => `${byLabel.get(l.from)} ${l.kind} ${byLabel.get(l.to)}`), ['ProjectList renders ProjectCard']);

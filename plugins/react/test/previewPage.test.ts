@@ -29,6 +29,9 @@ test('preview page: the page loads the helper and the chooser, with the states a
   // Preview: one variant in one state, from the page's address (?variant=…&state=…).
   assert.match(html, /asked\.get\('variant'\)/);
   assert.match(html, /data-ve-single/);
+  // Review: before and after (?compare=old,new), each column named.
+  assert.match(html, /asked\.get\('compare'\)/);
+  assert.match(html, /'After' : 'Before'/);
   // Its fixed data, for Details: the mock file next to the chooser.
   const withMock = { ...project, files: [...project.files, 'src/cards/ProjectCard/ProjectCard.mock.ts', 'src/cards/Other.mock.ts'] };
   assert.equal(JSON.parse(/const config = (\{.*\});/.exec(previewPage(item, withMock)!)![1]).mock, '/src/cards/ProjectCard/ProjectCard.mock.ts');

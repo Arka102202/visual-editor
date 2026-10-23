@@ -3,7 +3,8 @@
 // Editor's helper and the component's chooser, and draws every variant in every mock state with fixed data. Calls
 // to the network are blocked (and reported: a variant must be static); the dev server's live reload is kept, so a
 // saved variant shows at once. Two ways: the Playground's board (every variant in every state), or, with ?variant=…&state=…
-// in its address, Preview's one variant in one state, drawn like a page of the app. It talks to the window around it with
+// in its address, Preview's one variant in one state, drawn like a page of the app; with ?compare=…,… Review's before
+// and after (the variant in use, then the one proposed, in every state). It talks to the window around it with
 // postMessage, source "ve-preview-page"; the Playground answers with source "ve-preview" (the tile chosen, Compare).
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -129,6 +130,16 @@ if (single) {
   only.textContent = '[data-ve-variant]:not([data-ve-variant="' + CSS.escape(single.variant) + '"]) { display: none !important; }';
   document.head.append(only);
 }
+// Review: before and after, side by side in every state (each named, whichever the switcher says is in use).
+const compared = !single && asked.get('compare') ? asked.get('compare').split(',').filter(Boolean).slice(0, 2) : undefined;
+if (compared) {
+  const both = document.createElement('style');
+  const is = (v) => '[data-ve-variant][data-ve-variant="' + CSS.escape(v) + '"]';
+  both.textContent = '[data-ve-variant]' + compared.map((v) => ':not([data-ve-variant="' + CSS.escape(v) + '"])').join('') + ' { display: none !important; }'
+    + ' [data-ve-grid] { grid-template-columns: max-content repeat(' + compared.length + ', max-content) !important; }'
+    + compared.map((v, i) => is(v) + '::before { content: "' + (compared.length > 1 ? (i ? 'After' : 'Before') : 'Proposed') + ' · " attr(data-ve-variant-name) !important; }').join(' ');
+  document.head.append(both);
+}
 const tell = (m) => parent !== window && parent.postMessage({ source: 've-preview-page', ...m }, '*');
 const note = (text) => { document.getElementById('ve-preview').innerHTML = '<p id="ve-note"></p>'; document.getElementById('ve-note').textContent = text; };
 try {
@@ -144,7 +155,24 @@ try {
     } else {
       const chooser = await import(/* @vite-ignore */ config.chooser);
       helper.mountPreview(document.getElementById('ve-preview'), chooser.default, single ? { states: [single.state], columns: 1 } : { states: config.states, columns: config.columns });
-      if (!single) board();
+      if (!single && !compared) board();
+      // Review's before and after: both always in view, the page shrinking to fit its width (never growing).
+      if (compared) {
+        const fit = () => {
+          const grid = document.querySelector('[data-ve-grid]');
+          if (!grid) return;
+          // Measured at full size (how a zoomed size is reported differs between browsers), then shrunk once.
+          document.body.style.zoom = '1';
+          const natural = grid.getBoundingClientRect().width + 56;
+          document.body.style.zoom = String(Math.min(1, Math.max(0.2, innerWidth / natural)));
+        };
+        addEventListener('resize', fit);
+        setTimeout(() => {
+          const grid = document.querySelector('[data-ve-grid]');
+          if (grid) new ResizeObserver(fit).observe(grid);
+          fit();
+        }, 300);
+      }
       // Tell Preview what was drawn (and any variant that stopped), once it has settled.
       setTimeout(() => {
         const cells = [...document.querySelectorAll('[data-ve-variant]')];

@@ -5,6 +5,7 @@ import { CONTRACT_VERSION, type MapDefinition, type Plugin } from '@visual-edito
 import { reactPackage, SHARED_FROM_WORDS, wantsFile } from './cards';
 import { readingWorker } from './workerClient';
 import { previewPage } from './previewPage';
+import { useVariant } from './useVariant';
 
 export * from './cards';
 
@@ -52,6 +53,7 @@ export const reactPlugin: Plugin = {
   },
   maps: MAPS,
   previewPage,
+  useVariant,
   readers: [
     {
       id: 'react',

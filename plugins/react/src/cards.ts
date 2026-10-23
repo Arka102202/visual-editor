@@ -65,7 +65,8 @@ export function toMaps(model: FeModel): ReadResult {
     if (!chooser) continue;
     const inFolder = (p: string) => (f.dir ? p.startsWith(`${f.dir}/`) && !p.slice(f.dir.length + 1).includes('/') : !p.includes('/'));
     for (const c of model.components) if (c.id !== chooser.id && inFolder(c.path)) partOf.set(c.id, chooser.id);
-    preview.set(chooser.id, { variants: f.variants.map((v) => ({ ...v, inUse: v.id === f.selected })), states: f.states, ...(f.problems?.length ? { problems: f.problems } : {}) });
+    const parts = [...new Set([...Object.values(f.files), ...f.variants.map((v) => v.path)])].filter((p): p is string => !!p && p !== f.files.chooser).sort();
+    preview.set(chooser.id, { variants: f.variants.map((v) => ({ ...v, inUse: v.id === f.selected })), states: f.states, files: parts, ...(f.problems?.length ? { problems: f.problems } : {}) });
     dataFile.set(chooser.id, f.files.data);
   }
   const own = (id: string) => partOf.get(id) ?? id;
