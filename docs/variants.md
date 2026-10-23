@@ -33,7 +33,8 @@ ProjectList/
 
 Once per project:
 
-- `src/visual-editor.tsx`: the small helper every folder uses. Visual Editor adds it, and updates it, as proposals.
+- `src/visual-editor.tsx`: the small helper every folder uses (it says its version). Visual Editor adds it, and
+  updates it, as proposals: Preview and the Playground offer **Update the helper** when a project's is older.
 - `src/visual-editor.providers.tsx` **(optional)**: what every preview is wrapped in, such as a router in memory or a
   theme. Visual Editor offers it when a design needs it (links, for example).
 
@@ -82,18 +83,21 @@ has one).
   `Name.mock.ts`, with what a parent passes on top.
 - It loads the static part and the starting data only in development (`import.meta.env.DEV`), so neither reaches
   users.
-- It's one line with the helper:
+- It's a short, plain component (so the map reads it like any other), using the helper's `StaticPart`:
 
 ```tsx
-import { makeChooser } from '../../visual-editor'
+import { StaticPart, useVariantKey } from '../../visual-editor'
 import ProjectListData from './ProjectList.data'
 import type { ProjectListProps } from './ProjectList.types'
 
-/** The chooser: real data in the app; the static prototype in Preview (development only). */
-export default makeChooser<ProjectListProps>(
-  ProjectListData,
-  import.meta.env.DEV ? { start: () => import('./ProjectList.mock'), part: () => import('./ProjectList.static') } : undefined,
-)
+// The static part and its starting data: development only (left out of production builds).
+const preview = import.meta.env.DEV ? { start: () => import('./ProjectList.mock'), part: () => import('./ProjectList.static') } : undefined
+
+/** The chooser: the dynamic part in the app; the static prototype in Preview and the Playground. */
+export default function ProjectList(props: ProjectListProps) {
+  if (useVariantKey() === 'real' || !preview) return <ProjectListData {...props} />
+  return <StaticPart {...preview} props={props} />
+}
 ```
 
 ### `Name.data.tsx` (dynamic)

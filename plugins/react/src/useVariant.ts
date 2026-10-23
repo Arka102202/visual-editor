@@ -5,14 +5,14 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import { parse } from '@babel/parser';
-import type { Item, ProjectInfo, VariantChoice } from '@visual-editor/contract';
+import type { Item, ProjectInfo, ProposedChange } from '@visual-editor/contract';
 
 export function useVariant(
   item: Item,
   variant: string,
   project: ProjectInfo,
   read: (path: string) => string | undefined = (p) => (existsSync(join(project.root, p)) ? readFileSync(join(project.root, p), 'utf8') : undefined),
-): VariantChoice | string {
+): ProposedChange | string {
   const p = item.preview;
   if (!p || !item.source) return `${item.label} has no variants.`;
   const next = p.variants.find((v) => v.id === variant);

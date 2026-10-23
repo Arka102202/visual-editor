@@ -6,6 +6,7 @@ import { reactPackage, SHARED_FROM_WORDS, wantsFile } from './cards';
 import { readingWorker } from './workerClient';
 import { previewPage } from './previewPage';
 import { useVariant } from './useVariant';
+import { updateHelper } from './helper';
 
 export * from './cards';
 
@@ -54,6 +55,7 @@ export const reactPlugin: Plugin = {
   maps: MAPS,
   previewPage,
   useVariant,
+  updateHelper: (project) => updateHelper(project),
   readers: [
     {
       id: 'react',

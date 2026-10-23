@@ -13,6 +13,11 @@ import type { Item, ProjectInfo } from '@visual-editor/contract';
 
 const HELPER = /(^|\/)visual-editor\.[cm]?[jt]sx?$/;
 
+/** The project's providers for previews (src/visual-editor.providers.tsx: a router in memory, a theme…), if any. */
+export function providersFile(project: ProjectInfo): string | undefined {
+  return project.files.filter((f) => /(^|\/)visual-editor\.providers\.[cm]?[jt]sx?$/.test(f) && !f.includes('node_modules')).sort((a, b) => a.length - b.length)[0];
+}
+
 /** The project's helper file (src/visual-editor.tsx), if it has one. */
 export function helperFile(project: ProjectInfo): string | undefined {
   return project.files.filter((f) => HELPER.test(f) && !f.includes('node_modules')).sort((a, b) => a.length - b.length)[0];
@@ -50,7 +55,20 @@ export function previewPage(item: Item, project: ProjectInfo): string | undefine
   const css = globalCss(project);
   const columns = item.preview.variants.length;
   const mock = mockFile(item, project);
-  const config = { name: item.label, chooser: `/${item.source.path}`, helper: helper ? `/${helper}` : undefined, mock: mock ? `/${mock}` : undefined, css, states: item.preview.states.length ? item.preview.states : ['default'], columns };
+  const providers = providersFile(project);
+  const config = {
+    name: item.label,
+    chooser: `/${item.source.path}`,
+    helper: helper ? `/${helper}` : undefined,
+    providers: providers ? `/${providers}` : undefined,
+    mock: mock ? `/${mock}` : undefined,
+    css,
+    states: item.preview.states.length ? item.preview.states : ['default'],
+    columns,
+    variants: item.preview.variants.map((v) => v.id),
+    // A page is seen at a screen's width; a component at its own size.
+    page: item.kind === 'page',
+  };
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -106,10 +124,13 @@ try {
   [data-ve-variant][data-ve-selected]::before { content: attr(data-ve-variant-name) "  · in use"; }
   [data-ve-variant-error] { font: 12px/1.5 ui-monospace, monospace; color: #b42318; max-width: 280px; white-space: pre-wrap; }
   [data-ve-grid] { width: max-content; }
+  /* A page's tile is a laptop-wide screen (not squeezed to its content); Fit shrinks the board. */
+  html[data-ve-page] [data-ve-variant] { width: 1280px; }
   /* Preview: one variant in one state, like a page of the app (no names, no board). */
   html[data-ve-single] body { padding: 16px; }
   html[data-ve-single] [data-ve-grid] { width: auto; display: block !important; }
   html[data-ve-single] [data-ve-state], html[data-ve-single] [data-ve-variant]::before { display: none !important; }
+  html[data-ve-single] [data-ve-variant] { width: auto; }
   /* A tile is chosen by its name (or an empty spot in it); what's inside works as in the app. */
   [data-ve-state], [data-ve-variant]::before { cursor: pointer; }
   [data-ve-chosen] { outline: 2px solid #3b82f6; outline-offset: 8px; border-radius: 2px; }
@@ -123,6 +144,7 @@ try {
 const config = ${JSON.stringify(config)};
 // Preview: one variant, one state (from the address); otherwise the Playground's board.
 const asked = new URLSearchParams(location.search);
+if (config.page) document.documentElement.setAttribute('data-ve-page', '');
 const single = asked.get('variant') ? { variant: asked.get('variant'), state: asked.get('state') || config.states[0] } : undefined;
 if (single) {
   document.documentElement.setAttribute('data-ve-single', '');
@@ -153,8 +175,33 @@ try {
       note('The project’s helper (' + config.helper + ') is older: it has no mountPreview. Visual Editor can update it.');
       tell({ type: 'missing', what: 'mountPreview' });
     } else {
-      const chooser = await import(/* @vite-ignore */ config.chooser);
-      helper.mountPreview(document.getElementById('ve-preview'), chooser.default, single ? { states: [single.state], columns: 1 } : { states: config.states, columns: config.columns });
+      // An older helper is said first: a folder made for a newer one can't load with it.
+      const v2 = (helper.HELPER_VERSION ?? 1) >= 2;
+      if (!v2) tell({ type: 'old', what: 'helper', version: helper.HELPER_VERSION ?? 1 });
+      const chooser = await import(/* @vite-ignore */ config.chooser).catch((e) => {
+        if (v2) throw e;
+        // Made for the newer helper (the note above says how to update it).
+        note(config.name + ' is made for Visual Editor’s newer helper (version 2). Update the helper to see it.');
+        throw new Error('ve-stop');
+      });
+      // Version 2: one tile per design, each its own prototype (what you change stays in that tile), Reset, and the
+      // project's providers around it. Version 1: the designs of a state drawn together, and a note to update.
+      const wrap = v2 && config.providers ? (await import(/* @vite-ignore */ config.providers).catch(() => ({}))).default : undefined;
+      const tiles = single ? [single.variant] : compared ?? config.variants;
+      const drawn = helper.mountPreview(
+        document.getElementById('ve-preview'),
+        chooser.default,
+        v2 ? { states: single ? [single.state] : config.states, variants: tiles.map((id) => ({ id })), wrap } : single ? { states: [single.state], columns: 1 } : { states: config.states, columns: config.columns },
+      );
+      // The static part "going" somewhere (or a link): a preview is one page, so it says where it would go.
+      addEventListener('visual-editor:go', (e) => tell({ type: 'goto', path: String(e.detail) }));
+      addEventListener('message', (e) => {
+        if (!(e.source === parent && e.data && e.data.source === 've-preview' && e.data.type === 'reset')) return;
+        if (!drawn || !drawn.reset) return location.reload();
+        drawn.reset();
+        // Drawn again from the starting data: the window puts back what was chosen.
+        setTimeout(() => tell({ type: 'drawn', cells: document.querySelectorAll('[data-ve-variant]').length, broken: [] }), 400);
+      });
       if (!single && !compared) board();
       // Review's before and after: both always in view, the page shrinking to fit its width (never growing).
       if (compared) {
@@ -187,8 +234,10 @@ try {
     }
   }
 } catch (e) {
-  note(config.name + ' couldn’t be drawn: ' + (e && e.message || e));
-  tell({ type: 'error', text: String(e && e.message || e) });
+  if (!(e && e.message === 've-stop')) {
+    note(config.name + ' couldn’t be drawn: ' + (e && e.message || e));
+    tell({ type: 'error', text: String(e && e.message || e) });
+  }
 }
 
 /** The board's size (what Preview's Fit uses), with the page's margins. */

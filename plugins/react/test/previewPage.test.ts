@@ -23,7 +23,7 @@ test('preview page: the page loads the helper and the chooser, with the states a
   };
   const html = previewPage(item, project)!;
   const config = JSON.parse(/const config = (\{.*\});/.exec(html)![1]);
-  assert.deepEqual({ ...config, css: undefined }, { name: 'ProjectCard', chooser: '/src/cards/ProjectCard/index.tsx', helper: '/src/visual-editor.tsx', css: undefined, states: ['default', 'long name'], columns: 2 });
+  assert.deepEqual({ ...config, css: undefined, variants: undefined }, { name: 'ProjectCard', chooser: '/src/cards/ProjectCard/index.tsx', helper: '/src/visual-editor.tsx', css: undefined, states: ['default', 'long name'], columns: 2, variants: undefined, page: false });
   assert.match(html, /Preview is static: no network calls/);
   assert.match(html, /\/@vite\/client/);
   // Preview: one variant in one state, from the page's address (?variant=…&state=…).
@@ -32,6 +32,13 @@ test('preview page: the page loads the helper and the chooser, with the states a
   // Review: before and after (?compare=old,new), each column named.
   assert.match(html, /asked\.get\('compare'\)/);
   assert.match(html, /'After' : 'Before'/);
+  // One tile per design (helper version 2), and what the static part's "going" somewhere says.
+  assert.deepEqual(config.variants, ['default', 'compact']);
+  assert.match(html, /visual-editor:go/);
+  assert.match(html, /HELPER_VERSION/);
+  // The project's providers wrap every preview, when it has them.
+  const withProviders = { ...project, files: [...project.files, 'src/visual-editor.providers.tsx'] };
+  assert.equal(JSON.parse(/const config = (\{.*\});/.exec(previewPage(item, withProviders)!)![1]).providers, '/src/visual-editor.providers.tsx');
   // Its fixed data, for Details: the mock file next to the chooser.
   const withMock = { ...project, files: [...project.files, 'src/cards/ProjectCard/ProjectCard.mock.ts', 'src/cards/Other.mock.ts'] };
   assert.equal(JSON.parse(/const config = (\{.*\});/.exec(previewPage(item, withMock)!)![1]).mock, '/src/cards/ProjectCard/ProjectCard.mock.ts');

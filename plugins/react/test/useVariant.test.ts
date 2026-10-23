@@ -28,7 +28,7 @@ test('use this design: only the switcher’s one import line changes, with befor
   assert.equal(c.changes.length, 1);
   const { path, before, after } = c.changes[0];
   assert.equal(path, `${at}/ProjectCard.switcher.tsx`);
-  const changed = after.split('\n').filter((l, i) => l !== before.split('\n')[i]);
+  const changed = after.split('\n').filter((l, i) => l !== (before ?? '').split('\n')[i]);
   assert.deepEqual(changed, ["import Selected, { variant } from './ProjectCard.compact.variant'"]);
   // The list of every variant (import()) is left as it was.
   assert.match(after, /import\('\.\/ProjectCard\.variant'\), import\('\.\/ProjectCard\.compact\.variant'\)/);

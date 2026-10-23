@@ -1,43 +1,64 @@
-// Visual Editor's variants: a component's looks kept apart from its data, so Preview can show every look with fixed
-// data while the app shows the one in use with its real data. This file goes into the project once (Visual Editor adds
-// it when asked); each component folder uses it:
+// Visual Editor's helper, version 2 (docs/variants.md). A component's looks (designs) are kept apart from its data, and
+// its data has two parts: dynamic (the real data, in the app) and static (a working prototype with no network, in
+// Preview and the Playground). This file goes into the project once (Visual Editor adds it, and updates it, as
+// proposals); each component folder uses it:
 //
-//   index.tsx                 the chooser: what the app imports. Real data in the app; fixed data in Preview.
-//   Name.types.ts             NameProps (what a parent passes) and NameView (what every variant gets).
-//   Name.data.tsx             the real data: hooks, API, stores → NameView → the switcher, as "real".
-//   Name.mock.ts              fixed data: named states (default, empty, long name…), each a NameView.
-//   Name.switcher.tsx         the variant in use (one import line); every variant only in Preview.
-//   Name.variant.tsx, Name.<name>.variant.tsx   looks only: NameView in, JSX out (UI state like "menu open" is fine;
-//                             reading or changing app data is not).
+//   index.tsx                 the chooser: what the app imports. The dynamic part in the app; the static part in Preview.
+//   Name.types.ts             NameProps (what a parent passes), NameStart (what the static part starts from), NameView
+//                             (what every design gets), and NameSituation if it has situations.
+//   Name.data.tsx             dynamic: hooks, API, stores → NameView → the switcher.
+//   Name.static.tsx           static: NameStart → data kept in memory, changed by clicks → NameView → the switcher.
+//   Name.mock.ts              the starting data: named states (default, empty, many…), each a NameStart.
+//   Name.switcher.tsx         the design in use (one import line, or one line per situation); every design only in
+//                             development.
+//   Name.variant.tsx, Name.<name>.variant.tsx   designs: looks only (UI state like "menu open" is fine; app data is not).
+//
+// Folders made with version 1 (a mock of views, MockData in the chooser) keep working.
 
-import { Component, createContext, Fragment, lazy, Suspense, useContext, useMemo, type ComponentType, type ReactNode } from 'react';
+import { Component, createContext, Fragment, lazy, Suspense, useContext, useMemo, type ComponentType, type Context, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 
+/** Which version of this helper the project has (Visual Editor offers an update when it's older). */
+export const HELPER_VERSION = 2;
+
 /**
- * real: the app (real data, the variant in use).
- * mock: Preview of this component (fixed data, every variant).
- * mock-selected: inside a preview (fixed data, the variant in use).
+ * real: the app (the dynamic part, the design in use).
+ * mock: Preview or the Playground, for the component opened (the static part from its starting data; the designs).
+ * mock-selected: anything inside a preview (the static part from what its parent passes; the design in use).
  */
 export type VariantKey = 'real' | 'mock' | 'mock-selected';
 
-/** A variant's details (exported by each variant file as `variant`). */
+/** A design's details (exported by each design file as `variant`). */
 export interface VariantInfo {
   /** Unique within the component, e.g. "default", "compact". */
   id: string;
   /** A name to show, e.g. "Compact". */
   name?: string;
+  /** The situations it's made for (e.g. ["danger"]); without it, any. */
+  for?: string[];
 }
 
-/** A variant file: its looks (default export) and its details. */
+/** A design file: its looks (default export) and its details. */
 export interface VariantModule<V> {
   default: ComponentType<V>;
   variant: VariantInfo;
 }
 
-const KeyContext = createContext<VariantKey>('real');
-const StateContext = createContext<string>('default');
+/**
+ * Shared by every copy of this file on the page: after the file changes, the dev server gives it a new address for
+ * its importers (?t=…), so the preview page and a component can each load their own copy. Both must agree on these.
+ */
+const shared = ((globalThis as { __visualEditor?: unknown }).__visualEditor ??= {
+  key: createContext<VariantKey>('real'),
+  state: createContext<string>('default'),
+  only: createContext<string | undefined>(undefined),
+}) as { key: Context<VariantKey>; state: Context<string>; only: Context<string | undefined> };
+const KeyContext = shared.key;
+const StateContext = shared.state;
+/** In a preview, one tile shows one design (each tile its own prototype): which one. */
+const OnlyContext = shared.only;
 
-/** Sets the key (and the mock state) for everything inside. The app needs none: without one, it's "real". */
+/** Sets the key (and the starting state) for everything inside. The app needs none: without one, it's "real". */
 export function VariantKeyProvider({ value, state, children }: { value: VariantKey; state?: string; children: ReactNode }) {
   const inner = <KeyContext.Provider value={value}>{children}</KeyContext.Provider>;
   return state ? <StateContext.Provider value={state}>{inner}</StateContext.Provider> : inner;
@@ -47,8 +68,45 @@ export const useVariantKey = (): VariantKey => useContext(KeyContext);
 export const useMockState = (): string => useContext(StateContext);
 
 /**
- * Fixed data for a component (its Name.mock.ts, loaded only in Preview): the chosen state, with what the parent
- * passes on top (inside a preview, a parent's fixed data comes first; the child's own fills in the rest).
+ * The static part's way to "go" to another page. A preview is one page only: it shows where it would go, and stays.
+ * (Only the static part calls it; the app's own navigation lives in the dynamic part.)
+ */
+export function goTo(path: string) {
+  window.dispatchEvent(new CustomEvent('visual-editor:go', { detail: String(path) }));
+}
+
+/**
+ * The static part of a component (version 2), for the chooser: loaded only in development. It starts from the
+ * starting data's state (the tile's), with what the parent passes on top: inside a page, each child gets the page's
+ * data; on its own, it starts from its own.
+ */
+export function StaticPart<P extends object>({ start, part, props }: { start: () => Promise<{ states: Record<string, object> }>; part: () => Promise<{ default: ComponentType<any> }>; props: P }) {
+  const state = useMockState();
+  const Loaded = useMemo(
+    () =>
+      lazy(async () => {
+        const [{ states }, { default: Part }] = await Promise.all([start(), part()]);
+        return {
+          default: (p: { props: P }) => {
+            const chosen = states[state] ?? states.default ?? Object.values(states)[0] ?? {};
+            return <Part {...chosen} {...p.props} />;
+          },
+        };
+      }),
+    // A new state is a new start (the modules themselves load once).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [state],
+  );
+  return (
+    <Suspense fallback={null}>
+      <Loaded props={props} />
+    </Suspense>
+  );
+}
+
+/**
+ * Version 1: fixed views for Preview (the chooser drew them into the switcher). Kept so folders made with version 1
+ * still work; new folders use StaticPart.
  */
 export function MockData<P extends object, V extends object>({ load, props, render }: { load: () => Promise<{ states: Record<string, V> }>; props: P; render: (view: V) => ReactNode }) {
   const state = useMockState();
@@ -63,7 +121,6 @@ export function MockData<P extends object, V extends object>({ load, props, rend
           },
         };
       }),
-    // A new state is a new loading (the module itself is loaded once).
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [state],
   );
@@ -74,7 +131,7 @@ export function MockData<P extends object, V extends object>({ load, props, rend
   );
 }
 
-/** One variant that stopped drawing doesn't take the others down (in Preview). */
+/** One design that stopped drawing doesn't take the others down (in a preview). */
 class OneVariant extends Component<{ id: string; children: ReactNode }, { error: string | null }> {
   state = { error: null as string | null };
   static getDerivedStateFromError(e: unknown) {
@@ -85,59 +142,135 @@ class OneVariant extends Component<{ id: string; children: ReactNode }, { error:
   }
 }
 
+type Every<V> = () => Promise<VariantModule<V>>[];
+
+/** With situations: which prop picks the situation, the design in use for each, and every design (development only). */
+export interface Situations<V, S extends string> {
+  situation: keyof V & string;
+  inUse: Record<S, ComponentType<V>>;
+  every?: Every<V>;
+}
+
 /**
- * A component's switcher (its Name.switcher.tsx makes one): "real" and "mock-selected" draw the variant in use;
- * "mock" draws every variant, each marked with its id (data-ve-variant), and what they draw inside gets
- * "mock-selected". The other variants are loaded only then (`all` is left out of production builds).
+ * A component's switcher (its Name.switcher.tsx makes one). In the app and inside a preview it draws the design in use
+ * (for the situation the parent picked, when there are situations). For the component opened in a preview it draws the
+ * designs, each marked with its id (data-ve-variant): one per tile, or every one. What they draw inside gets
+ * "mock-selected". The other designs load only then (`every` is left out of production builds).
+ *
+ *   makeSwitcher(Selected, variant, every)                      one design in use
+ *   makeSwitcher({ situation: 'kind', inUse: { … }, every })   one design in use per situation
  */
-export function makeSwitcher<V extends object>(Selected: ComponentType<V>, selected: VariantInfo, all?: () => Promise<VariantModule<V>>[]) {
-  const Every = all
+export function makeSwitcher<V extends object, S extends string = string>(designOrSituations: ComponentType<V> | Situations<V, S>, selected?: VariantInfo, all?: Every<V>) {
+  const bySituation = typeof designOrSituations === 'object' && designOrSituations !== null && 'inUse' in designOrSituations ? (designOrSituations as Situations<V, S>) : undefined;
+  const single = bySituation ? undefined : (designOrSituations as ComponentType<V>);
+  const every = bySituation ? bySituation.every : all;
+  /** The design in use for this view (its situation's, when there are situations). */
+  const inUseFor = (view: V): ComponentType<V> => {
+    if (single) return single;
+    const s = String((view as Record<string, unknown>)[bySituation!.situation]);
+    const map = bySituation!.inUse as Record<string, ComponentType<V>>;
+    return map[s] ?? Object.values(map)[0];
+  };
+  const Designs = every
     ? lazy(async () => {
-        const modules = await Promise.all(all());
+        const modules = await Promise.all(every());
         return {
-          default: (p: { view: V }) => (
-            <KeyContext.Provider value="mock-selected">
-              {modules.map((m) => (
-                <div key={m.variant.id} data-ve-variant={m.variant.id} data-ve-variant-name={m.variant.name ?? m.variant.id} data-ve-selected={m.variant.id === selected.id ? '' : undefined}>
-                  <OneVariant id={m.variant.id}>
-                    <m.default {...p.view} />
-                  </OneVariant>
-                </div>
-              ))}
-            </KeyContext.Provider>
-          ),
+          default: (p: { view: V; only?: string }) => {
+            const inUse = inUseFor(p.view);
+            const situation = bySituation ? String((p.view as Record<string, unknown>)[bySituation.situation]) : undefined;
+            const shown = modules.filter((m) => (!p.only || m.variant.id === p.only) && (!situation || !m.variant.for || m.variant.for.includes(situation)));
+            return (
+              <KeyContext.Provider value="mock-selected">
+                {shown.map((m) => {
+                  const isInUse = m.default === inUse || (!!selected && m.variant.id === selected.id);
+                  return (
+                    <div key={m.variant.id} data-ve-variant={m.variant.id} data-ve-variant-name={m.variant.name ?? m.variant.id} data-ve-selected={isInUse ? '' : undefined}>
+                      <OneVariant id={m.variant.id}>
+                        <m.default {...p.view} />
+                      </OneVariant>
+                    </div>
+                  );
+                })}
+              </KeyContext.Provider>
+            );
+          },
         };
       })
     : undefined;
-  return function Switcher(props: V & { mode: VariantKey }) {
-    const { mode, ...view } = props;
-    if (mode !== 'mock' || !Every) return <Selected {...(view as V)} />;
+  return function Switcher(props: V & { mode?: VariantKey }) {
+    const { mode, ...rest } = props;
+    const fromAbove = useVariantKey();
+    const only = useContext(OnlyContext);
+    const view = rest as V;
+    const key = mode ?? fromAbove;
+    if (key !== 'mock' || !Designs) {
+      const InUse = inUseFor(view);
+      return <InUse {...view} />;
+    }
     return (
       <Suspense fallback={null}>
-        <Every view={view as V} />
+        <Designs view={view} only={only} />
       </Suspense>
     );
   };
 }
 
-/**
- * Preview's page (Visual Editor serves it): a component drawn with every variant (side by side) in every state (one
- * row each), with fixed data. Each variant is labelled; anything inside shows its own variant in use.
- */
-export function mountPreview(container: HTMLElement, Chooser: ComponentType<Record<string, never>>, options: { states: string[]; columns: number }) {
-  const root = createRoot(container);
-  root.render(
-    <div data-ve-grid="" style={{ display: 'grid', gridTemplateColumns: `max-content repeat(${Math.max(1, options.columns)}, max-content)`, gap: '28px 32px', alignItems: 'start' }}>
-      {options.states.map((state) => (
-        <Fragment key={state}>
-          <div data-ve-state={state}>{state}</div>
-          <VariantKeyProvider value="mock" state={state}>
-            <Chooser />
-          </VariantKeyProvider>
-        </Fragment>
-      ))}
-    </div>,
-  );
-  return root;
+/** What a preview can be told: draw again from the starting data. */
+export interface PreviewHandle {
+  reset(): void;
 }
 
+/**
+ * The page Visual Editor serves for Preview and the Playground: a component drawn in every state (one row each) and,
+ * with `variants`, one tile per design, each its own prototype (what you change in one tile stays in that tile).
+ * Each design is labelled; anything inside shows its own design in use. Links don't leave the page: they show where
+ * they'd go. `wrap` is the project's providers (src/visual-editor.providers.tsx), when it has them.
+ */
+export function mountPreview(
+  container: HTMLElement,
+  Chooser: ComponentType<Record<string, never>>,
+  options: { states: string[]; columns?: number; variants?: { id: string }[]; wrap?: ComponentType<{ children: ReactNode }> },
+): PreviewHandle & { root: ReturnType<typeof createRoot> } {
+  const root = createRoot(container);
+  container.addEventListener(
+    'click',
+    (e) => {
+      const link = e.target instanceof Element ? e.target.closest('a[href]') : null;
+      if (!link || e.defaultPrevented) return;
+      e.preventDefault();
+      goTo(link.getAttribute('href') ?? '');
+    },
+    true,
+  );
+  const tiles: (string | undefined)[] = options.variants?.length ? options.variants.map((v) => v.id) : [undefined];
+  const columns = options.variants?.length ?? Math.max(1, options.columns ?? 1);
+  const Wrap = options.wrap ?? Fragment;
+  let round = 0;
+  const draw = () =>
+    root.render(
+      <Wrap>
+        <div key={round} data-ve-grid="" style={{ display: 'grid', gridTemplateColumns: `max-content repeat(${columns}, max-content)`, gap: '28px 32px', alignItems: 'start' }}>
+          {options.states.map((state) => (
+            <Fragment key={state}>
+              <div data-ve-state={state}>{state}</div>
+              {tiles.map((id) => (
+                <OnlyContext.Provider key={id ?? 'every'} value={id}>
+                  <VariantKeyProvider value="mock" state={state}>
+                    <Chooser />
+                  </VariantKeyProvider>
+                </OnlyContext.Provider>
+              ))}
+            </Fragment>
+          ))}
+        </div>
+      </Wrap>,
+    );
+  draw();
+  return {
+    root,
+    reset() {
+      round++;
+      draw();
+    },
+  };
+}
