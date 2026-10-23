@@ -443,9 +443,10 @@ focus.addTools(nbPreview, nbPlayground, nbZoom, nbOut, nbIn, nbFit, nbOnMap);
 /** The Webview: the running app, over everything (from the map's top bar, or its command), to try whole pages. */
 const webview = new Webview({ post: (m) => vscode.postMessage(m), store: layoutStore });
 /** Preview: one variant of a card on its own, in one fixed-data state, at a screen size (for cards that have variants). */
-const preview = new PreviewWindow({ post: (m) => vscode.postMessage(m), store: layoutStore });
+const useVariant = (item: Item, variant: string) => vscode.postMessage({ type: 'useVariant', id: item.id, variant });
+const preview = new PreviewWindow({ post: (m) => vscode.postMessage(m), store: layoutStore, useVariant });
 /** Playground: a card's every variant in every fixed-data state; a chosen tile opens in Preview. */
-const playground = new Playground({ post: (m) => vscode.postMessage(m), store: layoutStore, preview: (item, variant, state) => preview.open(item, variant, state) });
+const playground = new Playground({ post: (m) => vscode.postMessage(m), store: layoutStore, preview: (item, variant, state) => preview.open(item, variant, state), useVariant });
 const previewTip = (label: string) => `Preview: ${label} on its own (the variant in use), with fixed data, at a screen size`;
 const playgroundTip = (label: string) => `Playground: ${label}’s every variant in every state, side by side, with fixed data`;
 
@@ -899,6 +900,11 @@ function show(m: ShowMap) {
   changedBadge.hidden = !m.changed;
   mv.setLayout(m.layout);
   if (selected && !mv.placedById.has(selected)) select(undefined);
+  // The Playground and Preview follow their card (e.g. another variant is now in use).
+  for (const w of [playground, preview]) {
+    const item = w.itemId ? mv.placedById.get(w.itemId)?.item : undefined;
+    if (item) w.refresh(item);
+  }
   // A new project starts fitted; updates to the same one keep where you were looking.
   if (`${m.current}|${m.map}` !== shownKey) {
     shownKey = `${m.current}|${m.map}`;

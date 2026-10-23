@@ -31,6 +31,8 @@ export interface Proposal {
   changes: FileChange[];
   /** Cards it touches (beyond those defined in the changed files). */
   items?: string[];
+  /** A page at the app's address that shows how it looks, before and after (Review shows it). */
+  look?: string;
   /** What happened to it, newest last. */
   history: { at: string; status: Status; note?: string }[];
 }
@@ -86,6 +88,8 @@ export function parseProposal(text: string, fallbackId: string): Proposal | stri
     status,
     changes,
     ...(Array.isArray(raw.items) ? { items: (raw.items as unknown[]).filter((i): i is string => typeof i === 'string') } : {}),
+    // Only an address on the app itself ("/…"), never another site.
+    ...(typeof raw.look === 'string' && /^\/(?![/\\])/.test(raw.look) && raw.look.length < 2000 ? { look: raw.look } : {}),
     history: Array.isArray(raw.history) ? (raw.history as Proposal['history']) : [{ at: createdAt, status }],
   };
 }

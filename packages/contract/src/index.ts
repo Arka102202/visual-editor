@@ -82,6 +82,8 @@ export interface ItemPreview {
   states: string[];
   /** What breaks the rules (in words, with what to do): e.g. a variant that calls an API. */
   problems?: string[];
+  /** Its other files (the real data, the fixed data, the switcher…): a change to one is a change to this card. */
+  files?: string[];
 }
 
 export interface Field {
@@ -150,6 +152,22 @@ export interface Plugin {
    * at the app's address (through its dev server, so its styles and code load as the app's do). Undefined: none.
    */
   previewPage?(item: Item, project: ProjectInfo): string | undefined;
+  /**
+   * Contract 8: the change that makes another of a card's variants the one in use (only the plugin knows where that's
+   * said), for the developer to review. A string says why it can't be done.
+   */
+  useVariant?(item: Item, variant: string, project: ProjectInfo): VariantChoice | string;
+}
+
+/** Contract 8: making another variant the one in use, as a change to review. */
+export interface VariantChoice {
+  /** Plain words, e.g. "ProjectCard: use Wide instead of Compact". */
+  title: string;
+  why: string;
+  /** Each file's whole text before and after. */
+  changes: { path: string; before: string; after: string }[];
+  /** A page at the app's address showing the variant in use and the new one side by side (Review shows it). */
+  look?: string;
 }
 
 // ---------------------------------------------------------------------------

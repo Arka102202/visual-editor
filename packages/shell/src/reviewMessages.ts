@@ -22,6 +22,8 @@ export interface ReviewItem {
   files: ReviewFile[];
   /** Why it can't be applied (or undone) as it stands. */
   conflicts: string[];
+  /** A page at the app's address showing how it looks, before and after. */
+  look?: string;
 }
 
 /** Shell → review page. */
@@ -32,6 +34,8 @@ export type ToReview = {
   selected?: string;
   /** Proposal files that couldn't be read, with the reason. */
   problems: { file: string; message: string }[];
+  /** The app (its dev server, through the proxy), for proposals that show how they look. */
+  app?: { url?: string; progress?: string; error?: string };
 };
 
 /** Review page → shell. */
@@ -44,4 +48,6 @@ export type FromReview =
   | { type: 'sendBack'; id: string }
   | { type: 'reject'; id: string }
   | { type: 'undo'; id: string }
-  | { type: 'open'; path: string; line?: number };
+  | { type: 'open'; path: string; line?: number }
+  /** Start the app again, to show how a proposal looks. */
+  | { type: 'app' };

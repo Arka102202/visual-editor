@@ -130,6 +130,8 @@ export type FromMap =
   | { type: 'lines'; id: string }
   /** Preview wants the app's address (the proxy and dev server start when needed). */
   | { type: 'app' }
+  /** "Use this design": propose making this variant of the card the one in use. */
+  | { type: 'useVariant'; id: string; variant: string }
   /** Open the developer's own file for a place in the code the browser runs (a console message's). */
   | { type: 'openSource'; url: string; line: number; column: number }
   /** Open the stylesheet a CSS rule comes from, at that rule. */

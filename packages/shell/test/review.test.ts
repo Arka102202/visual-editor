@@ -122,3 +122,26 @@ test('marks: yellow for cards a waiting proposal changes, blue for code changed 
   outside.clear('/p');
   assert.equal(outside.get('/p').size, 0);
 });
+
+test('a card’s other files count as the card: a hand edit to a variant folder’s switcher marks its card', () => {
+  const card: Item = {
+    id: 'react:component:src/Card/index.tsx#Card', map: 'components', kind: 'component', label: 'Card', source: { path: 'src/Card/index.tsx' },
+    preview: { variants: [], states: [], files: ['src/Card/Card.switcher.tsx', 'src/Card/Card.variant.tsx'] },
+  };
+  assert.deepEqual(cardMarks([card], [], new Set(['src/Card/Card.switcher.tsx'])), { [card.id]: 'changed' });
+  const waiting: Proposal = { id: 'p1', title: 'x', by: { kind: 'developer', name: 'You' }, createdAt: '', status: 'proposed', changes: [{ path: 'src/Card/Card.variant.tsx', before: 'a', after: 'b' }], history: [] };
+  assert.deepEqual(cardMarks([card], [waiting], new Set()), { [card.id]: 'proposed' });
+});
+
+test('a proposal can show how it looks: only at the app’s own address', () => {
+  const base = { title: 'Use Wide', changes: [{ path: 'src/a.tsx', before: 'a', after: 'b' }] };
+  const read = (look: unknown) => {
+    const p = parseProposal(JSON.stringify({ ...base, look }), 'x');
+    return typeof p === 'string' ? p : p.look;
+  };
+  assert.equal(read('/__ve/preview?item=a&compare=x,y'), '/__ve/preview?item=a&compare=x,y');
+  assert.equal(read('https://evil.example/'), undefined);
+  assert.equal(read('//evil.example/'), undefined);
+  assert.equal(read('/\\evil.example/'), undefined);
+  assert.equal(read(42), undefined);
+});

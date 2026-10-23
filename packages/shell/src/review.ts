@@ -23,6 +23,8 @@ export class Review implements vscode.Disposable {
   private ready = false;
   private selected: string | undefined;
   private readonly subscriptions: vscode.Disposable[] = [];
+  /** Each project's app, for proposals that show how they look. */
+  private readonly apps = new Map<string, NonNullable<ToReview['app']>>();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -30,6 +32,8 @@ export class Review implements vscode.Disposable {
     private readonly current: CurrentProject,
     private readonly changes: OutsideChanges,
     private readonly memory: ProjectMemory,
+    /** Starts a project's app (its dev server, through the proxy) and gives its address. */
+    private readonly appFor?: (root: string, progress: (text: string) => void) => Promise<string>,
   ) {
     // Reading proposals when the projects are known; new ones that arrive later are announced.
     this.subscriptions.push(
@@ -77,7 +81,8 @@ export class Review implements vscode.Disposable {
       localResourceRoots: [dist],
     });
     panel.iconPath = vscode.Uri.joinPath(this.extensionUri, 'media', 'icon.svg');
-    panel.webview.html = webviewPage(panel.webview, vscode.Uri.joinPath(dist, 'review.js'), 'Review');
+    // Proposals that show how they look frame the app (its dev server, through the proxy).
+    panel.webview.html = webviewPage(panel.webview, vscode.Uri.joinPath(dist, 'review.js'), 'Review', 'frame-src http://127.0.0.1:* http://localhost:*;');
     panel.webview.onDidReceiveMessage((m: FromReview) => void this.receive(m), undefined, this.subscriptions);
     panel.onDidDispose(() => {
       this.panel = undefined;
@@ -90,6 +95,20 @@ export class Review implements vscode.Disposable {
   receiveProposal(root: string, p: Proposal) {
     this.store(root).save(p);
     this.reload(root, true);
+  }
+
+  /**
+   * A proposal made in the editor itself (e.g. "Use this design"): saved and shown in Review at once. The same one
+   * already waiting is shown instead of a second.
+   */
+  proposeHere(root: string, p: Proposal) {
+    const same = this.proposals(root).find((x) => x.status === 'proposed' && x.title === p.title && JSON.stringify(x.changes) === JSON.stringify(p.changes));
+    if (!same) {
+      this.store(root).save(p);
+      this.reload(root, false);
+    }
+    this.current.choose(root);
+    this.show((same ?? p).id);
   }
 
   /** Makes an example proposal in the shown project, to try review without an assistant. */
@@ -183,6 +202,7 @@ export class Review implements vscode.Disposable {
     if (m.type === 'try') return this.tryExample();
     const root = this.current.get()?.project.root;
     if (!root) return;
+    if (m.type === 'app') return this.startApp(root);
     if (m.type === 'open') {
       const line = Math.max(0, (m.line ?? 1) - 1);
       await vscode.window.showTextDocument(vscode.Uri.file(join(root, m.path)), { selection: new vscode.Range(line, 0, line, 0), viewColumn: vscode.ViewColumn.Beside });
@@ -267,12 +287,33 @@ export class Review implements vscode.Disposable {
           hunks: hunks(c.before, c.after),
         })),
         conflicts: files ? (p.status === 'proposed' ? await conflicts(p, files) : p.status === 'applied' ? await undoConflicts(p, files) : []) : [],
+        ...(p.look ? { look: p.look } : {}),
       });
     }
     if (!this.selected || !items.some((i) => i.id === this.selected)) this.selected = (items.find((i) => i.status === 'proposed') ?? items[0])?.id;
-    const message: ToReview = { type: 'show', project: state?.project.name, items, selected: this.selected, problems: root ? this.store(root).problems : [] };
+    // A proposal that shows how it looks needs the app: started the first time one is shown.
+    if (root && items.find((i) => i.id === this.selected)?.look && !this.apps.has(root)) void this.startApp(root);
+    const message: ToReview = { type: 'show', project: state?.project.name, items, selected: this.selected, problems: root ? this.store(root).problems : [], app: root ? this.apps.get(root) : undefined };
     this.panel.title = `Review${state ? ` · ${state.project.name}` : ''}`;
     void this.panel.webview.postMessage(message);
+  }
+
+  /** Starts the project's app (or finds it running), saying how it goes. */
+  private async startApp(root: string) {
+    if (!this.appFor) return void this.apps.set(root, { error: 'The app can’t be run from here.' });
+    this.apps.set(root, { progress: 'Starting the app’s dev server…' });
+    void this.send();
+    try {
+      const url = await this.appFor(root, (text) => {
+        if (!text) return;
+        this.apps.set(root, { progress: `Starting the app’s dev server… ${text}` });
+        void this.send();
+      });
+      this.apps.set(root, { url: url.replace(/\/$/, '') });
+    } catch (e) {
+      this.apps.set(root, { error: e instanceof Error ? e.message : String(e) });
+    }
+    void this.send();
   }
 
   private files(root: string): Files {
