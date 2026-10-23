@@ -12,6 +12,7 @@ import { cardColours, lineColours, usedBy } from './styles';
 import type { CardLines, FromMap, MapMeasure, PluginPanel, ShowMap, ToMap } from './mapMessages';
 import type { ProjectIndex } from './projectIndex';
 import type { Review } from './review';
+import { newId, type Proposal } from './proposals';
 import { forCard } from './memory';
 import type { ProjectMemory } from './memoryView';
 import { onThemeChange, themeTokenColours } from './themeColours';
@@ -208,6 +209,8 @@ export class MapPanel {
       this.focus(m.id);
     } else if (m.type === 'addNote') {
       void this.addNote(m.id);
+    } else if (m.type === 'useVariant') {
+      this.useVariant(m.id, m.variant);
     } else if (m.type === 'window') {
       void this.toggleWindow();
     } else if (m.type === 'clearChanged') {
@@ -231,6 +234,31 @@ export class MapPanel {
     await vscode.commands.executeCommand(this.floating ? 'workbench.action.restoreEditorsToMainWindow' : 'workbench.action.moveEditorToNewWindow');
     this.floating = !this.floating;
     this.send();
+  }
+
+  /** "Use this design": the card's plugin works out the change, and it goes to Review as a proposal. */
+  private useVariant(id: string, variant: string) {
+    const state = this.current.get();
+    const item = state?.items.find((i) => i.id === id);
+    const plugin = item && state?.detected.find(({ plugin: p }) => item.id.startsWith(`${p.id}:`))?.plugin;
+    if (!state || !item) return;
+    const choice = plugin?.useVariant?.(item, variant, state.project);
+    if (!choice) return void vscode.window.showInformationMessage(`${plugin?.name ?? 'Its plugin'} can't change which variant ${item.label} uses.`);
+    if (typeof choice === 'string') return void vscode.window.showInformationMessage(choice);
+    const now = new Date().toISOString();
+    const p: Proposal = {
+      id: newId(),
+      title: choice.title,
+      why: choice.why,
+      by: { kind: 'developer', name: 'You' },
+      createdAt: now,
+      status: 'proposed',
+      changes: choice.changes,
+      items: [item.id],
+      ...(choice.look ? { look: choice.look } : {}),
+      history: [{ at: now, status: 'proposed' }],
+    };
+    this.review.proposeHere(state.project.root, p);
   }
 
   private async addNote(id: string) {

@@ -11,7 +11,7 @@
 
 import * as esbuild from 'esbuild';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -32,7 +32,8 @@ const report = join(temp, 'report.txt');
 const shots = process.env.SHOTS ? resolve(process.env.SHOTS) : undefined;
 if (shots) mkdirSync(shots, { recursive: true });
 
-const code = process.env.VSCODE_PATH ?? '/Applications/Visual Studio Code.app/Contents/MacOS/Electron';
+// VS Code's program: "Code" since VS Code 1.142, "Electron" before.
+const code = process.env.VSCODE_PATH ?? ['Code', 'Electron'].map((n) => `/Applications/Visual Studio Code.app/Contents/MacOS/${n}`).find((p) => existsSync(p)) ?? '/Applications/Visual Studio Code.app/Contents/MacOS/Code';
 const requests = join(temp, 'requests');
 mkdirSync(requests);
 if (process.env.DEBUG_PORT) console.log(`requests: ${requests}`);

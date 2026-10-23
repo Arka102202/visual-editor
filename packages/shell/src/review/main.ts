@@ -1,5 +1,6 @@
-// The Review page: proposals on the left (waiting first), the chosen one on the right with why, what changes in
-// each file, and Approve / Send back / Reject (or Undo once applied). Plain DOM, no framework.
+// The Review page: proposals on the left (waiting first), the chosen one on the right with why, how it looks (before
+// and after, live from the app, when the proposal has a look), what changes in each file, and Approve / Send back /
+// Reject (or Undo once applied). Plain DOM, no framework.
 
 import type { FromReview, ReviewFile, ReviewItem, ToReview } from '../reviewMessages';
 import { addStyles, ago, el } from '../ui/dom';
@@ -48,6 +49,10 @@ addStyles(`
   .empty p { opacity: .7; margin: 0 0 16px; }
   .problems { font-size: 12px; padding: 10px 14px; opacity: .8; }
   .try { margin: 18px 14px; }
+  .lookhead { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; opacity: .6; margin: 0 0 6px; }
+  .look { position: relative; height: 420px; min-height: 160px; resize: vertical; overflow: hidden; border: 1px solid var(--vscode-panel-border, #8884); border-radius: 6px; margin-bottom: 18px; background: #fff; }
+  .look iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  .look .wait { position: absolute; inset: 0; display: flex; gap: 10px; align-items: center; justify-content: center; text-align: center; padding: 20px; color: #555; font-size: 13px; }
 `);
 
 const STATUS_WORDS: Record<ReviewItem['status'], string> = {
@@ -69,6 +74,8 @@ document.body.append(list, detail, empty);
 installTips();
 
 let current: ToReview | undefined;
+/** How a proposal looks: kept between redraws, so it doesn't load again each time Review refreshes. */
+const looks = new Map<string, HTMLElement>();
 
 function show(m: ToReview) {
   current = m;
@@ -144,6 +151,7 @@ function drawDetail(item: ReviewItem) {
   }
   if (actions.childElementCount) detail.append(actions);
 
+  if (item.look) detail.append(el('div', 'lookhead', 'How it looks: before and after (live, with fixed data)'), drawLook(item.look));
   for (const f of item.files) detail.append(drawFile(f));
 
   const history = el('div', 'history');
@@ -152,6 +160,29 @@ function drawDetail(item: ReviewItem) {
     history.append(el('div', undefined, `${new Date(h.at).toLocaleString()} · ${STATUS_WORDS[h.status]}${h.note ? `: “${h.note}”` : ''}`));
   }
   detail.append(history);
+}
+
+/** The look page in a frame once the app is running; until then, how starting it goes. */
+function drawLook(look: string): HTMLElement {
+  const app = current?.app;
+  const url = app?.url ? `${app.url}${look}` : undefined;
+  if (url) {
+    let box = looks.get(url);
+    if (!box) {
+      box = el('div', 'look');
+      const frame = el('iframe');
+      frame.title = 'How it looks, before and after';
+      frame.src = url;
+      box.append(frame);
+      looks.set(url, box);
+    }
+    return box;
+  }
+  const box = el('div', 'look');
+  const wait = el('div', 'wait', app?.error ? `The app’s dev server couldn’t start: ${app.error}` : (app?.progress ?? 'Starting the app’s dev server…'));
+  if (app?.error) wait.append(button('reload', 'Try again: start the app’s dev server', undefined, { type: 'app' }));
+  box.append(wait);
+  return box;
 }
 
 function drawFile(f: ReviewFile): HTMLElement {

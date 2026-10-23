@@ -66,9 +66,10 @@ export function cardMarks(items: Item[], proposals: Proposal[], changed: Readonl
   const proposedIds = new Set(waiting.flatMap((p) => p.items ?? []));
   const marks: Record<string, Mark> = {};
   for (const item of items) {
-    const path = item.source?.path;
-    if (proposedIds.has(item.id) || (path && proposedPaths.has(path))) marks[item.id] = 'proposed';
-    else if (path && changed.has(path)) marks[item.id] = 'changed';
+    // Its own file, and the others that belong to it (a previewable folder's switcher, variants, data…).
+    const paths = [item.source?.path, ...(item.preview?.files ?? [])].filter((p): p is string => !!p);
+    if (proposedIds.has(item.id) || paths.some((p) => proposedPaths.has(p))) marks[item.id] = 'proposed';
+    else if (paths.some((p) => changed.has(p))) marks[item.id] = 'changed';
   }
   return marks;
 }

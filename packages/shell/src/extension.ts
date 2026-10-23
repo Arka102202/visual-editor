@@ -53,7 +53,7 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
   // Memory: why the project is the way it is (reviewed changes, rules, decisions, notes on cards).
   const memory = new ProjectMemory(index);
   const memoryView = new MemoryView(memory, current);
-  const review = new Review(context.extensionUri, index, current, changes, memory);
+  const review = new Review(context.extensionUri, index, current, changes, memory, (root, progress) => proxies.open(root, progress));
   const projectsView = new ProjectsView(index, current, review);
   context.subscriptions.push(memoryView, vscode.window.registerTreeDataProvider('visualEditor.memory', memoryView));
   context.subscriptions.push(index, review, projectsView, vscode.window.registerTreeDataProvider('visualEditor.projects', projectsView));

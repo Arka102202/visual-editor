@@ -45,6 +45,8 @@ interface Deps {
   store: LayoutStore;
   /** Opens Preview: one variant on its own, in one state. */
   preview(item: Item, variant: string, state: string): void;
+  /** "Use this design": proposes making this variant the one in use. */
+  useVariant(item: Item, variant: string): void;
 }
 
 /** What a variants page says, in words (a call it blocked, something missing, a variant that stopped). */
@@ -68,6 +70,7 @@ export class Playground {
   private readonly fitButton = iconButton('fitMap', 'Fit: the whole board in view (zooming in or out turns it off)', { cls: 'on' });
   private readonly compareButton = iconButton('compare', '');
   private readonly previewButton = iconButton('single', '');
+  private readonly useButton = iconButton('choose', '');
   private readonly details = el('div', 'vp-details');
   private zoom = 1;
   private fit = true;
@@ -112,7 +115,11 @@ export class Playground {
     this.previewButton.addEventListener('click', () => {
       if (this.item && this.chosen) deps.preview(this.item, this.chosen.variant, this.chosen.state);
     });
-    bar.append(zoomOut, this.zoomText, zoomIn, this.fitButton, el('span', 'sep'), this.compareButton, this.previewButton);
+    this.useButton.addEventListener('click', () => {
+      const v = this.chosen && this.item?.preview?.variants.find((x) => x.id === this.chosen!.variant);
+      if (this.item && v && !v.inUse) deps.useVariant(this.item, v.id);
+    });
+    bar.append(zoomOut, this.zoomText, zoomIn, this.fitButton, el('span', 'sep'), this.compareButton, this.previewButton, this.useButton);
 
     const main = el('div', 'vp-main');
     this.stage.append(this.device, this.wait);
@@ -145,6 +152,21 @@ export class Playground {
       this.showWait('Starting the app’s dev server…');
       this.deps.post({ type: 'app' });
     }
+  }
+
+  /** The card it shows (open or not). */
+  get itemId(): string | undefined {
+    return this.item?.id;
+  }
+
+  /** The card was read again (e.g. another variant is now in use): what's shown follows. */
+  refresh(item: Item) {
+    if (this.item?.id !== item.id) return;
+    this.item = item;
+    const p = item.preview;
+    if (p) this.frame.hint.textContent = `${p.variants.length} variant${p.variants.length === 1 ? '' : 's'} · ${p.states.length} state${p.states.length === 1 ? '' : 's'} · fixed data, no network`;
+    this.showCompare();
+    this.showDetails();
   }
 
   /** Whether it's open, showing this card. */
@@ -257,6 +279,11 @@ export class Playground {
     this.previewButton.classList.toggle('dim', !v);
     this.previewButton.dataset.tip = ptip;
     this.previewButton.setAttribute('aria-label', ptip);
+    // Use this design: for a chosen variant that isn't the one in use.
+    const utip = !v ? 'Use this design: choose a variant that isn’t in use (click its name on the board)' : v.inUse ? `Use this design: ${v.name} is already the one in use` : `Use this design: make ${v.name} the one ${this.item?.label ?? 'it'} uses (a proposal you review first, with before and after)`;
+    this.useButton.classList.toggle('dim', !v || v.inUse);
+    this.useButton.dataset.tip = utip;
+    this.useButton.setAttribute('aria-label', utip);
     // Only when there's something to hide: with two variants, the board already shows just those two.
     this.compareButton.hidden = (this.item?.preview?.variants.length ?? 0) < 3;
     const two = this.compared();

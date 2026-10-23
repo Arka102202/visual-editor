@@ -26,6 +26,8 @@ const DEVICES: { id: string; icon: Icon; name: string; width: number; height: nu
 interface Deps {
   post(m: FromMap): void;
   store: LayoutStore;
+  /** "Use this design": proposes making this variant the one in use. */
+  useVariant(item: Item, variant: string): void;
 }
 
 export class PreviewWindow {
@@ -38,6 +40,7 @@ export class PreviewWindow {
   private readonly sizeButtons = new Map<string, HTMLButtonElement>();
   private readonly fitButton = iconButton('fitMap', 'Zoom to fit: the whole screen size in view (off: real size, scroll to see it all)', { cls: 'on' });
   private readonly details = el('div', 'vp-details');
+  private readonly useButton = iconButton('choose', '');
   private iframe: HTMLIFrameElement | undefined;
   private item: Item | undefined;
   private variant = '';
@@ -79,7 +82,11 @@ export class PreviewWindow {
       this.fitButton.classList.toggle('on', this.fit);
       this.layout();
     });
-    bar.append(sizes, rotate, el('span', 'sep'), this.fitButton, this.zoomText);
+    this.useButton.addEventListener('click', () => {
+      const v = this.item?.preview?.variants.find((x) => x.id === this.variant);
+      if (this.item && v && !v.inUse) deps.useVariant(this.item, v.id);
+    });
+    bar.append(sizes, rotate, el('span', 'sep'), this.fitButton, this.zoomText, el('span', 'sep'), this.useButton);
 
     const main = el('div', 'vp-main');
     this.stage.append(this.device, this.wait);
@@ -107,6 +114,19 @@ export class PreviewWindow {
       this.showWait('Starting the app’s dev server…');
       this.deps.post({ type: 'app' });
     }
+  }
+
+  /** The card it shows (open or not). */
+  get itemId(): string | undefined {
+    return this.item?.id;
+  }
+
+  /** The card was read again (e.g. another variant is now in use): what's shown follows. */
+  refresh(item: Item) {
+    if (this.item?.id !== item.id) return;
+    this.item = item;
+    this.showDetails();
+    this.showHint();
   }
 
   /** Whether it's open, showing this card. */
@@ -151,8 +171,17 @@ export class PreviewWindow {
     this.wait.hidden = true;
     this.device.append(iframe);
     this.layout();
-    const v = this.item.preview?.variants.find((x) => x.id === this.variant);
+    this.showHint();
+  }
+
+  /** The title bar's hint, and Use this design (for a variant that isn't in use). */
+  private showHint() {
+    const v = this.item?.preview?.variants.find((x) => x.id === this.variant);
     this.frame.hint.textContent = `${v?.name ?? this.variant}${v?.inUse ? ' (in use)' : ''} · ${this.state} · fixed data, no network`;
+    const tip = !v ? 'Use this design' : v.inUse ? `Use this design: ${v.name} is already the one in use` : `Use this design: make ${v.name} the one ${this.item?.label ?? 'it'} uses (a proposal you review first, with before and after)`;
+    this.useButton.classList.toggle('dim', !v || v.inUse);
+    this.useButton.dataset.tip = tip;
+    this.useButton.setAttribute('aria-label', tip);
   }
 
   private setSize(size: PreviewWindow['size']) {
