@@ -1,22 +1,22 @@
-import type { ProjectCardView } from './ProjectCard.types'
+import { goTo } from '../../../../visual-editor'
+import type { ProjectCardStart } from './ProjectCard.types'
 
-const base: ProjectCardView = {
-  name:        'order-service',
-  description: 'Takes orders and sends them on.',
-  updated:     '5m ago',
+const ago = (minutes: number) => Date.now() - minutes * 60_000
+
+const base: ProjectCardStart = {
+  project:     { id: 'p1', name: 'order-service', description: 'Takes orders and sends them on.', createdAt: ago(600), updatedAt: ago(5) },
   accentColor: '#3860f5',
-  onOpen:      () => {},
+  onOpen:      () => goTo('/editor/p1'),
   onDelete:    () => {},
 }
 
-/** Fixed data for Preview: one state per case worth seeing. */
-export const states: Record<string, ProjectCardView> = {
+/** The starting data for Preview: one state per case worth seeing. */
+export const states: Record<string, ProjectCardStart> = {
   default: base,
   'long name': {
     ...base,
-    name:        'customer-notification-and-preferences-service',
-    description: 'Sends emails, texts and push notifications, and keeps what each customer wants to hear about.',
+    project: { ...base.project, name: 'customer-notification-and-preferences-service', description: 'Sends emails, texts and push notifications, and keeps what each customer wants to hear about.' },
   },
-  'no description': { ...base, description: '' },
-  'just created':   { ...base, updated: 'just now', accentColor: '#16a34a' },
+  'no description': { ...base, project: { ...base.project, description: '' } },
+  'just created':   { ...base, project: { ...base.project, updatedAt: Date.now() }, accentColor: '#16a34a' },
 }

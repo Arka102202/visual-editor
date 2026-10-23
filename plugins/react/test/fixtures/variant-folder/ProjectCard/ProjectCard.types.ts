@@ -18,3 +18,6 @@ export interface ProjectCardView {
   onOpen:      () => void
   onDelete:    () => void
 }
+
+/** What the static part starts from: the same as what a parent passes. */
+export type ProjectCardStart = ProjectCardProps

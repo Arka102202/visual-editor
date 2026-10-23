@@ -1,22 +1,14 @@
-import { MockData, useVariantKey } from '../../../../visual-editor'
+import { StaticPart, useVariantKey } from '../../../../visual-editor'
 import ProjectCardData from './ProjectCard.data'
-import ProjectCardSwitcher from './ProjectCard.switcher'
-import type { ProjectCardProps, ProjectCardView } from './ProjectCard.types'
+import type { ProjectCardProps } from './ProjectCard.types'
 
-// Fixed data, for Preview only (left out of production builds).
-const mock = import.meta.env.DEV ? () => import('./ProjectCard.mock') : undefined
+// The static part and its starting data: development only (left out of production builds).
+const preview = import.meta.env.DEV ? { start: () => import('./ProjectCard.mock'), part: () => import('./ProjectCard.static') } : undefined
 
-/** The chooser: real data in the app, fixed data in Preview. */
+/** The chooser: the dynamic part in the app; the static prototype in Preview and the Playground. */
 export default function ProjectCard(props: ProjectCardProps) {
-  const key = useVariantKey()
-  if (key === 'real' || !mock) return <ProjectCardData {...props} />
-  return (
-    <MockData<ProjectCardProps, ProjectCardView>
-      load={mock}
-      props={props}
-      render={(view) => <ProjectCardSwitcher {...view} mode={key} />}
-    />
-  )
+  if (useVariantKey() === 'real' || !preview) return <ProjectCardData {...props} />
+  return <StaticPart {...preview} props={props} />
 }
 
 export { ProjectCard }

@@ -1,7 +1,7 @@
 import ProjectCardSwitcher from './ProjectCard.switcher'
 import type { ProjectCardProps } from './ProjectCard.types'
 
-const timeAgo = (ts: number): string => {
+export const timeAgo = (ts: number): string => {
   const diff = Date.now() - ts
   const mins  = Math.floor(diff / 60_000)
   const hours = Math.floor(diff / 3_600_000)

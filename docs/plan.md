@@ -82,7 +82,7 @@ Details.
 ### 1.3 "Use this design" ✅ done
 A one-line proposal, with the before and after shown live in Review, and Undo.
 
-### 1.4 The new rules, written down
+### 1.4 The new rules, written down ✅ done
 - **You get:** `docs/variants.md` rewritten in simple words:
   - the two parts (dynamic and static);
   - the static part as a prototype;
@@ -93,7 +93,7 @@ A one-line proposal, with the before and after shown live in Review, and Undo.
   - a full worked example.
 - **Done when:** you read it and agree. Everything after is built from it.
 
-### 1.5 Helper version 2
+### 1.5 Helper version 2 ✅ done
 - **You get:** the project's helper file (`src/visual-editor.tsx`) learns:
   - the static part's memory (each tile keeps its own changes);
   - **Reset** back to the starting data;
@@ -102,7 +102,7 @@ A one-line proposal, with the before and after shown live in Review, and Undo.
 - When a project's helper is older, Preview says so and offers **"Update the helper"** as a proposal.
 - **Done when:** old and new helpers both work, and the update proposal is a clean diff.
 
-### 1.6 The static part: read and checked
+### 1.6 The static part: read and checked ✅ done
 - **You get:** Visual Editor reads `Name.static.tsx`. New checks, each explained in words:
   - the static part calls no API, database or store;
   - it gives the same `View` as the dynamic part;
@@ -110,7 +110,7 @@ A one-line proposal, with the before and after shown live in Review, and Undo.
   - a child's static part uses what its parent passes.
 - **Done when:** every broken rule shows on the card with what to do.
 
-### 1.7 The prototype in Preview and the Playground
+### 1.7 The prototype in Preview and the Playground ✅ done (with 1.5)
 - **You get:**
   - clicks work and change the data **in memory** (Delete removes a card, New adds one);
   - each tile keeps its own changes;
@@ -119,7 +119,7 @@ A one-line proposal, with the before and after shown live in Review, and Undo.
   - the network stays blocked.
 - **Done when:** you can use a page in Preview like the real thing, and Reset brings it back.
 
-### 1.8 ProjectCard in the new shape
+### 1.8 ProjectCard in the new shape ✅ done
 - **You get:** the worked example and the test fixtures moved to the new shape. Your archFlow too, **only if you
   ask**.
 - **Done when:** ProjectCard looks and works exactly as before in the app, and in the Playground.

@@ -18,6 +18,8 @@ test('variants: a folder made previewable is read: its variants, the one in use,
   assert.deepEqual(f.states, ['default', 'long name', 'no description', 'just created']);
   assert.equal(f.files.chooser, `${at}/index.tsx`);
   assert.equal(f.files.data, `${at}/ProjectCard.data.tsx`);
+  assert.equal(f.files.static, `${at}/ProjectCard.static.tsx`);
+  assert.equal(f.version, 2);
   // The switcher imports another variant: that one is in use.
   const switched = folder.map((x) => (x.path.endsWith('.switcher.tsx') ? { ...x, text: x.text.replace("from './ProjectCard.variant'", "from './ProjectCard.compact.variant'") } : x));
   assert.equal(readVariantFolders(switched)[0].selected, 'compact');
@@ -33,7 +35,7 @@ test('variants: on the map, the folder is one card that knows its variants (its 
   assert.deepEqual(card.preview?.variants.map((v) => `${v.id}${v.inUse ? ' (in use)' : ''}`), ['default (in use)', 'compact']);
   assert.equal(card.preview?.states.length, 4);
   // Its other files belong to it (a hand edit to the switcher marks this card).
-  assert.deepEqual(card.preview?.files?.map((f) => f.split('/').pop()), ['ProjectCard.compact.variant.tsx', 'ProjectCard.data.tsx', 'ProjectCard.mock.ts', 'ProjectCard.switcher.tsx', 'ProjectCard.types.ts', 'ProjectCard.variant.tsx']);
+  assert.deepEqual(card.preview?.files?.map((f) => f.split('/').pop()), ['ProjectCard.compact.variant.tsx', 'ProjectCard.data.tsx', 'ProjectCard.mock.ts', 'ProjectCard.static.tsx', 'ProjectCard.switcher.tsx', 'ProjectCard.types.ts', 'ProjectCard.variant.tsx']);
   assert.ok(card.source?.path.endsWith('ProjectCard/index.tsx'));
   const byLabel = new Map(items.map((i) => [i.id, i.label]));
   assert.deepEqual((links ?? []).map((l) => `${byLabel.get(l.from)} ${l.kind} ${byLabel.get(l.to)}`), ['ProjectList renders ProjectCard']);
@@ -69,12 +71,12 @@ test('variant checks: each broken rule is said in words, with what to do', () =>
   has(change('.switcher.tsx', ", import('./ProjectCard.compact.variant')", ''), /Compact isn’t in ProjectCard\.switcher\.tsx’s list/);
   // The list must be for development only.
   has(change('.switcher.tsx', 'import.meta.env.DEV ? ', 'true ? '), /isn’t for development only/);
-  // The mock data loaded up front ships to users.
-  has(change('index.tsx', "const mock = import.meta.env.DEV ? () => import('./ProjectCard.mock') : undefined", "import * as mockData from './ProjectCard.mock'\nconst mock = async () => mockData"), /loads ProjectCard\.mock\.ts up front/);
+  // The starting data loaded up front ships to users.
+  has(change('index.tsx', "import { StaticPart, useVariantKey }", "import * as startData from './ProjectCard.mock'\nimport { StaticPart, useVariantKey }"), /loads ProjectCard\.mock\.ts up front, so the starting data would ship to users/);
   // A variant that reads a store.
   has(change('.compact.variant.tsx', 'export default function ProjectCardCompact({ name, updated, accentColor, onOpen, onDelete }: ProjectCardView) {', "import { useCanvasStore } from '../../../../store/canvasStore'\nexport default function ProjectCardCompact({ name, updated, accentColor, onOpen, onDelete }: ProjectCardView) {\n  const nodes = useCanvasStore((s) => s.nodes)"), /Compact \(ProjectCard\.compact\.variant\.tsx\) reads the store useCanvasStore\. A variant shows looks only: move it to ProjectCard\.data\.tsx/);
-  // A mock state missing something the view needs.
-  has(change('.mock.ts', "'no description': { ...base, description: '' },", "'no description': { name: 'x', description: '' },"), /The state “no description” is missing updated, accentColor, onOpen, onDelete/);
+  // A state missing something the static part starts from.
+  has(change('.mock.ts', "'no description': { ...base, project: { ...base.project, description: '' } },", "'no description': { project: base.project },"), /The state “no description” is missing accentColor, onOpen, onDelete \(ProjectCardStart needs them\)/);
   // Two variants with one id.
   has(change('.compact.variant.tsx', "id: 'compact'", "id: 'default'"), /Two variants have the id “default”/);
   // No variant imported the normal way: nothing in use.
@@ -132,4 +134,18 @@ test('variants v2: a static part that isn’t a prototype is said in words, with
   // The types don't say what the static part starts from.
   const noStart = swap(page, 'ProjectList.types.ts', (t) => t.replace(/export interface ProjectListStart \{[\s\S]*?\n\}\n/, ''));
   assert.ok(problems(noStart).some((p) => /has no ProjectListStart/.test(p)), problems(noStart).join('\n'));
+});
+
+// Version 1 (fixed views, no static part): folders made before version 2 keep working, checked by their own rules.
+const v1 = readdirSync('plugins/react/test/fixtures/variant-folder-v1/ProjectCard').map((f) => ({ path: `${at}/${f}`, text: readFileSync(join('plugins/react/test/fixtures/variant-folder-v1/ProjectCard', f), 'utf8') }));
+
+test('variants v1: a folder made the version 1 way is read and breaks no rule', () => {
+  const [f] = readModel(v1).variantFolders!;
+  assert.equal(f.version, 1);
+  assert.equal(f.files.static, undefined);
+  assert.equal(f.selected, 'default');
+  assert.deepEqual(f.problems ?? [], []);
+  // Its states are views: one missing what the view needs is said so.
+  const broken = v1.map((x) => (x.path.endsWith('.mock.ts') ? { ...x, text: x.text.replace("'no description': { ...base, description: '' },", "'no description': { name: 'x', description: '' },") } : x));
+  assert.ok((readModel(broken).variantFolders![0].problems ?? []).some((p) => /missing updated, accentColor, onOpen, onDelete \(ProjectCardView needs them\)/.test(p)));
 });
