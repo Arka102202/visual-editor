@@ -1,6 +1,8 @@
 // Checks on a variant folder (docs/variants.md), each problem in plain words with what to do: missing pieces, variant
-// ids, the variant in use, what would ship to users (variants or mock data loaded up front), variants that use data,
-// and mock states missing what the view needs. Pure: the folder, its files and the model in, problems out.
+// ids, the variant in use, what would ship to users (designs, the static part or the starting data loaded up front),
+// designs that use data, a static part that isn't a prototype (uses data, doesn't draw the switcher, ignores what it's
+// given), and states missing what they need (NameStart in version 2, NameView in version 1). Pure: the folder, its
+// files and the model in, problems out.
 
 import { parse } from '@babel/parser';
 import type * as t from '@babel/types';
@@ -20,7 +22,8 @@ export function checkFolder(folder: VariantFolder, files: SourceFile[], componen
   if (!folder.files.chooser) out.push(`There’s no index.tsx: the rest of the app has nothing to import that chooses between real and fixed data.`);
   if (!folder.files.types) out.push(`There’s no ${n}.types.ts: the real data, the mock data and the variants have no shared shape to keep them from drifting apart.`);
   if (!folder.files.data) out.push(`There’s no ${n}.data.tsx: the real data (hooks, API, stores) has nowhere to live.`);
-  if (!folder.files.mock) out.push(`There’s no ${n}.mock.ts: Preview has no fixed data to show the variants with.`);
+  if (!folder.files.mock) out.push(folder.version === 2 ? `There’s no ${n}.mock.ts: the static part has no starting data.` : `There’s no ${n}.mock.ts: Preview has no fixed data to show the variants with.`);
+  if (folder.version === 2 && !folder.files.static) out.push(`index.tsx draws a static part, but there’s no ${n}.static.tsx: Preview has no working prototype to show.`);
   if (!folder.variants.length) out.push(`There are no variants (${n}.variant.tsx): nothing to show.`);
 
   // Variant ids.
@@ -49,14 +52,35 @@ export function checkFolder(folder: VariantFolder, files: SourceFile[], componen
   }
   if (listed.length && !/import\.meta\.env\.DEV|process\.env\.NODE_ENV/.test(stripComments(sw))) out.push(`${base(folder.files.switcher)}’s list of variants isn’t for development only (import.meta.env.DEV ? … : undefined), so every variant would ship to users.`);
 
-  // The chooser: the mock data only in development, loaded on request.
+  // The chooser: the real data in the app; the static part and the starting data only in development, on request.
   const ch = text(folder.files.chooser) ?? '';
-  if (folder.files.mock) {
-    const mockFile = base(folder.files.mock).replace(/\.[jt]sx?$/, '');
-    const chImports = importsOf(ch);
-    const same = (p: string) => p.replace(/\.[jt]sx?$/, '') === mockFile;
-    if (chImports.upFront.some(same)) out.push(`index.tsx loads ${base(folder.files.mock)} up front, so the mock data would ship to users. Load it with import(), for development only.`);
-    else if (chImports.onRequest.some(same) && !/import\.meta\.env\.DEV|process\.env\.NODE_ENV/.test(stripComments(ch))) out.push(`index.tsx loads the mock data in production too. Load it only when import.meta.env.DEV.`);
+  const chImports = importsOf(ch);
+  const stem = (p: string) => base(p).replace(/\.[jt]sx?$/, '');
+  const loads = (list: string[], file: string) => list.some((p) => p.replace(/\.[jt]sx?$/, '') === stem(file));
+  if (folder.files.chooser && folder.files.data && !loads(chImports.upFront, folder.files.data)) out.push(`index.tsx doesn’t draw ${base(folder.files.data)}, so the app has no real data.`);
+  const devOnly = /import\.meta\.env\.DEV|process\.env\.NODE_ENV/.test(stripComments(ch));
+  for (const [file, what] of [[folder.files.mock, folder.version === 2 ? 'the starting data' : 'the mock data'], [folder.files.static, 'the static part']] as const) {
+    if (!file || !folder.files.chooser) continue;
+    if (loads(chImports.upFront, file)) out.push(`index.tsx loads ${base(file)} up front, so ${what} would ship to users. Load it with import(), for development only.`);
+    else if (loads(chImports.onRequest, file) && !devOnly) out.push(`index.tsx loads ${what} in production too. Load it only when import.meta.env.DEV.`);
+  }
+
+  // The static part: a prototype. No data (its data is kept in memory), the switcher drawn, what it's given used.
+  if (folder.files.static) {
+    const st = text(folder.files.static) ?? '';
+    const file = base(folder.files.static);
+    for (const c of components.filter((x) => x.path === folder.files.static)) {
+      for (const d of c.data) {
+        out.push(
+          d.kind === 'router'
+            ? `${file} uses the router (${d.label}). A preview is one page: to “go” somewhere, call goTo('/the/address') from the helper; it shows where it would go and stays.`
+            : `${file} ${DATA_WORDS[d.kind] ?? 'uses data:'} ${d.label}. The static part is a prototype with no network: keep its data in memory (React state), starting from ${n}.mock.ts.`,
+        );
+      }
+    }
+    if (!importsOf(st).upFront.some((p) => p.replace(/\.[jt]sx?$/, '') === `${n}.switcher`)) out.push(`${file} doesn’t draw ${n}.switcher, so the designs never get what it shapes.`);
+    const takes = components.filter((x) => x.path === folder.files.static).some((c) => c.props.length > 0);
+    if (!takes && fieldsOf(text(folder.files.types) ?? '', `${n}Start`).length) out.push(`${file} doesn’t take ${n}Start, so it can’t start from its starting data, or from what a parent passes.`);
   }
 
   // Variants show looks only: no data.
@@ -66,16 +90,19 @@ export function checkFolder(folder: VariantFolder, files: SourceFile[], componen
     }
   }
 
-  // Mock states: a default, and everything the view needs.
+  // States: a default, and everything they need (version 2: what the static part starts from; version 1: the view).
   if (folder.files.mock) {
     if (folder.states.length && !folder.states.includes('default')) out.push(`${base(folder.files.mock)} has no “default” state: Preview starts with it.`);
     if (!folder.states.length) out.push(`${base(folder.files.mock)} has no states (export const states = { default: { … } }).`);
-    const needs = viewFields(text(folder.files.types) ?? '', `${n}View`);
+    const type = folder.version === 2 ? `${n}Start` : `${n}View`;
+    const typesText = text(folder.files.types) ?? '';
+    if (folder.version === 2 && folder.files.types && !declares(typesText, type)) out.push(`${base(folder.files.types)} has no ${type}: what the static part starts from (for a component, usually the same as ${n}Props).`);
+    const needs = fieldsOf(typesText, type);
     if (needs.length) {
       for (const [state, keys] of mockKeys(text(folder.files.mock) ?? '')) {
         if (!keys) continue;
         const missing = needs.filter((k) => !keys.has(k));
-        if (missing.length) out.push(`The state “${state}” is missing ${missing.join(', ')} (${n}View needs ${missing.length === 1 ? 'it' : 'them'}).`);
+        if (missing.length) out.push(`The state “${state}” is missing ${missing.join(', ')} (${type} needs ${missing.length === 1 ? 'it' : 'them'}).`);
       }
     }
   }
@@ -117,16 +144,26 @@ function unwrap(n: t.Node | null | undefined): t.Node | null | undefined {
   return n;
 }
 
-/** The fields a view type needs (not optional): `interface NameView { … }` or `type NameView = { … }`. */
-function viewFields(text: string, name: string): string[] {
+/** The fields a type needs (not optional): `interface X { … }`, `type X = { … }`, or `type X = Y` (Y in the same file). */
+function fieldsOf(text: string, name: string, depth = 0): string[] {
   const ast = parseCode(text);
-  if (!ast) return [];
+  if (!ast || depth > 3) return [];
   for (const st of ast.program.body) {
     const d: t.Node = st.type === 'ExportNamedDeclaration' && st.declaration ? st.declaration : st;
+    if (d.type === 'TSTypeAliasDeclaration' && d.id.name === name && d.typeAnnotation.type === 'TSTypeReference' && d.typeAnnotation.typeName.type === 'Identifier') return fieldsOf(text, d.typeAnnotation.typeName.name, depth + 1);
     const members = d.type === 'TSInterfaceDeclaration' && d.id.name === name ? d.body.body : d.type === 'TSTypeAliasDeclaration' && d.id.name === name && d.typeAnnotation.type === 'TSTypeLiteral' ? d.typeAnnotation.members : undefined;
     if (members) return members.flatMap((m) => (m.type === 'TSPropertySignature' && !m.optional && m.key.type === 'Identifier' ? [m.key.name] : []));
   }
   return [];
+}
+
+/** Whether a file declares a type (interface or type alias) by this name. */
+function declares(text: string, name: string): boolean {
+  const ast = parseCode(text);
+  return !!ast?.program.body.some((st) => {
+    const d: t.Node = st.type === 'ExportNamedDeclaration' && st.declaration ? st.declaration : st;
+    return (d.type === 'TSInterfaceDeclaration' || d.type === 'TSTypeAliasDeclaration') && d.id.name === name;
+  });
 }
 
 /** Each mock state and the keys it sets (spreads of the file's own objects followed); undefined when it can't be told. */

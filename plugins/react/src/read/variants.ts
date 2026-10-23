@@ -1,7 +1,8 @@
 // Variant folders (docs/variants.md): a component's looks kept apart from its data. A folder is one that has a
 // Name.switcher.tsx; from its files: the variants (each Name[.<name>].variant.tsx, its `variant = { id, name }`), the
-// one in use (the variant the switcher imports the normal way), and the mock states (the keys of Name.mock.ts's
-// `states`). Pure: files in, folders out.
+// one in use (the variant the switcher imports the normal way), the states (the keys of Name.mock.ts's `states`), and
+// which way it's made: version 2 has a static part (Name.static.tsx, a working prototype) and starting data;
+// version 1 had fixed views in Name.mock.ts. Pure: files in, folders out.
 
 import { parse } from '@babel/parser';
 import type * as t from '@babel/types';
@@ -12,7 +13,9 @@ export interface VariantFolder {
   dir: string;
   /** The component's name (from the files: Name.switcher.tsx). */
   name: string;
-  files: { chooser?: string; types?: string; data?: string; mock?: string; switcher: string };
+  files: { chooser?: string; types?: string; data?: string; static?: string; mock?: string; switcher: string };
+  /** 2: a static part (a working prototype) with starting data; 1: fixed views (folders made before it). */
+  version: 1 | 2;
   variants: { id: string; name: string; path: string }[];
   /** The id of the variant in use. */
   selected?: string;
@@ -56,16 +59,22 @@ export function readVariantFolders(files: SourceFile[]): VariantFolder[] {
     }
 
     const mock = first(`${name}.mock.ts`, `${name}.mock.tsx`, `${name}.mock.js`);
+    const chooser = first('index.tsx', 'index.jsx', 'index.ts', 'index.js');
+    const staticPart = first(`${name}.static.tsx`, `${name}.static.jsx`, `${name}.static.ts`);
+    // Version 2 when it has a static part, or its chooser draws one.
+    const version = staticPart || /\bStaticPart\b/.test(chooser ? (byPath.get(chooser)?.text ?? '') : '') ? 2 : 1;
     out.push({
       dir,
       name,
       files: {
         switcher: f.path,
-        chooser: first('index.tsx', 'index.jsx', 'index.ts', 'index.js'),
+        chooser,
         types: first(`${name}.types.ts`, `${name}.types.tsx`),
         data: first(`${name}.data.tsx`, `${name}.data.jsx`, `${name}.data.ts`),
+        ...(staticPart ? { static: staticPart } : {}),
         mock,
       },
+      version,
       variants,
       ...(selected ? { selected } : {}),
       states: mock ? mockStates(byPath.get(mock)!.text) : [],

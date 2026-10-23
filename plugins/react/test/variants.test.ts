@@ -93,3 +93,43 @@ test('variant checks: a commented-out line doesn’t count (even for the variant
   assert.equal(f.selected, 'compact');
   assert.ok(f.problems!.some((p) => /Compact isn’t in ProjectCard\.switcher\.tsx’s list/.test(p)), JSON.stringify(f.problems));
 });
+
+// Version 2: a page with a static part (a working prototype) and starting data.
+const pageAt = 'src/pages/ProjectList';
+const page = readdirSync('plugins/react/test/fixtures/variant-page/ProjectList').map((f) => ({ path: `${pageAt}/${f}`, text: readFileSync(join('plugins/react/test/fixtures/variant-page/ProjectList', f), 'utf8') }));
+const swap = (files: typeof page, file: string, change: (text: string) => string) => files.map((x) => (x.path === `${pageAt}/${file}` ? { ...x, text: change(x.text) } : x));
+
+test('variants v2: a page with a static part is read and breaks no rule', () => {
+  const [f] = readModel(page).variantFolders!;
+  assert.equal(f.version, 2);
+  assert.equal(f.files.static, `${pageAt}/ProjectList.static.tsx`);
+  assert.deepEqual(f.states, ['default', 'empty', 'many', 'loading']);
+  assert.equal(f.selected, 'default');
+  assert.deepEqual(f.problems ?? [], []);
+  // On the map it's one card (the page), with its static part folded in.
+  const cards = toMaps(readModel(page)).items.filter((i) => i.map === 'components').map((i) => i.label);
+  assert.ok(cards.includes('ProjectList'));
+  assert.ok(!cards.some((c) => /Static|Data/.test(c)), cards.join(', '));
+});
+
+test('variants v2: a static part that isn’t a prototype is said in words, with what to do', () => {
+  const problems = (files: typeof page) => readModel(files).variantFolders![0].problems ?? [];
+  // It calls the API.
+  const api = swap(page, 'ProjectList.static.tsx', (t) => t.replace("import { useState } from 'react'", "import { useState, useEffect } from 'react'").replace('const [isModalOpen, setModalOpen] = useState(false)', "const [isModalOpen, setModalOpen] = useState(false)\n  useEffect(() => { void fetch('/api/projects').then((r) => r.json()).then(setProjects) }, [])"));
+  assert.ok(problems(api).some((p) => /ProjectList\.static\.tsx calls the API/.test(p) && /keep its data in memory/.test(p)), `got: ${problems(api).join(' | ')}`);
+  // It navigates with the router instead of goTo().
+  const nav = swap(page, 'ProjectList.static.tsx', (t) => t.replace("import { useState } from 'react'", "import { useState } from 'react'\nimport { useNavigate } from 'react-router-dom'").replace('const [isModalOpen, setModalOpen] = useState(false)', 'const [isModalOpen, setModalOpen] = useState(false)\n  const navigate = useNavigate()').replace('goTo(toEditor(id))', 'navigate(toEditor(id))'));
+  assert.ok(problems(nav).some((p) => /uses the router/.test(p) && /goTo\('\/the\/address'\)/.test(p)), problems(nav).join('\n'));
+  // The chooser loads the static part up front: it would ship to users.
+  const upFront = swap(page, 'index.tsx', (t) => `import ProjectListStatic from './ProjectList.static'\n${t}`);
+  assert.ok(problems(upFront).some((p) => /loads ProjectList\.static\.tsx up front, so the static part would ship to users/.test(p)));
+  // A state is missing what the static part starts from.
+  const missing = swap(page, 'ProjectList.mock.ts', (t) => t.replace('empty: { projects: [] },', 'empty: {},'));
+  assert.ok(problems(missing).includes('The state “empty” is missing projects (ProjectListStart needs it).'), problems(missing).join('\n'));
+  // The chooser draws a static part that doesn't exist.
+  const gone = page.filter((x) => !x.path.endsWith('ProjectList.static.tsx'));
+  assert.ok(problems(gone).some((p) => /there’s no ProjectList\.static\.tsx/.test(p)));
+  // The types don't say what the static part starts from.
+  const noStart = swap(page, 'ProjectList.types.ts', (t) => t.replace(/export interface ProjectListStart \{[\s\S]*?\n\}\n/, ''));
+  assert.ok(problems(noStart).some((p) => /has no ProjectListStart/.test(p)), problems(noStart).join('\n'));
+});
