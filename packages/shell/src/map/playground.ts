@@ -85,7 +85,7 @@ export class Playground {
   private readonly stage = el('div', 'vp-stage');
   private readonly device = el('div', 'vp-device');
   private readonly zoomText = el('span', 'zoom');
-  private readonly fitButton = iconButton('fitMap', 'Fit: the whole board in view (zooming in or out turns it off)', { cls: 'on' });
+  private readonly fitButton = iconButton('fitMap', 'Fit: the whole board in view (it keeps fitting until you zoom in or out)', { cls: 'on' });
   private readonly compareButton = iconButton('compare', '');
   private readonly previewButton = iconButton('single', '');
   private readonly useButton = iconButton('choose', '');
@@ -120,9 +120,9 @@ export class Playground {
     zoomOut.addEventListener('click', () => this.stepZoom(-1));
     const zoomIn = iconButton('zoomIn', 'Zoom in');
     zoomIn.addEventListener('click', () => this.stepZoom(1));
+    // Fit is an action (like the map's): it always fits the board; zooming in or out stops following it.
     this.fitButton.addEventListener('click', () => {
-      this.fit = !this.fit;
-      if (!this.fit) this.zoom = 1;
+      this.fit = true;
       this.layout();
     });
     this.compareButton.addEventListener('click', () => {
