@@ -4,7 +4,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { Item } from '@visual-editor/contract';
+import type { Item, Plugin, PluginTool, ToolInput } from '@visual-editor/contract';
 import { forCard, rulesText, type MemoryEntry } from '../memory';
 import type { ProjectState } from '../projectIndex';
 import { newId, parseProposal, type Proposal } from '../proposals';
@@ -25,6 +25,8 @@ export interface HubHost {
   /** Saves a new proposal; Review shows it and tells the developer. */
   propose(root: string, p: Proposal): void;
   remember(root: string, e: MemoryEntry): void;
+  /** Every plugin's tools (registry.tools()). */
+  tools(): { plugin: Plugin; tool: PluginTool }[];
 }
 
 /** Assistants send technical names ("claude-code"); show them nicely. */
@@ -268,7 +270,38 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
     },
   );
 
+  // Plugins' tools: run only for projects their plugin detected.
+  for (const { plugin, tool } of host.tools()) {
+    const inputSchema: Record<string, z.ZodTypeAny> = { project: projectArg };
+    for (const [name, input] of Object.entries(tool.input ?? {})) inputSchema[name] = zodOf(input);
+    server.registerTool(tool.name, { title: tool.title, description: `(${plugin.name}) ${tool.description}`, inputSchema, annotations: readOnly }, async (args) => {
+      const { project, ...input } = args as Record<string, unknown> & { project?: string };
+      const s = await pick(project);
+      if (typeof s === 'string') return fail(s);
+      if (!s.detected.some((d) => d.plugin.id === plugin.id)) return fail(`${s.project.name} isn't a ${plugin.name} project, so ${tool.name} can't be used for it.`);
+      try {
+        const root = s.project.root;
+        const answer = await tool.run(input, { project: s.project, items: s.items, links: s.links, read: (path) => host.readFile(root, path) });
+        return typeof answer === 'string' ? reply(answer) : fail(answer.problem);
+      } catch (e) {
+        return fail(`${tool.name} stopped with an error (a bug in the ${plugin.name} plugin): ${e instanceof Error ? e.message : e}`);
+      }
+    });
+  }
+
   return server;
+}
+
+function zodOf(input: ToolInput): z.ZodTypeAny {
+  const base =
+    input.type === 'strings' ? z.array(z.string())
+    : input.type === 'boolean' ? z.boolean()
+    : input.type === 'integer' ? z.number().int()
+    : input.type === 'number' ? z.number()
+    : input.oneOf?.length ? z.enum(input.oneOf as [string, ...string[]])
+    : z.string();
+  const described = base.describe(input.description);
+  return input.optional ? described.optional() : described;
 }
 
 function entryLine(e: MemoryEntry): string {

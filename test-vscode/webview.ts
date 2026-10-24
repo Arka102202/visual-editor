@@ -1,6 +1,7 @@
 // Opens a real project (PROJECT=<folder>) with the shell and the plugins, opens the Webview on its app (through the
 // proxy, with its dev server), and stays open so it can be driven from outside (DEBUG_PORT: Chrome's debugging
-// protocol): until <requests>/stop exists, or HOLD_S seconds (default 600). Changes nothing in the project by itself.
+// protocol; <requests>/hub.json has the hub's address and key): until <requests>/stop exists, or HOLD_S seconds
+// (default 600). Changes nothing in the project by itself.
 
 import * as vscode from 'vscode';
 import { existsSync, writeFileSync } from 'node:fs';
@@ -33,6 +34,9 @@ export async function run() {
     await until(() => t.map.ready, 'the map');
     await vscode.commands.executeCommand('visualEditor.openWebview');
     say('webview opened');
+    // The hub's address and key, so the driver can point a real Claude Code at it.
+    await until(() => !!t.hub.url, 'the hub');
+    writeFileSync(join(requests, 'hub.json'), JSON.stringify({ url: t.hub.url, token: t.hub.token }));
     writeFileSync(join(requests, 'ready'), '');
     await until(() => existsSync(join(requests, 'stop')), 'stop', Number(process.env.HOLD_S ?? 600) * 1000).catch(() => say('held until the time ran out'));
   } catch (e) {
