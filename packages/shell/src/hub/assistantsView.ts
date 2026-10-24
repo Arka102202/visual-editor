@@ -27,11 +27,14 @@ export class AssistantsView implements vscode.TreeDataProvider<Assistant>, vscod
   getTreeItem(a: Assistant): vscode.TreeItem {
     const item = new vscode.TreeItem(a.name);
     // Talking to the hub right now means connected, however it was set up.
-    item.description = a.talking ? 'connected · working now' : STATE_WORDS[a.state];
+    item.description = `${a.talking ? 'connected · working now' : STATE_WORDS[a.state]}${a.state === 'on' && a.agents === 'off' ? ' · agents not added' : ''}`;
     item.iconPath = new vscode.ThemeIcon(a.state === 'on' || a.talking ? 'pass-filled' : a.state === 'old' ? 'warning' : 'circle-large-outline');
-    item.tooltip = a.state === 'on' ? `${a.name} can read the map, rules and memory, and propose changes into Review.` : `Connect ${a.name} so it can read the map, rules and memory, and propose changes into Review.`;
-    // The row's button (connect or disconnect) comes from the menus, by this value.
-    item.contextValue = a.state === 'on' ? 'assistant-on' : 'assistant-off';
+    item.tooltip =
+      a.state !== 'on' ? `Connect ${a.name} so it can read the map, rules and memory, use Visual Editor’s agents, and propose changes into Review.`
+      : a.agents === 'off' ? `${a.name} can read the map, rules and memory, and propose changes into Review. Visual Editor’s agents aren’t added to it yet.`
+      : `${a.name} can read the map, rules and memory, use Visual Editor’s agents, and propose changes into Review.`;
+    // The row's buttons (connect or disconnect, add agents) come from the menus, by this value.
+    item.contextValue = a.state === 'on' ? (a.agents === 'off' ? 'assistant-on-noagents' : 'assistant-on') : 'assistant-off';
     item.command = { command: a.state === 'on' ? 'visualEditor.disconnectAssistant' : 'visualEditor.connectAssistant', title: '', arguments: [a] };
     return item;
   }
@@ -44,15 +47,21 @@ export class AssistantsView implements vscode.TreeDataProvider<Assistant>, vscod
 
 /** The plug button's dropdown: every assistant with its state; choosing one connects or disconnects it. */
 export async function chooseAssistant(hub: Hub) {
+  const all = hub.assistants();
   const pick = await vscode.window.showQuickPick(
-    hub.assistants().map((a) => ({
-      label: `$(${a.state === 'on' ? 'pass-filled' : 'plug'}) ${a.name}`,
-      description: STATE_WORDS[a.state],
-      detail: a.state === 'on' ? 'Choose to disconnect' : 'Choose to connect',
-      assistant: a,
-    })),
+    [
+      ...all.map((a) => ({
+        label: `$(${a.state === 'on' ? 'pass-filled' : 'plug'}) ${a.name}`,
+        description: STATE_WORDS[a.state],
+        detail: a.state === 'on' ? 'Choose to disconnect' : 'Choose to connect',
+        command: a.state === 'on' ? 'visualEditor.disconnectAssistant' : 'visualEditor.connectAssistant',
+        assistant: a,
+      })),
+      // Connected before Visual Editor had agents: add them.
+      ...all.filter((a) => a.state === 'on' && a.agents === 'off').map((a) => ({ label: '$(hubot) Add Visual Editor’s agents', description: a.name, detail: 'Its agents and know-how, for this folder', command: 'visualEditor.addAgents', assistant: a })),
+    ],
     { title: 'Assistants', placeHolder: 'Connect an assistant to Visual Editor' },
   );
   if (!pick) return;
-  await vscode.commands.executeCommand(pick.assistant.state === 'on' ? 'visualEditor.disconnectAssistant' : 'visualEditor.connectAssistant', pick.assistant);
+  await vscode.commands.executeCommand(pick.command, pick.assistant);
 }

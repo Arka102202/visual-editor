@@ -17,8 +17,10 @@ import { Review } from './review';
 import { ProjectSetups } from './projectSetup';
 import { askEntry, MemoryView, ProjectMemory } from './memoryView';
 import type { MemoryEntry } from './memory';
-import { Hub } from './hub/hub';
+import { Hub, run } from './hub/hub';
+import { ClaudeAgents } from './hub/claudeAgents';
 import { AssistantsView, chooseAssistant } from './hub/assistantsView';
+import { AgentsView } from './hub/agentsView';
 import { vscodeFiles } from './vscodeFiles';
 
 export function activate(context: vscode.ExtensionContext): ShellApi {
@@ -233,13 +235,23 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     propose: (root, p) => review.receiveProposal(root, p),
     remember: (root, e) => memory.update(root, e),
     tools: () => registry.tools(),
-  }, log);
+  }, log, new ClaudeAgents(context, () => ({ tools: registry.tools(), skills: registry.skills(), agents: registry.agents() }), run, log));
   void hub.start();
+  // Plugins arrive one by one as their extensions start: once they've settled, the agents follow what they give.
+  let agentsTimer: ReturnType<typeof setTimeout> | undefined;
+  const refreshAgents = () => {
+    clearTimeout(agentsTimer);
+    agentsTimer = setTimeout(() => void hub.refreshAgents(), 3000);
+  };
+  refreshAgents();
   const assistantsView = new AssistantsView(hub);
+  const agentsView = new AgentsView(registry, hub);
   context.subscriptions.push(
     hub,
     assistantsView,
     vscode.window.registerTreeDataProvider('visualEditor.assistants', assistantsView),
+    agentsView,
+    vscode.window.registerTreeDataProvider('visualEditor.agents', agentsView),
     hub.onChange(updateStatus),
     vscode.commands.registerCommand('visualEditor.chooseAssistant', () => chooseAssistant(hub)),
     vscode.commands.registerCommand('visualEditor.connectAssistant', () => hub.connectClaudeCode()),
@@ -248,6 +260,9 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
       if (pick) await hub.disconnectClaudeCode();
     }),
     vscode.commands.registerCommand('visualEditor.connectClaudeCode', () => hub.connectClaudeCode()),
+    vscode.commands.registerCommand('visualEditor.addAgents', () => hub.addAgents()),
+    registry.onChange(refreshAgents),
+    { dispose: () => clearTimeout(agentsTimer) },
   );
 
   log.appendLine(`Visual Editor started (plugin contract ${CONTRACT_VERSION}).`);
@@ -267,7 +282,7 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     },
   };
   // The VS Code test (npm run test:vscode) reaches inside; never switched on otherwise.
-  if (process.env.VISUAL_EDITOR_TEST === '1') return Object.assign(api, { _test: { index, current, review, memory, changes, map, hub } });
+  if (process.env.VISUAL_EDITOR_TEST === '1') return Object.assign(api, { _test: { index, current, review, memory, changes, map, hub, agentsView } });
   return api;
 }
 

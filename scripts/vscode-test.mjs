@@ -8,6 +8,7 @@
 //   TEST=webview PROJECT=<folder> DEBUG_PORT=<port>
 //                    open a real project's app in the Webview and hold it open, to be driven through Chrome's debugging
 //                    protocol on that port (the test's own window only); <requests>/stop ends it
+//                    CONNECT=1: also press Connect for Claude Code (its settings for that folder get the hub and agents)
 
 import * as esbuild from 'esbuild';
 import { execFileSync, spawn } from 'node:child_process';
@@ -44,6 +45,7 @@ const env = {
   VISUAL_EDITOR_REQUESTS: requests,
   ...(shots ? { VISUAL_EDITOR_SHOTS: shots } : {}),
   ...(process.env.CLAUDE === '1' ? { VISUAL_EDITOR_CLAUDE: '1' } : {}),
+  ...(process.env.CONNECT === '1' ? { VISUAL_EDITOR_CONNECT: '1' } : {}),
 };
 delete env.ELECTRON_RUN_AS_NODE;
 // Like VS Code opened from the Dock: without the folder where `claude` is usually installed on its PATH.

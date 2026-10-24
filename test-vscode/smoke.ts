@@ -3,7 +3,8 @@
 // VISUAL_EDITOR_TEST=1.
 
 import * as vscode from 'vscode';
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -154,6 +155,8 @@ export async function run() {
     const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
     const { StreamableHTTPClientTransport } = await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
     await until(() => !!t.hub.url, 'the hub to start');
+    // The last step put README back on disk: the hub reads it as the editor shows it, once VS Code has reloaded it.
+    await until(() => vscode.workspace.textDocuments.every((d) => d.uri.fsPath !== readme || d.getText() === readFileSync(readme, 'utf8')), 'the open README to match the file');
     const client = new Client({ name: 'claude-code', version: '1' });
     await client.connect(new StreamableHTTPClientTransport(new URL(t.hub.url), { requestInit: { headers: { Authorization: `Bearer ${t.hub.token}` } } }));
     const text = async (name: string, args: Record<string, unknown> = {}) => ((await client.callTool({ name, arguments: args })) as any).content[0].text as string;
@@ -184,14 +187,38 @@ export async function run() {
     await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
   });
 
-  await step('Connect finds claude (even off the PATH), the list says connected, and Disconnect removes it', async () => {
+  await step('Connect finds claude (even off the PATH) and adds Visual Editor’s agents for the folder; they update when plugins change; Disconnect removes both', async () => {
     await t.hub.connectClaudeCode();
     await until(() => t.hub.claudeState() === 'on', 'Claude Code settings to have the hub', 15_000);
+    // The agents: made from the plugins (Hello's example agent), and installed for this folder only.
+    const agents = t.hub.agents;
+    const local = () => JSON.parse(readFileSync(join(root, '.claude', 'settings.local.json'), 'utf8'));
+    if (t.hub.assistants()[0].agents !== 'on') throw new Error(`agents: ${t.hub.assistants()[0].agents}`);
+    if (local().enabledPlugins?.[agents.ref] !== true) throw new Error(`settings.local.json: ${JSON.stringify(local())}`);
+    if (!readFileSync(join(agents.dir, 'visual-editor', 'agents', 'hello-note-worker.md'), 'utf8').includes('hello_files')) throw new Error('the worker isn’t in the plugin');
+    // A plugin that brings another agent: a new version, which Claude Code updates to for this folder by itself.
+    const extra = api.register({ id: 'extra', name: 'Extra', version: '0', contract: api.contract, detect: () => undefined, agents: [{ name: 'extra-job', title: 'Extra job', description: 'A test agent.', worker: { prompt: 'Work.' }, checker: { prompt: 'Check.' } }] });
+    const cache = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'plugins', 'cache', agents.marketplace, 'visual-editor');
+    const updated = () => existsSync(cache) && readdirSync(cache).some((v) => existsSync(join(cache, v, 'agents', 'extra-job-worker.md')));
+    await until(() => updated() && t.hub.assistants()[0].agents === 'on', 'Claude Code to update to the new agents', 30_000);
+    // The Agents section lists what each plugin gives (Hello's agent, skill and tool; the extra plugin's agent).
+    const labels = (nodes: any[]) => nodes.map((n) => String(t.agentsView.getTreeItem(n).label));
+    const top = t.agentsView.getChildren();
+    const hello = top.find((n: any) => n.plugin?.id === 'hello');
+    if (labels(top).join() !== 'Visual Editor,Extra,Hello' || labels(t.agentsView.getChildren(hello)).join() !== 'Write a hello note,hello-greetings,Count the project’s files') throw new Error(`agents section: ${labels(top)} / ${hello && labels(t.agentsView.getChildren(hello))}`);
+    await vscode.commands.executeCommand('visualEditor.agents.focus');
+    await wait(1500);
+    await shot('11-agents-section');
+    extra.dispose();
     await vscode.commands.executeCommand('visualEditor.assistants.focus');
     await wait(1500);
     await shot('10-assistant-connected');
     await t.hub.disconnectClaudeCode();
     await until(() => t.hub.claudeState() === 'off', 'the hub to be gone from Claude Code settings', 15_000);
+    if (t.hub.assistants()[0].agents !== 'off' || local().enabledPlugins?.[agents.ref]) throw new Error('the agents are still installed');
+    if (labels(t.agentsView.getChildren()).join() !== 'Claude Code isn’t connected,Visual Editor,Hello') throw new Error(`agents section after disconnect: ${labels(t.agentsView.getChildren())}`);
+    // The test's own marketplace points at this throwaway VS Code's storage: take it out of Claude Code again.
+    await new Promise((done) => require('node:child_process').exec(`claude plugin marketplace remove ${agents.marketplace}`, { cwd: root, env: { ...process.env, PATH: `${join(homedir(), '.local/bin')}:${process.env.PATH}` } }, done));
   });
 
   await step('the map pops out into its own window and comes back', async () => {

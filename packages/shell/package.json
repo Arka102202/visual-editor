@@ -38,6 +38,10 @@
           "name": "Assistants"
         },
         {
+          "id": "visualEditor.agents",
+          "name": "Agents"
+        },
+        {
           "id": "visualEditor.memory",
           "name": "Memory"
         },
@@ -135,6 +139,12 @@
         "title": "Disconnect",
         "category": "Visual Editor",
         "icon": "$(debug-disconnect)"
+      },
+      {
+        "command": "visualEditor.addAgents",
+        "title": "Add Visual Editor's agents to Claude Code",
+        "category": "Visual Editor",
+        "icon": "$(hubot)"
       }
     ],
     "menus": {
@@ -192,9 +202,14 @@
           "group": "inline"
         },
         {
+          "command": "visualEditor.addAgents",
+          "when": "view == visualEditor.assistants && viewItem == assistant-on-noagents",
+          "group": "inline@1"
+        },
+        {
           "command": "visualEditor.disconnectAssistant",
-          "when": "view == visualEditor.assistants && viewItem == assistant-on",
-          "group": "inline"
+          "when": "view == visualEditor.assistants && viewItem =~ /^assistant-on/",
+          "group": "inline@2"
         }
       ],
       "commandPalette": [
