@@ -36,6 +36,8 @@ test('preview page: the page loads the helper and the chooser, with the states a
   // One tile per design (helper version 2), and what the static part's "going" somewhere says.
   assert.deepEqual(config.variants, ['default', 'compact']);
   assert.match(html, /visual-editor:go/);
+  // A design that stopped for want of a router is said as that need, not as a broken design.
+  assert.match(html, /tell\(\{ type: 'needs', what \}\)/);
   assert.match(html, /HELPER_VERSION/);
   // The project's providers wrap every preview, when it has them.
   const withProviders = { ...project, files: [...project.files, 'src/visual-editor.providers.tsx'] };

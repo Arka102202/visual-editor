@@ -135,7 +135,7 @@ A one-line proposal, with the before and after shown live in Review, and Undo.
 - **Done when:** a test Button uses design A for primary and design B for danger, and switching one doesn't touch
   the other.
 
-### 1.10 Pages
+### 1.10 Pages ✅ done
 - **You get:** ProjectList converted in the test copy. The whole page in Preview at Phone, Tablet or Desktop size:
   - each card shows its own project;
   - "New project" opens the modal and adds a card;
@@ -144,7 +144,7 @@ A one-line proposal, with the before and after shown live in Review, and Undo.
   - opening a project shows the note.
 - **Done when:** the page in Preview feels like the real page, with no network.
 
-### 1.11 Providers file
+### 1.11 Providers file ✅ done
 - **You get:** an optional `src/visual-editor.providers.tsx` that wraps every preview (a router in memory, a
   theme…). When a page's design needs it (links, for example) and it's missing, Visual Editor offers it as a
   proposal.

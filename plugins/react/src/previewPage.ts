@@ -173,6 +173,7 @@ if (compared) {
   document.head.append(both);
 }
 const tell = (m) => parent !== window && parent.postMessage({ source: 've-preview-page', ...m }, '*');
+const needOf = (text) => (/context of a <Router>|useHref\(\)|useNavigate\(\) may be used only|useLocation\(\) may be used only|<Link> outside a <Router>|property 'basename'|reading 'basename'/i.test(String(text)) ? 'router' : undefined);
 const note = (text) => { document.getElementById('ve-preview').innerHTML = '<p id="ve-note"></p>'; document.getElementById('ve-note').textContent = text; };
 try {
   if (!config.helper) {
@@ -249,7 +250,11 @@ try {
       // Tell Preview what was drawn (and any variant that stopped), once it has settled.
       setTimeout(() => {
         const cells = [...document.querySelectorAll('[data-ve-variant]')];
-        const broken = [...document.querySelectorAll('[data-ve-variant-error]')].map((e) => ({ id: e.getAttribute('data-ve-variant-error'), text: e.textContent })).filter((b) => !single || b.id === single.variant);
+        const stopped = [...document.querySelectorAll('[data-ve-variant-error]')].map((e) => ({ id: e.getAttribute('data-ve-variant-error'), text: e.textContent })).filter((b) => !single || b.id === single.variant);
+        // Stopped for something the preview lacks (a router): said as that, with what Visual Editor can add.
+        const needs = [...new Set(stopped.map((b) => needOf(b.text)).filter(Boolean))];
+        for (const what of needs) tell({ type: 'needs', what });
+        const broken = stopped.filter((b) => !needOf(b.text));
         tell({ type: 'drawn', cells: cells.length, broken, found: !single || cells.some((c) => c.getAttribute('data-ve-variant') === single.variant) });
         const grid = document.querySelector('[data-ve-grid]');
         if (grid) new ResizeObserver(size).observe(grid);
