@@ -55,6 +55,8 @@ export class MapView {
   readonly cardEls = new Map<string, HTMLElement>();
   placedById = new Map<string, PlacedCard>();
   linksOf = new Map<string, Layout['links']>();
+  /** Each line's outline box (its whole curve), so a line crossing the screen is drawn even when both its cards are off it. */
+  private lineBoxes: { link: Layout['links'][number]; x0: number; y0: number; x1: number; y1: number }[] = [];
   private sectionOf = new Map<string, number>();
   private grid = new Map<string, PlacedCard[]>();
   private readonly sky = el('canvas', 'sky');
@@ -160,6 +162,7 @@ export class MapView {
         }
       }
     });
+    this.lineBoxes = [];
     for (const l of layout.links) {
       if (!this.placedById.has(l.from) || !this.placedById.has(l.to)) continue;
       for (const id of [l.from, l.to]) {
@@ -167,6 +170,12 @@ export class MapView {
         if (list) list.push(l);
         else this.linksOf.set(id, [l]);
       }
+      // The curve stays inside the box of its ends and its two bend points (as drawn in paintContent).
+      const a = this.placedById.get(l.from)!;
+      const b = this.placedById.get(l.to)!;
+      const x1 = a.x + a.w, y1 = a.y + Math.min(a.h / 2, 28), x2 = b.x, y2 = b.y + Math.min(b.h / 2, 28);
+      const bend = Math.max(40, Math.abs(x2 - x1) / 2);
+      this.lineBoxes.push({ link: l, x0: Math.min(x1, x2, x1 + bend, x2 - bend), y0: Math.min(y1, y2), x1: Math.max(x1, x2, x1 + bend, x2 - bend), y1: Math.max(y1, y2) });
     }
     if (this.selected && !this.placedById.has(this.selected)) this.selected = undefined;
     this.select(this.selected);
@@ -398,7 +407,10 @@ export class MapView {
       return a && b ? { x1: a.x + a.w, y1: a.y + Math.min(a.h / 2, 28), x2: b.x, y2: b.y + Math.min(b.h / 2, 28) } : undefined;
     };
     if (near || layout.links.length <= MAX_FAR_LINES) {
-      const list = near ? [...new Set(this.cardsIn(r).flatMap((c) => this.linksOf.get(c.item.id) ?? []))] : layout.links;
+      // Zoomed in: every line that crosses the screen (even when both its cards are off it), and the chosen card's.
+      const list = near
+        ? [...new Set([...this.lineBoxes.filter((b) => b.x1 >= r.x0 && b.x0 <= r.x1 && b.y1 >= r.y0 && b.y0 <= r.y1).map((b) => b.link), ...(picked && selected ? (this.linksOf.get(selected) ?? []) : [])])]
+        : layout.links;
       for (const l of list) {
         const e = ends(l);
         if (!e) continue;

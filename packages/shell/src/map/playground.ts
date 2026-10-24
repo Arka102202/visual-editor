@@ -46,6 +46,8 @@ export const PLAYGROUND_CSS = `
   .vp-wait { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; color: #555; font-size: 13px; }
 `;
 
+/** Fit doesn't zoom out further than this: tiles stay readable, and a huge board stays light. */
+const FIT_AT_LEAST = 0.25;
 const ZOOMS = [0.1, 0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1, 1.25, 1.5, 2, 3];
 
 interface Deps {
@@ -182,7 +184,7 @@ export class Playground {
   private readonly stage = el('div', 'vp-stage');
   private readonly device = el('div', 'vp-device');
   private readonly zoomText = el('span', 'zoom');
-  private readonly fitButton = iconButton('fitMap', 'Fit: the whole board in view (it keeps fitting until you zoom in or out)', { cls: 'on' });
+  private readonly fitButton = iconButton('fitMap', 'Fit: the whole board in view, or as much as stays readable (it keeps fitting until you zoom in or out)', { cls: 'on' });
   private readonly compareButton = iconButton('compare', '');
   private readonly previewButton = iconButton('single', '');
   private readonly useButton = iconButton('choose', '');
@@ -389,7 +391,8 @@ export class Playground {
     const sw = this.stage.clientWidth;
     const sh = this.stage.clientHeight;
     if (!sw || !sh || !this.content) return 1;
-    return Math.max(ZOOMS[0], Math.min(1, sw / this.content.w, sh / this.content.h));
+    // Never below a readable size: a bigger board scrolls instead (and draws its far tiles only when scrolled to).
+    return Math.max(FIT_AT_LEAST, Math.min(1, sw / this.content.w, sh / this.content.h));
   }
 
   /** Sizes the page: as wide as the window, scaled by the zoom; the board scrolls down. */

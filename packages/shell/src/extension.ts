@@ -88,7 +88,8 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     pending.clear();
     if (paths.length) void index.filesChanged(paths);
   };
-  const onFile = (addedOrRemoved: boolean) => (uri: vscode.Uri) => {
+  const onFile = (how: 'created' | 'changed' | 'deleted') => (uri: vscode.Uri) => {
+    const addedOrRemoved = how !== 'changed';
     const root = folders().find((f) => uri.fsPath === f || uri.fsPath.startsWith(f + sep));
     if (!root || isIgnoredPath(relative(root, uri.fsPath))) return;
     // A project file added or removed changes which projects there are.
@@ -102,7 +103,7 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
       .map((s) => s.project.root)
       .filter((r) => uri.fsPath.startsWith(r + sep))
       .sort((a, b) => b.length - a.length)[0];
-    if (owner) changes.note(owner, relative(owner, uri.fsPath).split(sep).join('/'), uri.fsPath);
+    if (owner) changes.note(owner, relative(owner, uri.fsPath).split(sep).join('/'), uri.fsPath, how);
     pending.add(uri.fsPath);
     if (timer) clearTimeout(timer);
     timer = setTimeout(flush, 300);
@@ -124,9 +125,9 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     memoryWatcher.onDidCreate(onMemory),
     memoryWatcher.onDidChange(onMemory),
     memoryWatcher.onDidDelete(onMemory),
-    watcher.onDidCreate(onFile(true)),
-    watcher.onDidDelete(onFile(true)),
-    watcher.onDidChange(onFile(false)),
+    watcher.onDidCreate(onFile('created')),
+    watcher.onDidDelete(onFile('deleted')),
+    watcher.onDidChange(onFile('changed')),
     vscode.workspace.onDidChangeWorkspaceFolders(scan),
     { dispose: () => timer && clearTimeout(timer) },
   );
