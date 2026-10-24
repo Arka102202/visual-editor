@@ -48,7 +48,7 @@ export function loadAliases(configs: { path: string; text: string }[]): Alias[] 
 }
 
 /**
- * Resolves an import to a project file path, or returns `pkg:<name>` for packages.
+ * Resolves an import to a project file path, or returns `pkg:<name>` for packages (a missing relative file: its path).
  * `files` is the set of all project source paths.
  */
 export function resolveImport(spec: string, fromPath: string, aliases: Alias[], files: Set<string>): string {
@@ -69,6 +69,9 @@ export function resolveImport(spec: string, fromPath: string, aliases: Alias[], 
     const found = findFile(base, files);
     if (found) return found;
   }
+  // A relative import of a file that isn't there is the project's own, missing: its path (nothing is found there, so
+  // what it brings is reported as unknown), never a package called "..".
+  if (spec.startsWith('.')) return base!;
   return `pkg:${packageName(spec)}`;
 }
 

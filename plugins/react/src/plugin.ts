@@ -9,7 +9,7 @@ import { useVariant } from './useVariant';
 import { helperTemplate, updateHelper } from './helper';
 import { setupProject } from './setup';
 import { previewFix } from './providers';
-import { previewableTool } from './tools';
+import { checkVariantFilesTool, previewableTool, rememberModel, variantBriefTool, variantRulesSkill } from './tools';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -62,14 +62,20 @@ export const reactPlugin: Plugin = {
   useVariant,
   updateHelper: (project) => updateHelper(project),
   previewFix: (project, need) => previewFix(project, need),
-  tools: [previewableTool],
+  tools: [previewableTool, variantBriefTool, checkVariantFilesTool],
+  skills: [variantRulesSkill],
   setup: (project) => setupProject((p) => (existsSync(join(project.root, p)) ? readFileSync(join(project.root, p), 'utf8') : undefined), helperTemplate()),
   readers: [
     {
       id: 'react',
       wants: wantsFile,
       // Read in a worker thread (in VS Code), so a big project never freezes the editor.
-      read: async (files) => (await readingWorker.read(files)).result,
+      // (The whole model is kept for the assistant tools: tools.ts.)
+      read: async (files, project) => {
+        const { model, result } = await readingWorker.read(files);
+        rememberModel(project.root, model);
+        return result;
+      },
     },
   ],
 };

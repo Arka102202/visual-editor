@@ -181,7 +181,7 @@ A one-line proposal, with the before and after shown live in Review, and Undo.
   - It updates when plugins update.
 - **Done when:** in your chat, Claude lists Visual Editor's agents.
 
-### 2.3 Tools for variants
+### 2.3 Tools for variants ✅ done
 - **You get:**
   - `variant_brief` (everything about a card for a job);
   - `check_variant_files` (the rules on proposed files);

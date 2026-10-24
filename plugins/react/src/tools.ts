@@ -1,6 +1,12 @@
-// The React plugin's tools for assistants (Claude Code calls them through the shell's hub). Pure: cards in, words out.
+// The React plugin's tools for assistants (Claude Code calls them through the shell's hub), and its know-how: which
+// components can be previewed, everything about one for a job, and the variant rules checked on a draft.
 
-import type { Item, PluginTool } from '@visual-editor/contract';
+import type { Item, PluginSkill, PluginTool, SourceFile, ToolContext } from '@visual-editor/contract';
+import { componentId, wantsFile } from './cards';
+import type { FeComponent, FeModel } from './read/model';
+import type { VariantFolder } from './read/variants';
+import { readingWorker } from './workerClient';
+import VARIANT_RULES from '../../../docs/variants.md';
 
 /** Components and pages Preview can show (docs/variants.md), with their designs; and the ones it can't yet. */
 export const previewableTool: PluginTool = {
@@ -44,3 +50,176 @@ export function previewableText(items: Item[], search?: string): string {
   }
   return out.join('\n');
 }
+
+// ---------------------------------------------------------------------------
+// The project read whole (the model), for briefs and checks
+// ---------------------------------------------------------------------------
+
+/** The last model the reader made, per project: today's project, read again only with a draft. */
+const models = new Map<string, FeModel>();
+
+export function rememberModel(root: string, model: FeModel) {
+  models.set(root, model);
+}
+
+/** The project's model: today's (from the reader), or read again as a draft would leave it. */
+async function modelOf(ctx: ToolContext): Promise<FeModel> {
+  const known = models.get(ctx.project.root);
+  if (known && !ctx.draft) return known;
+  const files: SourceFile[] = [];
+  for (const path of ctx.project.files.filter(wantsFile)) {
+    const text = await ctx.read(path);
+    if (text !== undefined) files.push({ path, text });
+  }
+  const { model } = await readingWorker.read(files);
+  if (!ctx.draft) models.set(ctx.project.root, model);
+  return model;
+}
+
+/** A component card by its id or its name. */
+function findCard(items: Item[], card: string): Item | string {
+  const all = items.filter((i) => i.map === 'components');
+  const found = all.find((i) => i.id === card) ?? all.filter((i) => i.label === card);
+  if (!Array.isArray(found)) return found;
+  if (found.length === 1) return found[0];
+  if (found.length > 1) return `Several components are called ${card}: ${found.map((i) => i.id).join(', ')}. Give the id.`;
+  return `No component or page called "${card}". Use previewable or list_cards to find it.`;
+}
+
+/** The variant folder a component is the chooser of. */
+const folderOf = (model: FeModel, c: FeComponent) => model.variantFolders?.find((f) => f.files.chooser === c.path && f.name === c.name);
+
+const DATA_WORDS: Record<string, string> = { api: 'calls the API', query: 'loads', db: 'reads the database', store: 'reads the store', context: 'reads the context', router: 'uses the router' };
+
+// ---------------------------------------------------------------------------
+// variant_brief
+// ---------------------------------------------------------------------------
+
+export const variantBriefTool: PluginTool = {
+  name: 'variant_brief',
+  title: 'Everything about a component for a job',
+  description:
+    'Everything needed to work on one component or page: its props, who uses it and what it draws, the data it uses (API, stores, context, router), and either its variant folder (files, designs, the one in use, states, situations, problems) or, when it is not previewable yet, the folder it would become. Call it before making something previewable or adding a design.',
+  input: { card: { type: 'string', description: 'The component\'s card id or name, e.g. "ProjectCard"' } },
+  run: async ({ card }, ctx) => {
+    const item = findCard(ctx.items, String(card ?? ''));
+    if (typeof item === 'string') return { problem: item };
+    const model = await modelOf(ctx);
+    const c = model.components.find((x) => componentId(x) === item.id);
+    if (!c) return { problem: `${item.label} isn't in the project as ${ctx.draft ? 'the draft would leave it' : 'it is'}.` };
+    return briefText(item, c, model, ctx);
+  },
+};
+
+export function briefText(item: Item, c: FeComponent, model: FeModel, ctx: Pick<ToolContext, 'items' | 'links'>): string {
+  const label = (id: string) => ctx.items.find((i) => i.id === id);
+  const out = [`# ${c.name} (${item.kind}) · ${item.id}`, `File: ${c.path}:${c.line + 1}`];
+  if (c.routes.length) out.push(`A page, shown at ${c.routes.join(', ')}.`);
+  out.push(c.props.length ? `Props: ${c.props.map((p) => `${p.name}${p.optional ? '?' : ''}${p.type ? `: ${p.type}` : ''}${p.isCallback ? ' (callback)' : ''}`).join('; ')}${c.acceptsRest ? '; and more passed through ({...rest})' : ''}` : 'Props: none.');
+  const users = ctx.links.filter((l) => l.to === item.id && (l.kind === 'renders' || l.kind === 'uses')).map((l) => label(l.from)).filter((i): i is Item => !!i);
+  if (users.length) out.push(`Used by: ${users.map((u) => `${u.label} (${u.source?.path ?? u.id})`).join(', ')}`);
+  const draws = [...new Set(c.renders.map((r) => r.tag))];
+  if (draws.length) out.push(`Draws: ${draws.join(', ')}`);
+  if (c.data.length) out.push('Data it uses:', ...c.data.map((d) => `- ${DATA_WORDS[d.kind] ?? d.kind} ${d.label}${d.via ? ` (through ${d.via})` : ''}${d.trigger ? `, ${d.trigger === 'load' ? 'on load' : 'on a click'}` : ''} · ${d.path}:${d.line + 1}`));
+  else out.push('Data it uses: none of its own.');
+
+  const folder = folderOf(model, c);
+  if (folder) out.push('', ...folderText(folder));
+  else out.push('', ...plannedFolder(c, model));
+  out.push('', 'The rules are in the visual-editor:variant-rules skill. Work in a draft (save_draft), then check it with check_variant_files (draft: its id).');
+  return out.join('\n');
+}
+
+function folderText(f: VariantFolder): string[] {
+  const base = (p?: string) => p?.split('/').pop();
+  const out = [`Previewable (version ${f.version}${f.version === 1 ? ': fixed views, made before the static part' : ''}). Folder: ${f.dir || '.'}`];
+  out.push(`Files: ${[['chooser', f.files.chooser], ['types', f.files.types], ['dynamic', f.files.data], ['static', f.files.static], ['starting data', f.files.mock], ['switcher', f.files.switcher]].map(([what, p]) => `${what} ${base(p) ?? '(missing)'}`).join(', ')}`);
+  const inUse = (id: string) => (f.situations ? Object.entries(f.situations.inUse).filter(([, v]) => v === id).map(([s]) => s) : id === f.selected ? ['all'] : []);
+  out.push('Designs:', ...f.variants.map((v) => `- ${v.name} (id ${v.id}) · ${base(v.path)}${inUse(v.id).length ? ` · in use${f.situations ? ` for ${inUse(v.id).join(', ')}` : ''}` : ''}${v.for?.length ? ` · made for ${v.for.join(', ')}` : ''}`));
+  out.push(`States: ${f.states.join(', ') || 'none'}`);
+  if (f.situations) out.push(`Situations, picked by the prop "${f.situations.prop}": ${f.situations.names.join(', ')}`);
+  if (f.problems?.length) out.push('Problems:', ...f.problems.map((p) => `- ${p}`));
+  else out.push('It follows the rules.');
+  return out;
+}
+
+/** The folder a component that isn't previewable yet would become (docs/variants.md). */
+function plannedFolder(c: FeComponent, model: FeModel): string[] {
+  const parts = c.path.split('/');
+  const file = parts.pop()!;
+  const own = parts[parts.length - 1] === c.name;
+  const dir = [...parts, ...(own ? [] : [c.name])].join('/');
+  const n = c.name;
+  const out = [`Not previewable yet. Made previewable, its folder ${own ? `(${dir}, where it is now)` : `would be ${dir}`}:`];
+  out.push(
+    `- ${dir}/index.tsx: the chooser; exports ${n} as ${file} does now, so nothing that imports it changes${!own || file !== 'index.tsx' ? ` (it replaces ${c.path})` : ''}`,
+    `- ${dir}/${n}.types.ts: ${n}Props, ${n}Start, ${n}View`,
+    `- ${dir}/${n}.data.tsx: the dynamic part${c.data.length ? `, with the data above (${c.data.map((d) => d.label).join(', ')})` : ' (it has no data of its own: it shapes what it is given)'}`,
+    `- ${dir}/${n}.static.tsx: the static part, a working prototype with its data in memory`,
+    `- ${dir}/${n}.mock.ts: starting data as named states (default, and the ones that matter: empty, long text…)`,
+    `- ${dir}/${n}.switcher.tsx: which design is in use`,
+    `- ${dir}/${n}.variant.tsx: today's look, as the first design (id "default"), looks only`,
+  );
+  const others = model.components.filter((x) => x.path === c.path && x.id !== c.id && !x.parent);
+  if (others.length) out.push(`${c.path} also defines ${others.map((x) => x.name).join(', ')}: keep ${others.length === 1 ? 'it' : 'them'} working (in the design file if only it uses ${others.length === 1 ? 'it' : 'them'}, else in ${others.length === 1 ? 'its' : 'their'} own file).`);
+  if (c.routes.length) out.push('It is a page: see "Pages" in the rules (its dynamic part reads the route; the static part starts from a state).');
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// check_variant_files
+// ---------------------------------------------------------------------------
+
+export const checkVariantFilesTool: PluginTool = {
+  name: 'check_variant_files',
+  title: 'Check variant folders against the rules',
+  description:
+    'Checks variant folders against the rules (docs/variants.md): missing pieces, designs that use data, a static part that is not a prototype, what would ship to users, states missing what they need. With draft, checks the project as the draft would leave it: the folders it touches, and whether anything that imported a changed file can no longer find it. Ends with PASSED or PROBLEMS.',
+  input: { card: { type: 'string', description: 'Only this component\'s folder (card id or name)', optional: true } },
+  run: async ({ card }, ctx) => {
+    const model = await modelOf(ctx);
+    const folders = model.variantFolders ?? [];
+    let chosen: VariantFolder[];
+    const out: string[] = [];
+    if (typeof card === 'string' && card) {
+      const item = findCard(ctx.items, card);
+      const name = typeof item === 'string' ? card : item.label;
+      const path = typeof item === 'string' ? undefined : item.source?.path;
+      const dir = path?.split('/').slice(0, -1).join('/');
+      chosen = folders.filter((f) => f.name === name && (!dir || f.dir === dir || f.dir === `${dir}/${name}` || f.files.chooser === path));
+      if (!chosen.length) return `${name} has no variant folder${ctx.draft ? ' in the draft' : ''} (a folder is found by its ${name}.switcher.tsx).\nPROBLEMS`;
+    } else if (ctx.draft) {
+      const dirs = new Set(ctx.draft.changes.map((c) => c.path.split('/').slice(0, -1).join('/')));
+      chosen = folders.filter((f) => dirs.has(f.dir));
+      const loose = [...dirs].filter((d) => !chosen.some((f) => f.dir === d) && ctx.draft!.changes.some((c) => c.path.split('/').slice(0, -1).join('/') === d && /\.(variant|switcher|static|mock|data|types)\.[jt]sx?$/.test(c.path)));
+      for (const d of loose) out.push(`✗ ${d}: has variant files but no Name.switcher.tsx, so it isn't a variant folder.`);
+    } else chosen = folders;
+
+    for (const f of chosen) {
+      if (f.problems?.length) out.push(`✗ ${f.name} (${f.dir || '.'}): ${f.problems.length} problem${f.problems.length === 1 ? '' : 's'}`, ...f.problems.map((p) => `  - ${p}`));
+      else out.push(`✓ ${f.name} (${f.dir || '.'}): follows the rules. Designs: ${f.variants.map((v) => v.name).join(', ')}; states: ${f.states.join(', ')}.`);
+    }
+    // With a draft: imports it would break (a component used somewhere that can no longer be found).
+    if (ctx.draft) {
+      const today = models.get(ctx.project.root);
+      const lost = (m: FeModel) => new Set(m.components.flatMap((c) => c.issues.filter((i) => i.kind === 'unknown' && !/spread/.test(i.message)).map((i) => `${c.name} (${c.path}): ${i.message}`)));
+      const before = today ? lost(today) : new Set<string>();
+      const broken = [...lost(model)].filter((x) => !before.has(x));
+      if (broken.length) out.push('✗ The draft breaks imports:', ...broken.map((b) => `  - ${b}`));
+    }
+    if (!out.length) return 'There are no variant folders to check.\nPASSED';
+    out.push(out.some((l) => l.startsWith('✗')) ? 'PROBLEMS' : 'PASSED');
+    return out.join('\n');
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Know-how
+// ---------------------------------------------------------------------------
+
+export const variantRulesSkill: PluginSkill = {
+  name: 'variant-rules',
+  description:
+    'The rules for making a React component or page previewable (its variant folder: chooser, types, dynamic and static parts, starting data, switcher, designs, situations, pages). Use when making something previewable, adding or changing a design, or checking such work.',
+  text: VARIANT_RULES,
+};
