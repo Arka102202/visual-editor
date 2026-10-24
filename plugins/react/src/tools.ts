@@ -12,6 +12,7 @@ import VARIANT_RULES from '../../../docs/variants.md';
 export const previewableTool: PluginTool = {
   name: 'previewable',
   title: 'Components that can be previewed',
+  summary: 'Lists which components and pages you can see in Preview, with their designs, and which ones can’t be previewed yet.',
   description:
     'Which components and pages can be shown in Preview and the Playground: their designs (the one in use), fixed-data states, situations and what breaks the rules. Also lists the ones that cannot be previewed yet. Use before making something previewable or adding a design.',
   input: {
@@ -98,6 +99,7 @@ const DATA_WORDS: Record<string, string> = { api: 'calls the API', query: 'loads
 export const variantBriefTool: PluginTool = {
   name: 'variant_brief',
   title: 'Everything about a component for a job',
+  summary: 'Gathers everything about one component before Claude works on it: what it’s given, who uses it, what data it loads, and its designs.',
   description:
     'Everything needed to work on one component or page: its props, who uses it and what it draws, the data it uses (API, stores, context, router), and either its variant folder (files, designs, the one in use, states, situations, problems) or, when it is not previewable yet, the folder it would become. Call it before making something previewable or adding a design.',
   input: { card: { type: 'string', description: 'The component\'s card id or name, e.g. "ProjectCard"' } },
@@ -172,7 +174,8 @@ function plannedFolder(c: FeComponent, model: FeModel): string[] {
 
 export const checkVariantFilesTool: PluginTool = {
   name: 'check_variant_files',
-  title: 'Check variant folders against the rules',
+  title: 'Check the preview setup',
+  summary: 'Checks that a component’s folder follows the rules for previewing, for example that a design doesn’t load data. Its answer is kept as proof.',
   description:
     'Checks variant folders against the rules (docs/variants.md): missing pieces, designs that use data, a static part that is not a prototype, what would ship to users, states missing what they need. With draft, checks the project as the draft would leave it: the folders it touches, and whether anything that imported a changed file can no longer find it. Ends with PASSED or PROBLEMS.',
   input: { card: { type: 'string', description: 'Only this component\'s folder (card id or name)', optional: true } },
@@ -208,7 +211,9 @@ export const checkVariantFilesTool: PluginTool = {
       const broken = [...lost(model)].filter((x) => !before.has(x));
       if (broken.length) out.push('✗ The draft breaks imports:', ...broken.map((b) => `  - ${b}`));
     }
-    if (!out.length) return 'There are no variant folders to check.\nPASSED';
+    // Nothing it can say about: no verdict, so it isn't counted as passed (or failed).
+    if (!out.length && ctx.draft && !ctx.draft.changes.some((c) => wantsFile(c.path))) return 'Nothing for this check: the draft changes no code.';
+    if (!out.length) return ctx.draft ? 'The draft changes no variant folder, and breaks no import.\nPASSED' : 'There are no variant folders to check.\nPASSED';
     out.push(out.some((l) => l.startsWith('✗')) ? 'PROBLEMS' : 'PASSED');
     return out.join('\n');
   },
@@ -220,6 +225,8 @@ export const checkVariantFilesTool: PluginTool = {
 
 export const variantRulesSkill: PluginSkill = {
   name: 'variant-rules',
+  title: 'How previewable components are built',
+  summary: 'How a component’s folder is laid out so it can be previewed: designs show looks only, and its data lives in its own files.',
   description:
     'The rules for making a React component or page previewable (its variant folder: chooser, types, dynamic and static parts, starting data, switcher, designs, situations, pages). Use when making something previewable, adding or changing a design, or checking such work.',
   text: VARIANT_RULES,

@@ -195,10 +195,12 @@ A one-line proposal, with the before and after shown live in Review, and Undo.
   - Review shows the evidence next to the change.
 - **Done when:** a proposal in Review carries its proof.
 
-### 2.5 The worker → checker loop
+### 2.5 The worker → checker loop ✅ done
 - **You get:** the worker makes a draft, and the checker proves it or sends it back with reasons, at most 3 rounds.
   Time and cost limits, and **Stop**.
 - **Done when:** a planted mistake is caught by the checker and fixed by the worker.
+- **Note:** the cost limit applies to runs Visual Editor starts (2.6: `--max-budget-usd`); in your own chat, Claude
+  Code's own limits apply.
 
 ### 2.6 The three ways in
 - **You get:**
