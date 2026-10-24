@@ -3,13 +3,15 @@
 /** One thing an assistant gets from Visual Editor: an agent (does a job), a skill (know-how it reads) or a tool. */
 export interface AgentsEntry {
   kind: 'agent' | 'skill' | 'tool';
+  /** Its name (an agent's, to run it). */
+  name: string;
   title: string;
   /** What it does, in very simple words, for the developer. */
   summary: string;
   /** What Claude Code calls it. */
   claudeName: string;
   /** An agent's latest job: working now (it can be stopped), or how it ended. */
-  job?: { id: string; status: string; round: number; rounds: number; request: string; running: boolean };
+  job?: { id: string; status: string; round: number; rounds: number; request: string; running: boolean; progress?: string; by: string };
 }
 
 /** Shell → Agents section. */
@@ -22,4 +24,10 @@ export interface ToAgents {
 }
 
 /** Agents section → shell. */
-export type FromAgents = { type: 'ready' } | { type: 'connect' } | { type: 'addAgents' } | { type: 'stop'; job: string };
+export type FromAgents =
+  | { type: 'ready' }
+  | { type: 'connect' }
+  | { type: 'addAgents' }
+  | { type: 'stop'; job: string }
+  /** Run an agent from its button: in the background or in a terminal. */
+  | { type: 'run'; agent: string; way: 'background' | 'terminal' };

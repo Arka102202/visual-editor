@@ -10,10 +10,7 @@ import { forCard, rulesText, type MemoryEntry } from '../memory';
 import type { ProjectState } from '../projectIndex';
 import { newId, parseProposal, safePath, type Evidence, type FileChange, type Proposal } from '../proposals';
 import { draftView, type Draft } from '../drafts';
-import { current, nextStep, type Job } from '../jobs';
-
-/** How long an agent job may take. */
-const JOB_MINUTES = 20;
+import { current, JOB_MINUTES, newJob, nextStep, type Job } from '../jobs';
 
 export const SERVER_NAME = 'visual-editor';
 
@@ -602,20 +599,7 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       const found = host.agents().find((a) => a.agent.name === agent);
       if (!found) return fail(`No agent "${agent}". Agents: ${host.agents().map((a) => a.agent.name).join(', ') || 'none'}.`);
       if (!s.detected.some((d) => d.plugin.id === found.plugin.id)) return fail(`${s.project.name} isn't a ${found.plugin.name} project, so ${found.agent.title} can't work on it.`);
-      const now = new Date();
-      const j: Job = {
-        id: newId(),
-        agent,
-        title: found.agent.title,
-        request: request.trim(),
-        status: 'working',
-        round: 1,
-        rounds: found.agent.rounds ?? 3,
-        startedAt: now.toISOString(),
-        until: new Date(now.getTime() + JOB_MINUTES * 60_000).toISOString(),
-        history: [{ at: now.toISOString(), who: 'Visual Editor', what: `Started: ${request.trim()}` }],
-        by: client,
-      };
+      const j = newJob(found.agent, request, client, newId());
       host.saveJob(s.project.root, j);
       return reply(`Job ${j.id} started (${j.title}; at most ${j.rounds} round${j.rounds === 1 ? '' : 's'}, ${JOB_MINUTES} minutes; ${roleNames(agent)}).\nNext: ${nextStep(j)} Give it the job id ${j.id} and the request.`);
     },

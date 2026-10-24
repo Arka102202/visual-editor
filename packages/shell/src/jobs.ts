@@ -36,6 +36,26 @@ export interface Job {
   by: string;
 }
 
+/** How long an agent job may take. */
+export const JOB_MINUTES = 20;
+
+/** A new job for an agent (from chat, a button, a terminal), waiting for its worker. */
+export function newJob(agent: { name: string; title: string; rounds?: number }, request: string, by: string, id: string, now = new Date()): Job {
+  return {
+    id,
+    agent: agent.name,
+    title: agent.title,
+    request: request.trim(),
+    status: 'working',
+    round: 1,
+    rounds: agent.rounds ?? 3,
+    startedAt: now.toISOString(),
+    until: new Date(now.getTime() + JOB_MINUTES * 60_000).toISOString(),
+    history: [{ at: now.toISOString(), who: 'Visual Editor', what: `Started: ${request.trim()}` }],
+    by,
+  };
+}
+
 /** Finished: nothing more happens to it. */
 export const finished = (j: Job) => j.status === 'passed' || j.status === 'failed' || j.status === 'stopped' || j.status === 'out of time';
 

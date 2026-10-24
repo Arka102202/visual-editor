@@ -30,6 +30,10 @@ addStyles(`
   .badge.agent { --c: var(--vscode-charts-purple, #b180d7); }
   .badge.skill { --c: var(--vscode-charts-blue, #3794ff); }
   .badge.tool { --c: var(--vscode-charts-green, #89d185); }
+  .row .buttons { display: flex; gap: 2px; }
+  .row .buttons button { padding: 1px 3px; }
+  .progress { margin: -2px 12px 4px 20px; padding-left: 8px; font-size: 11px; opacity: .75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .progress::before { content: '↳ '; }
   .working { flex: none; font-size: 11px; color: var(--vscode-charts-yellow, #cca700); white-space: nowrap; }
   .working::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: currentColor; animation: pulse 1.2s ease-in-out infinite; }
   @keyframes pulse { 50% { opacity: .25; } }
@@ -119,6 +123,15 @@ function draw(m: ToAgents) {
         stop.addEventListener('click', () => vscode.postMessage({ type: 'stop', job: id }));
         row.append(tray(el('span', 'buttons')));
         row.lastElementChild!.append(stop);
+      } else if (e.kind === 'agent') {
+        // Run it: it asks what you want, then works in the background (or in a terminal you can watch and talk to).
+        const name = e.name;
+        const bg = iconButton('play', `Run ${e.title} in the background: it asks what you want, then works quietly; the result comes to Review`);
+        bg.addEventListener('click', () => vscode.postMessage({ type: 'run', agent: name, way: 'background' }));
+        const term = iconButton('terminal', `Run ${e.title} in a terminal: watch it work, and talk to it`);
+        term.addEventListener('click', () => vscode.postMessage({ type: 'run', agent: name, way: 'terminal' }));
+        row.append(tray(el('span', 'buttons')));
+        row.lastElementChild!.append(bg, term);
       }
       row.setAttribute('aria-expanded', String(open.has(e.title)));
       row.addEventListener('mouseenter', () => showPop(row, e));
@@ -133,6 +146,8 @@ function draw(m: ToAgents) {
       row.addEventListener('click', toggle);
       row.addEventListener('keydown', (ev) => (ev.key === 'Enter' || ev.key === ' ') && toggle(ev));
       document.body.append(row);
+      // A run from a button: what it's doing now.
+      if (e.job?.running && e.job.progress) document.body.append(el('div', 'progress', e.job.progress));
       if (open.has(e.title)) {
         const about = el('div', `about ${e.kind}`);
         about.append(...aboutOf(e));
