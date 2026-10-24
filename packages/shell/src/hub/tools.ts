@@ -7,7 +7,7 @@ import { z } from 'zod';
 import type { Item, Plugin, PluginTool, ToolInput } from '@visual-editor/contract';
 import { forCard, rulesText, type MemoryEntry } from '../memory';
 import type { ProjectState } from '../projectIndex';
-import { newId, parseProposal, safePath, type FileChange, type Proposal } from '../proposals';
+import { newId, parseProposal, safePath, type Evidence, type FileChange, type Proposal } from '../proposals';
 import type { Draft } from '../drafts';
 
 export const SERVER_NAME = 'visual-editor';
@@ -309,6 +309,10 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       }
       if (!files.size) return fail('Every file would stay the same: there is nothing to save.');
       const now = new Date().toISOString();
+      const next = [...files.values()].sort((a, b) => a.path.localeCompare(b.path));
+      // A new version when its files change: proof is about one version.
+      const same = !!old && JSON.stringify(old.changes) === JSON.stringify(next);
+      const revision = same ? old!.revision : (old?.revision ?? 0) + 1;
       const d: Draft = {
         id: old?.id ?? newId(),
         title,
@@ -317,11 +321,14 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
         createdAt: old?.createdAt ?? now,
         updatedAt: now,
         status: 'draft',
-        changes: [...files.values()].sort((a, b) => a.path.localeCompare(b.path)),
+        changes: next,
         ...(cards?.length ? { items: cards } : old?.items ? { items: old.items } : {}),
+        revision,
+        evidence: old?.evidence ?? [],
       };
       host.saveDraft(root, d);
-      return reply(`Draft ${d.id} saved: ${changeWords(d.changes)}. Nothing in the project changed.\nPlugin tools given draft "${d.id}" look at the project as it would leave it (for example to check it); read_draft shows it; submit_draft sends it to Review.`);
+      const stale = old && !same && old.evidence.some((e) => e.revision === old.revision) ? '\nIts earlier proof was for the previous version: check it again.' : '';
+      return reply(`Draft ${d.id} saved (version ${revision}): ${changeWords(d.changes)}. Nothing in the project changed.${stale}\nPlugin tools given draft "${d.id}" look at the project as it would leave it; checks among them are kept with it as proof for Review. read_draft shows it; submit_draft sends it to Review.`);
     },
   );
 
@@ -341,7 +348,10 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       if (!id) return reply(all.length ? all.slice(0, 20).map((d) => `${d.id} · ${d.status === 'submitted' ? `sent to Review (${d.proposal})` : 'draft'} · ${d.title} · ${changeWords(d.changes)}`).join('\n') : 'No drafts yet.');
       const d = all.find((x) => x.id === id);
       if (!d) return fail(`No draft "${id}" in ${s.project.name}.`);
-      const out = [`${d.title} (${d.status === 'submitted' ? `sent to Review as proposal ${d.proposal}` : 'a draft'}, by ${d.by.name})`, `Why: ${d.why}`, 'Files:'];
+      const out = [`${d.title} (${d.status === 'submitted' ? `sent to Review as proposal ${d.proposal}` : 'a draft'}, version ${d.revision}, by ${d.by.name})`, `Why: ${d.why}`];
+      const proof = d.evidence.filter((e) => e.revision === d.revision);
+      out.push(proof.length ? `Proof for this version: ${proof.map((e) => `${mark(e)} ${e.title}`).join('; ')}` : 'No proof for this version yet: run a check on it (a plugin tool with draft), or add_evidence.');
+      out.push('Files:');
       for (const c of d.changes) {
         const now = (await host.readFile(root, c.path)) ?? null;
         out.push(`- ${c.path} (${c.before === null ? 'new' : c.after === null ? 'removed' : 'changed'}${c.after !== null ? `, ${c.after.split('\n').length} lines` : ''})${now !== c.before && d.status === 'draft' ? ' · changed in the project since: save it again' : ''}`);
@@ -373,14 +383,44 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       for (const c of d.changes) if (((await host.readFile(root, c.path)) ?? null) !== c.before) moved.push(c.path);
       if (moved.length) return fail(`These files changed in the project since the draft was saved: ${moved.join(', ')}. Read them again, save the draft again with save_draft (draft: "${d.id}"), check it, then submit it.`);
       const now = new Date().toISOString();
+      // Its proof goes with it: what was checked on this version.
+      const evidence = d.evidence.filter((e) => e.revision === d.revision);
       const checked = parseProposal(
-        JSON.stringify({ id: newId(), title: d.title, why: d.why, by: d.by, createdAt: now, status: 'proposed', changes: d.changes, items: d.items, history: [{ at: now, status: 'proposed' }] }),
+        JSON.stringify({ id: newId(), title: d.title, why: d.why, by: d.by, createdAt: now, status: 'proposed', changes: d.changes, items: d.items, history: [{ at: now, status: 'proposed' }], evidence }),
         newId(),
       );
       if (typeof checked === 'string') return fail(checked);
       host.propose(root, checked);
       host.saveDraft(root, { ...d, status: 'submitted', proposal: checked.id, updatedAt: now });
-      return reply(`Draft ${d.id} is now proposal ${checked.id}, waiting in Review for the developer. Nothing has changed yet. Call proposal_status with id "${checked.id}" to see what they decided.`);
+      const failed = evidence.filter((e) => e.passed === false);
+      const note = !evidence.length ? '\nIt carries no proof: Review says nothing was checked.' : failed.length ? `\nReview shows that ${failed.map((e) => e.title).join(', ')} did not pass.` : '';
+      return reply(`Draft ${d.id} is now proposal ${checked.id}, waiting in Review for the developer with its proof (${evidence.length}). Nothing has changed yet.${note}\nCall proposal_status with id "${checked.id}" to see what they decided.`);
+    },
+  );
+
+  server.registerTool(
+    'add_evidence',
+    {
+      title: 'Add proof to a draft',
+      description:
+        'Adds a note to a draft\'s proof, for the developer to see in Review next to the change: something you checked yourself and how (it shows as said by you; checks Visual Editor runs are added by themselves). It is about the draft\'s current version.',
+      inputSchema: {
+        draft: z.string().describe('The draft id'),
+        title: z.string().describe('What was checked, in a few words'),
+        text: z.string().describe('How, and what came out'),
+        passed: z.boolean().optional().describe('Whether it passed, when it was a check'),
+        project: projectArg,
+      },
+    },
+    async ({ draft, title, text, passed, project }) => {
+      const s = await pick(project);
+      if (typeof s === 'string') return fail(s);
+      const d = host.drafts(s.project.root).find((x) => x.id === draft);
+      if (!d) return fail(`No draft "${draft}" in ${s.project.name}.`);
+      if (d.status === 'submitted') return fail(`Draft ${d.id} is already in Review: proof can't be added to it any more.`);
+      const e: Evidence = { kind: 'note', title: title.trim(), text: text.trim(), ...(passed === undefined ? {} : { passed }), by: client, at: new Date().toISOString(), revision: d.revision };
+      host.saveDraft(s.project.root, { ...d, evidence: [...d.evidence, e] });
+      return reply(`Added to the proof of draft ${d.id} (version ${d.revision}).`);
     },
   );
 
@@ -407,6 +447,15 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
           read: async (path) => (changed.has(path) ? (changed.get(path) ?? undefined) : host.readFile(root, path)),
           ...(draft ? { draft: { id: draft.id, title: draft.title, changes: draft.changes.map((c) => ({ path: c.path, after: c.after })) } } : {}),
         });
+        // A check on a draft is kept with it as proof (the latest answer for the same question on the same version).
+        if (draft && tool.checks && typeof answer === 'string') {
+          const last = answer.trim().split('\n').pop() ?? '';
+          const asked = Object.entries(input).filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => `${k}: ${String(v)}`).join(', ');
+          const title = `${tool.title}${asked ? ` (${asked})` : ''}`;
+          const e: Evidence = { kind: 'check', title, text: answer.slice(0, 8000), ...(last === 'PASSED' ? { passed: true } : last === 'PROBLEMS' ? { passed: false } : {}), by: 'Visual Editor', at: new Date().toISOString(), revision: draft.revision };
+          const now = host.drafts(root).find((x) => x.id === draft.id) ?? draft;
+          if (now.status === 'draft') host.saveDraft(root, { ...now, evidence: [...now.evidence.filter((x) => !(x.kind === 'check' && x.title === title && x.revision === e.revision)), e] });
+        }
         return typeof answer === 'string' ? reply(answer) : fail(answer.problem);
       } catch (e) {
         return fail(`${tool.name} stopped with an error (a bug in the ${plugin.name} plugin): ${e instanceof Error ? e.message : e}`);
@@ -416,6 +465,9 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
 
   return server;
 }
+
+/** ✓ passed, ✗ didn't, • a note or a check that didn't say. */
+const mark = (e: Evidence) => (e.passed === true ? '✓' : e.passed === false ? '✗' : '•');
 
 /** "3 files (2 new, 1 changed)" */
 function changeWords(changes: FileChange[]): string {

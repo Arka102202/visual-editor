@@ -19,6 +19,24 @@ export interface FileChange {
   after: string | null;
 }
 
+/**
+ * Proof that a change works, kept with a draft and carried into its proposal: a check Visual Editor ran on the draft
+ * (a plugin tool's answer), or a note from the assistant. Each is about one version (revision) of the draft.
+ */
+export interface Evidence {
+  kind: 'check' | 'note';
+  /** What it is, e.g. "Check variant folders against the rules". */
+  title: string;
+  text: string;
+  /** For a check: whether it passed (unknown when it didn't say). */
+  passed?: boolean;
+  /** "Visual Editor" for checks it ran; the assistant's name for its notes. */
+  by: string;
+  at: string;
+  /** The draft's version it is about. */
+  revision: number;
+}
+
 export interface Proposal {
   id: string;
   title: string;
@@ -35,6 +53,8 @@ export interface Proposal {
   look?: string;
   /** What happened to it, newest last. */
   history: { at: string; status: Status; note?: string }[];
+  /** Proof for it (from its draft): what was checked, with what result. Undefined: it didn't come from a draft. */
+  evidence?: Evidence[];
 }
 
 /** File access for applying: VS Code's in the editor (so open files update), plain fs in tests. */
@@ -91,7 +111,25 @@ export function parseProposal(text: string, fallbackId: string): Proposal | stri
     // Only an address on the app itself ("/…"), never another site.
     ...(typeof raw.look === 'string' && /^\/(?![/\\])/.test(raw.look) && raw.look.length < 2000 ? { look: raw.look } : {}),
     history: Array.isArray(raw.history) ? (raw.history as Proposal['history']) : [{ at: createdAt, status }],
+    ...(Array.isArray(raw.evidence) ? { evidence: parseEvidence(raw.evidence) } : {}),
   };
+}
+
+/** Proof read from a file: entries that aren't proof are left out. */
+export function parseEvidence(list: unknown[]): Evidence[] {
+  return list.flatMap((e) => {
+    const x = e as Record<string, unknown> | null;
+    if (!x || (x.kind !== 'check' && x.kind !== 'note') || typeof x.title !== 'string' || typeof x.text !== 'string') return [];
+    return [{
+      kind: x.kind,
+      title: x.title,
+      text: x.text,
+      ...(typeof x.passed === 'boolean' ? { passed: x.passed } : {}),
+      by: typeof x.by === 'string' ? x.by : 'Assistant',
+      at: typeof x.at === 'string' ? x.at : '',
+      revision: typeof x.revision === 'number' ? x.revision : 1,
+    }];
+  });
 }
 
 /** Why it can't be applied as it stands: files that changed since it was proposed. Empty when it can. */

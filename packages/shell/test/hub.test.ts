@@ -61,7 +61,7 @@ test('hub: a real MCP client reads the map, the rules and a card', async () => {
   const hub = await connect(host);
   try {
     const tools = (await hub.client.listTools()).tools.map((t) => t.name).sort();
-    assert.deepEqual(tools, ['card', 'list_cards', 'memory', 'overview', 'proposal_status', 'propose_change', 'read_draft', 'remember', 'save_draft', 'submit_draft']);
+    assert.deepEqual(tools, ['add_evidence', 'card', 'list_cards', 'memory', 'overview', 'proposal_status', 'propose_change', 'read_draft', 'remember', 'save_draft', 'submit_draft']);
     const overview = await hub.call('overview');
     assert.match(overview.text, /## shop \(on the map\)/);
     assert.match(overview.text, /Plugins: React \(react is in package.json\)/);
@@ -191,7 +191,9 @@ test('hub: a draft keeps files apart, plugin tools see the project as it would l
     description: 'What a tool sees.',
     run: async (_input, ctx) => `${ctx.draft?.id ?? 'no draft'} | ${ctx.project.files.join(',')} | ${await ctx.read('src/New.tsx')} | ${await ctx.read('src/Card.tsx')}`,
   };
-  host.tools = () => [{ plugin, tool: look }];
+  // A check: its answers on a draft become proof.
+  const judge: PluginTool = { name: 'judge', title: 'Judge it', description: 'A check.', checks: true, input: { strict: { type: 'boolean', description: 'Strict', optional: true } }, run: async ({ strict }, ctx) => `${(await ctx.read('src/New.tsx')) ?? ''}${strict ? 'PROBLEMS' : 'PASSED'}` };
+  host.tools = () => [{ plugin, tool: look }, { plugin, tool: judge }];
   const hub = await connect(host);
   try {
     const saved = await hub.call('save_draft', {
@@ -206,7 +208,7 @@ test('hub: a draft keeps files apart, plugin tools see the project as it would l
     });
     assert.equal(saved.error, false, saved.text);
     const id = drafts[0].id;
-    assert.match(saved.text, new RegExp(`Draft ${id} saved: 3 files \\(1 new, 1 changed, 1 removed\\)\\. Nothing in the project changed\\.`));
+    assert.match(saved.text, new RegExp(`Draft ${id} saved \\(version 1\\): 3 files \\(1 new, 1 changed, 1 removed\\)\\. Nothing in the project changed\\.`));
     assert.equal(files['src/Card.tsx'], 'export const Card = () => null;\n', 'the project is untouched');
     assert.equal(proposals.length, 0);
 
@@ -234,8 +236,28 @@ test('hub: a draft keeps files apart, plugin tools see the project as it would l
     assert.match((await hub.call('submit_draft', { id })).text, /changed in the project since the draft was saved: src\/Card\.tsx/);
     files['src/Card.tsx'] = 'export const Card = () => null;\n';
 
+    // Proof: checks are kept by themselves (the latest answer per question and version), notes are the assistant's.
+    const version = drafts[0].revision;
+    await hub.call('judge', { draft: id });
+    await hub.call('judge', { draft: id });
+    await hub.call('look', { draft: id });
+    assert.deepEqual(drafts[0].evidence.map((e) => [e.kind, e.title, e.passed, e.by, e.revision]), [['check', 'Judge it', true, 'Visual Editor', version]], 'one check, not two; look is not a check');
+    assert.match((await hub.call('add_evidence', { draft: id, title: 'Read it through', text: 'Looks right.' })).text, /Added to the proof/);
+    assert.match((await hub.call('read_draft', { id })).text, /Proof for this version: ✓ Judge it; • Read it through/);
+    // A new version: the old proof no longer counts.
+    const v2 = await hub.call('save_draft', { draft: id, title: 'Card gets a title', why: 'To show it', changes: [{ path: 'src/New.tsx', content: 'export const New = 3;\n' }] });
+    assert.match(v2.text, new RegExp(`version ${version + 1}\\)[\\s\\S]*earlier proof was for the previous version: check it again`));
+    assert.match((await hub.call('read_draft', { id })).text, /No proof for this version yet/);
+    await hub.call('judge', { draft: id, strict: true });
+    assert.equal(drafts[0].evidence.at(-1)?.title, 'Judge it (strict: true)');
+    assert.equal(drafts[0].evidence.at(-1)?.passed, false);
+    assert.match(drafts[0].evidence.at(-1)!.text, /^export const New = 3;\nPROBLEMS$/, 'the check saw the draft');
+
     const sent = await hub.call('submit_draft', { id });
     assert.equal(sent.error, false, sent.text);
+    assert.match(sent.text, /with its proof \(1\)[\s\S]*Review shows that Judge it \(strict: true\) did not pass/);
+    assert.deepEqual(proposals[0].evidence?.map((e) => [e.title, e.passed]), [['Judge it (strict: true)', false]], 'only this version’s proof');
+    assert.match((await hub.call('add_evidence', { draft: id, title: 't', text: 'x' })).text, /already in Review/);
     assert.equal(proposals.length, 1);
     assert.deepEqual(proposals[0].changes.map((c) => c.path), ['src/Card.tsx', 'src/List.tsx', 'src/New.tsx']);
     assert.deepEqual(proposals[0].items, ['react:Card']);
