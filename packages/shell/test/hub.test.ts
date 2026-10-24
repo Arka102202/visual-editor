@@ -61,7 +61,7 @@ test('hub: a real MCP client reads the map, the rules and a card', async () => {
   const hub = await connect(host);
   try {
     const tools = (await hub.client.listTools()).tools.map((t) => t.name).sort();
-    assert.deepEqual(tools, ['add_evidence', 'card', 'list_cards', 'memory', 'overview', 'proposal_status', 'propose_change', 'read_draft', 'remember', 'save_draft', 'submit_draft']);
+    assert.deepEqual(tools, ['add_evidence', 'card', 'draft_pictures', 'list_cards', 'memory', 'overview', 'proposal_status', 'propose_change', 'read_draft', 'remember', 'save_draft', 'submit_draft']);
     const overview = await hub.call('overview');
     assert.match(overview.text, /## shop \(on the map\)/);
     assert.match(overview.text, /Plugins: React \(react is in package.json\)/);
@@ -266,6 +266,38 @@ test('hub: a draft keeps files apart, plugin tools see the project as it would l
     assert.match((await hub.call('submit_draft', { id })).text, /already in Review/);
     assert.match((await hub.call('save_draft', { draft: id, title: 't', why: 'w', changes: [{ path: 'a.ts', content: 'x' }] })).text, /already sent to Review/);
     assert.match((await hub.call('save_draft', { title: 't', why: 'w', changes: [{ path: '.visual-editor/x.json', content: 'x' }] })).text, /isn't a place in the project/);
+  } finally {
+    await hub.close();
+  }
+});
+
+test('hub: a picture of a draft in the Playground is kept as proof, problems marking it not passed', async () => {
+  const { host, drafts, proposals } = fakeHost();
+  const asked: string[] = [];
+  host.pictures = async (root, d, card) => {
+    asked.push(`${root} ${d.id}@${d.revision} ${card}`);
+    if (card === 'Nope') return 'Nope can’t be shown in the Playground as this draft leaves it.';
+    return { image: `${root}/.visual-editor/drafts/${d.id}/Card-v${d.revision}.png`, card: 'Card', cardId: 'react:Card', designs: ['Default', 'Tiny'], states: ['default', 'empty'], tiles: 4, problems: card === 'Broken' ? ['A design didn’t draw: tiny: boom'] : [] };
+  };
+  const hub = await connect(host);
+  try {
+    await hub.call('save_draft', { title: 'Tiny', why: 'Smaller', changes: [{ path: 'src/Tiny.tsx', content: 'x' }] });
+    const id = drafts[0].id;
+    const pic = await hub.call('draft_pictures', { draft: id, card: 'Card' });
+    assert.equal(pic.error, false, pic.text);
+    assert.match(pic.text, new RegExp(`/p/shop/\\.visual-editor/drafts/${id}/Card-v1\\.png\\nOpen it with your Read tool`));
+    assert.match(pic.text, /2 designs \(Default, Tiny\) × 2 states \(default, empty\); 4 drawn\./);
+    assert.deepEqual(asked, [`/p/shop ${id}@1 Card`]);
+    assert.deepEqual(drafts[0].evidence.map((e) => [e.kind, e.title, e.passed, e.image, e.card]), [['picture', 'Playground: Card', undefined, `.visual-editor/drafts/${id}/Card-v1.png`, 'react:Card']]);
+    // Again: the same picture replaced; a page with problems marks it not passed.
+    await hub.call('draft_pictures', { draft: id, card: 'Broken' });
+    assert.equal(drafts[0].evidence.length, 1);
+    assert.equal(drafts[0].evidence[0].passed, false);
+    assert.match(drafts[0].evidence[0].text, /Problems on the page:\n- A design didn’t draw: tiny: boom/);
+    assert.match((await hub.call('draft_pictures', { draft: id, card: 'Nope' })).text, /can’t be shown in the Playground/);
+    assert.match((await hub.call('read_draft', { id })).text, /Proof for this version: ✗ Playground: Card/);
+    await hub.call('submit_draft', { id });
+    assert.equal(proposals[0].evidence?.[0].image, `.visual-editor/drafts/${id}/Card-v1.png`, 'the picture goes to Review with it');
   } finally {
     await hub.close();
   }

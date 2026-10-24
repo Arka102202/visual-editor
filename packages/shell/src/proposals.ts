@@ -21,10 +21,11 @@ export interface FileChange {
 
 /**
  * Proof that a change works, kept with a draft and carried into its proposal: a check Visual Editor ran on the draft
- * (a plugin tool's answer), or a note from the assistant. Each is about one version (revision) of the draft.
+ * (a plugin tool's answer), a picture of it in the Playground, or a note from the assistant. Each is about one version
+ * (revision) of the draft.
  */
 export interface Evidence {
-  kind: 'check' | 'note';
+  kind: 'check' | 'note' | 'picture';
   /** What it is, e.g. "Check variant folders against the rules". */
   title: string;
   text: string;
@@ -35,6 +36,10 @@ export interface Evidence {
   at: string;
   /** The draft's version it is about. */
   revision: number;
+  /** A picture (PNG), relative to the project: in the draft's folder (.visual-editor/drafts/<id>/). */
+  image?: string;
+  /** The card a picture is of (its id), so Review can show it live. */
+  card?: string;
 }
 
 export interface Proposal {
@@ -119,7 +124,7 @@ export function parseProposal(text: string, fallbackId: string): Proposal | stri
 export function parseEvidence(list: unknown[]): Evidence[] {
   return list.flatMap((e) => {
     const x = e as Record<string, unknown> | null;
-    if (!x || (x.kind !== 'check' && x.kind !== 'note') || typeof x.title !== 'string' || typeof x.text !== 'string') return [];
+    if (!x || (x.kind !== 'check' && x.kind !== 'note' && x.kind !== 'picture') || typeof x.title !== 'string' || typeof x.text !== 'string') return [];
     return [{
       kind: x.kind,
       title: x.title,
@@ -128,6 +133,9 @@ export function parseEvidence(list: unknown[]): Evidence[] {
       by: typeof x.by === 'string' ? x.by : 'Assistant',
       at: typeof x.at === 'string' ? x.at : '',
       revision: typeof x.revision === 'number' ? x.revision : 1,
+      // Only a picture in a draft's own folder.
+      ...(typeof x.image === 'string' && /^\.visual-editor\/drafts\/[\w-]+\/[\w.-]+\.png$/.test(x.image) ? { image: x.image } : {}),
+      ...(typeof x.card === 'string' ? { card: x.card } : {}),
     }];
   });
 }

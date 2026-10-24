@@ -100,3 +100,12 @@ export class DraftStore {
     writeFileSync(join(this.dir, `${d.id}.json`), JSON.stringify(d, null, 2) + '\n');
   }
 }
+
+/** The project as a draft would leave it: its file list, and its files' text (the draft's, else `read`'s). */
+export function draftView(files: string[], d: Pick<Draft, 'changes'>, read: (path: string) => Promise<string | undefined>) {
+  const changed = new Map(d.changes.map((c) => [c.path, c.after]));
+  return {
+    files: [...files.filter((f) => changed.get(f) !== null), ...[...changed].filter(([p, after]) => after !== null && !files.includes(p)).map(([p]) => p)].sort(),
+    read: async (path: string) => (changed.has(path) ? (changed.get(path) ?? undefined) : read(path)),
+  };
+}

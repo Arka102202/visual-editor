@@ -3,12 +3,13 @@
 // No VS Code APIs here: everything comes through `HubHost`, so it can be tested with a real MCP client.
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { relative, sep } from 'node:path';
 import { z } from 'zod';
 import type { Item, Plugin, PluginTool, ToolInput } from '@visual-editor/contract';
 import { forCard, rulesText, type MemoryEntry } from '../memory';
 import type { ProjectState } from '../projectIndex';
 import { newId, parseProposal, safePath, type Evidence, type FileChange, type Proposal } from '../proposals';
-import type { Draft } from '../drafts';
+import { draftView, type Draft } from '../drafts';
 
 export const SERVER_NAME = 'visual-editor';
 
@@ -30,6 +31,22 @@ export interface HubHost {
   tools(): { plugin: Plugin; tool: PluginTool }[];
   drafts(root: string): Draft[];
   saveDraft(root: string, d: Draft): void;
+  /**
+   * A picture of a card's Playground as the draft would leave it (the draft's own app), saved as `image` (absolute
+   * path). A string says why it can't be taken.
+   */
+  pictures?(root: string, draft: Draft, card: string): Promise<DraftPicture | string>;
+}
+
+export interface DraftPicture {
+  image: string;
+  card: string;
+  /** The card's id. */
+  cardId: string;
+  designs: string[];
+  states: string[];
+  tiles: number;
+  problems: string[];
 }
 
 /** Assistants send technical names ("claude-code"); show them nicely. */
@@ -424,6 +441,39 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
     },
   );
 
+  server.registerTool(
+    'draft_pictures',
+    {
+      title: 'Picture of a draft in the Playground',
+      description:
+        'Draws a component\'s Playground (every design in every state) as the draft would leave it, in the draft\'s own copy of the app (nothing changes in the project), and saves a picture. Look at the picture (it is a PNG file: open it with your Read tool) to see whether the designs look as asked. The picture and any problems on the page are kept with the draft as proof. Vite projects only.',
+      inputSchema: { draft: z.string().describe('The draft id'), card: z.string().describe('The component\'s card id or name, e.g. "ProjectCard"'), project: projectArg },
+    },
+    async ({ draft, card, project }) => {
+      const s = await pick(project);
+      if (typeof s === 'string') return fail(s);
+      const root = s.project.root;
+      const d = host.drafts(root).find((x) => x.id === draft);
+      if (!d) return fail(`No draft "${draft}" in ${s.project.name}.`);
+      if (d.status === 'submitted') return fail(`Draft ${d.id} is already in Review.`);
+      if (!host.pictures) return fail('Pictures can’t be taken here.');
+      let p: DraftPicture | string;
+      try {
+        p = await host.pictures(root, d, card);
+      } catch (e) {
+        return fail(`The picture couldn't be taken: ${e instanceof Error ? e.message : e}`);
+      }
+      if (typeof p === 'string') return fail(p);
+      const image = relative(root, p.image).split(sep).join('/');
+      const words = `${p.designs.length} design${p.designs.length === 1 ? '' : 's'} (${p.designs.join(', ')}) × ${p.states.length} state${p.states.length === 1 ? '' : 's'} (${p.states.join(', ')}); ${p.tiles} drawn.`;
+      const title = `Playground: ${p.card}`;
+      const e: Evidence = { kind: 'picture', title, text: `${words}${p.problems.length ? `\nProblems on the page:\n${p.problems.map((x) => `- ${x}`).join('\n')}` : ''}`, ...(p.problems.length ? { passed: false } : {}), by: 'Visual Editor', at: new Date().toISOString(), revision: d.revision, image, card: p.cardId };
+      const now = host.drafts(root).find((x) => x.id === d.id) ?? d;
+      host.saveDraft(root, { ...now, evidence: [...now.evidence.filter((x) => !(x.kind === 'picture' && x.title === title && x.revision === d.revision)), e] });
+      return reply(`Picture of ${p.card}'s Playground in draft ${d.id} (version ${d.revision}): ${p.image}\nOpen it with your Read tool to look at it. ${words}${p.problems.length ? `\nProblems on the page:\n${p.problems.map((x) => `- ${x}`).join('\n')}` : ''}\nIt is kept with the draft as proof.`);
+    },
+  );
+
   // Plugins' tools: run only for projects their plugin detected; with a draft, they see the project as it would be.
   const draftArg = z.string().optional().describe('A draft id (from save_draft): look at the project as that draft would leave it');
   for (const { plugin, tool } of host.tools()) {
@@ -437,14 +487,14 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       const root = s.project.root;
       const draft = draftId ? host.drafts(root).find((d) => d.id === draftId) : undefined;
       if (draftId && !draft) return fail(`No draft "${draftId}" in ${s.project.name}.`);
-      const changed = new Map((draft?.changes ?? []).map((c) => [c.path, c.after]));
-      const files = draft ? [...s.project.files.filter((f) => changed.get(f) !== null), ...[...changed].filter(([p, after]) => after !== null && !s.project.files.includes(p)).map(([p]) => p)] : s.project.files;
+      const real = (path: string) => host.readFile(root, path);
+      const view = draft ? draftView(s.project.files, draft, real) : undefined;
       try {
         const answer = await tool.run(input, {
-          project: draft ? { ...s.project, files } : s.project,
+          project: view ? { ...s.project, files: view.files } : s.project,
           items: s.items,
           links: s.links,
-          read: async (path) => (changed.has(path) ? (changed.get(path) ?? undefined) : host.readFile(root, path)),
+          read: view?.read ?? real,
           ...(draft ? { draft: { id: draft.id, title: draft.title, changes: draft.changes.map((c) => ({ path: c.path, after: c.after })) } } : {}),
         });
         // A check on a draft is kept with it as proof (the latest answer for the same question on the same version).
@@ -467,7 +517,7 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
 }
 
 /** ✓ passed, ✗ didn't, • a note or a check that didn't say. */
-const mark = (e: Evidence) => (e.passed === true ? '✓' : e.passed === false ? '✗' : '•');
+const mark = (e: Evidence) => (e.passed === true ? '✓' : e.passed === false ? '✗' : e.kind === 'picture' ? '▣' : '•');
 
 /** "3 files (2 new, 1 changed)" */
 function changeWords(changes: FileChange[]): string {

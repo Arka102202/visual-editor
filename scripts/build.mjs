@@ -21,8 +21,11 @@ const extensions = ['packages', 'plugins'].flatMap((group) =>
 const common = { bundle: true, platform: 'node', format: 'cjs', target: 'node20', sourcemap: true, logLevel: 'warning', loader: { '.md': 'text' } };
 const builds = extensions.flatMap((dir) => [
   { ...common, entryPoints: [join(dir, 'src/extension.ts')], outfile: join(dir, 'dist/extension.js'), external: ['vscode'] },
-  // Work done off VS Code's own thread (src/worker.ts), e.g. reading a big project: dist/worker.js.
-  ...(existsSync(join(dir, 'src/worker.ts')) ? [{ ...common, entryPoints: [join(dir, 'src/worker.ts')], outfile: join(dir, 'dist/worker.js'), external: ['vscode'] }] : []),
+  // Work done off VS Code's own thread (src/worker.ts), e.g. reading a big project, and programs run as their own
+  // process (src/draftServer.ts, a draft's app server): dist/<name>.js.
+  ...['worker', 'draftServer']
+    .filter((name) => existsSync(join(dir, `src/${name}.ts`)))
+    .map((name) => ({ ...common, entryPoints: [join(dir, `src/${name}.ts`)], outfile: join(dir, `dist/${name}.js`), external: ['vscode'] })),
   // Pages shown inside VS Code (src/<page>/main.ts) run in the browser: dist/<page>.js.
   ...readdirSync(join(dir, 'src'), { withFileTypes: true })
     .filter((d) => d.isDirectory() && existsSync(join(dir, 'src', d.name, 'main.ts')))

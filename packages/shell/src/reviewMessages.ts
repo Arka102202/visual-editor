@@ -24,8 +24,12 @@ export interface ReviewItem {
   conflicts: string[];
   /** A page at the app's address showing how it looks, before and after. */
   look?: string;
-  /** Its proof, when it came from a draft (empty: nothing was checked). */
-  evidence?: Evidence[];
+  /** Its proof, when it came from a draft (empty: nothing was checked); a picture's `src` is its address in the page. */
+  evidence?: (Evidence & { src?: string })[];
+  /** Cards that can be shown in the Playground whose files it changes (each can be tried live). */
+  cards?: { id: string; label: string }[];
+  /** Its pictures shown live (the Playground running, by card id): starting, running at `url`, or why not. */
+  live?: Record<string, { url?: string; progress?: string; error?: string }>;
 }
 
 /** Shell → review page. */
@@ -52,4 +56,7 @@ export type FromReview =
   | { type: 'undo'; id: string }
   | { type: 'open'; path: string; line?: number }
   /** Start the app again, to show how a proposal looks. */
-  | { type: 'app' };
+  | { type: 'app' }
+  /** Show a picture in its proof live (the card's Playground, running), or the picture again. */
+  | { type: 'live'; id: string; card: string }
+  | { type: 'unlive'; id: string; card: string };

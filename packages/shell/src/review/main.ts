@@ -58,6 +58,20 @@ addStyles(`
   .proof .mark { font-weight: 700; width: 1em; text-align: center; }
   .proof .ok { color: var(--vscode-testing-iconPassed, #73c991); }
   .proof .bad { color: var(--vscode-errorForeground, #f48771); }
+  .proof .tryrow { padding-top: 8px; }
+  .proof .tryrow + .tryrow { border-top: 1px solid var(--vscode-panel-border, #8884); }
+  .proof .trytitle { margin: 0 12px 6px 28px; }
+  .proof .picturebar { display: flex; gap: 4px; margin: 0 12px 6px 28px; }
+  .proof .livebox { position: relative; overflow: hidden; margin: 0 12px 12px 28px; border: 1px solid var(--vscode-panel-border, #8884); border-radius: 4px; background: #fff; }
+  .proof .picture.fullview { position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column; padding: 10px 14px 14px; background: var(--vscode-editor-background, #1e1e1e); }
+  .proof .picture.fullview .picturebar { margin: 0 0 8px; }
+  .proof .picture.fullview .livebox { flex: 1; margin: 0; height: auto; }
+  .proof .picture.fullview .livebox.actual { height: auto !important; resize: none; }
+  .proof .livebox.actual { height: 560px !important; resize: vertical; }
+  .proof .livebox iframe { position: absolute; top: 0; left: 0; border: 0; transform-origin: 0 0; }
+  .proof .picture .warn { margin: 0 12px 12px 28px; }
+  .proof .liveprogress { margin: 0 12px 8px 28px; opacity: .75; }
+  .proof img { display: block; max-width: calc(100% - 40px); margin: 0 12px 12px 28px; border: 1px solid var(--vscode-panel-border, #8884); border-radius: 4px; background: #fff; }
   .proof pre { margin: 0; padding: 8px 12px 10px 28px; white-space: pre-wrap; font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; max-height: 320px; overflow: auto; }
   .lookhead { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; opacity: .6; margin: 0 0 6px; }
   .look { position: relative; height: 420px; min-height: 160px; resize: vertical; overflow: hidden; border: 1px solid var(--vscode-panel-border, #8884); border-radius: 6px; margin-bottom: 18px; background: #fff; }
@@ -162,6 +176,19 @@ function drawDetail(item: ReviewItem) {
   if (actions.childElementCount) detail.append(actions);
 
   if (item.evidence) detail.append(...drawProof(item));
+  // Cards it changes that can be tried live, unless a picture in its proof already shows them.
+  const pictured = new Set((item.evidence ?? []).flatMap((e) => (e.card ? [e.card] : [])));
+  const tryable = (item.cards ?? []).filter((c) => !pictured.has(c.id));
+  if (tryable.length) {
+    detail.append(el('div', 'lookhead', 'How it looks: try it live'));
+    const box = el('div', 'proof');
+    for (const c of tryable) {
+      const row = el('div', 'tryrow');
+      row.append(el('div', 'trytitle', `Playground: ${c.label}`), drawPicture(item, { kind: 'picture', title: `Playground: ${c.label}`, text: '', by: '', at: '', revision: 0, card: c.id }));
+      box.append(row);
+    }
+    detail.append(box);
+  }
   if (item.look) detail.append(el('div', 'lookhead', 'How it looks: before and after (live, with fixed data)'), drawLook(item.look));
   for (const f of item.files) detail.append(drawFile(f));
 
@@ -194,16 +221,129 @@ function drawProof(item: ReviewItem): HTMLElement[] {
     const entry = el('details');
     const summary = el('summary');
     summary.append(
-      el('span', `mark${e.passed === true ? ' ok' : e.passed === false ? ' bad' : ''}`, e.passed === true ? '✓' : e.passed === false ? '✗' : '•'),
+      el('span', `mark${e.passed === true ? ' ok' : e.passed === false ? ' bad' : ''}`, e.passed === true ? '✓' : e.passed === false ? '✗' : e.kind === 'picture' ? '▣' : '•'),
       el('span', undefined, e.title),
-      el('span', 'by', e.kind === 'check' ? `checked by ${e.by}` : `said by ${e.by}`),
+      el('span', 'by', e.kind === 'note' ? `said by ${e.by}` : e.kind === 'picture' ? `drawn by ${e.by}` : `checked by ${e.by}`),
     );
     entry.append(summary, el('pre', undefined, e.text));
+    // A picture is open from the start: it's the quickest proof to look at. It can also be tried live.
+    if (e.src || e.card) entry.append(drawPicture(item, e));
+    if (e.src) entry.open = true;
     box.append(entry);
   }
   out.push(box);
   return out;
 }
+
+/**
+ * A picture in the proof, or the same Playground live (running with the proposal's changes on top, in its own app):
+ * click the designs, change their states, press their buttons, before approving.
+ */
+function drawPicture(item: ReviewItem, e: NonNullable<ReviewItem['evidence']>[number]): HTMLElement {
+  const live = e.card ? item.live?.[e.card] : undefined;
+  const box = el('div', `picture${live?.url && liveFull.has(live.url) ? ' fullview' : ''}`);
+  if (e.card) {
+    const bar = tray(el('div', 'picturebar'));
+    if (live?.url) {
+      // Fit (every design at once, like the picture) or actual size (move around by scrolling).
+      const actual = liveActual.has(live.url);
+      const zoom = iconButton(actual ? 'fitMap' : 'zoomIn', actual ? 'Fit: see every design at once' : 'Actual size: as big as in the app (scroll to move around)');
+      const url = live.url;
+      zoom.addEventListener('click', () => {
+        if (liveActual.has(url)) liveActual.delete(url);
+        else liveActual.add(url);
+        drawDetail(item);
+      });
+      // Full screen: it fills the Review tab (Esc, or the button again, brings it back).
+      const full = liveFull.has(url);
+      const fullButton = iconButton(full ? 'restore' : 'maximize', full ? 'Back to its place in Review (Esc)' : 'Full screen: fill the Review tab with it');
+      fullButton.addEventListener('click', () => toggleFull(item, url));
+      bar.append(zoom, fullButton);
+    }
+    if (live) bar.append(button('close', 'Back to the picture: stop showing it live', undefined, { type: 'unlive', id: item.id, card: e.card }));
+    else bar.append(button('board', item.status === 'proposed' ? 'Try it live: the Playground running with these changes (nothing changes in your files until you approve)' : 'Try it live: the Playground running as your files are now', undefined, { type: 'live', id: item.id, card: e.card }));
+    box.append(bar);
+  }
+  if (live?.url) {
+    let frame = liveFrames.get(live.url);
+    if (!frame) {
+      frame = el('div', 'livebox');
+      const iframe = el('iframe');
+      iframe.src = live.url;
+      iframe.title = `${e.title}, live`;
+      frame.append(iframe);
+      liveFrames.set(live.url, frame);
+      // The page is as big as the picture was; fitted, it's shrunk to the box's width (clicks still land right).
+      const size = { w: 1400, h: 900 };
+      const url = live.url;
+      const fit = () => {
+        const actual = liveActual.has(url);
+        const full = liveFull.has(url);
+        // Fitted: the whole page in view (in full screen, both ways); at actual size, the box scrolls.
+        const scale = actual ? 1 : Math.min(1, frame!.clientWidth / size.w, full ? frame!.clientHeight / size.h : 1);
+        // At actual size the page is the box's size and scrolls itself (the wheel lands in it, not in the box). Fitted,
+        // it's the picture's size shrunk (in full screen also filling the rest of the box, so no empty band shows).
+        iframe.style.width = actual ? '100%' : `${Math.max(size.w, full ? frame!.clientWidth / scale : 0)}px`;
+        iframe.style.height = actual ? '100%' : `${Math.max(size.h, full ? frame!.clientHeight / scale : 0)}px`;
+        iframe.style.transform = scale < 1 ? `scale(${scale})` : '';
+        frame!.style.height = full ? '' : `${Math.round(size.h * scale)}px`;
+        frame!.classList.toggle('actual', actual);
+      };
+      if (e.src) {
+        const probe = new Image();
+        probe.onload = () => {
+          size.w = probe.naturalWidth || size.w;
+          size.h = probe.naturalHeight || size.h;
+          fit();
+        };
+        probe.src = e.src;
+      }
+      new ResizeObserver(fit).observe(frame);
+      liveFits.set(url, fit);
+    }
+    box.append(frame);
+    requestAnimationFrame(() => liveFits.get(live.url!)?.());
+  } else if (live?.error) {
+    const warn = el('div', 'warn');
+    warn.append(el('b', undefined, 'It couldn’t be shown live:'), el('div', undefined, live.error));
+    box.append(warn);
+  } else if (live?.progress) {
+    box.append(el('div', 'liveprogress', live.progress));
+  }
+  if (e.src && !live?.url) {
+    const img = el('img');
+    img.src = e.src;
+    img.alt = e.title;
+    box.append(img);
+  }
+  return box;
+}
+
+/** Live Playgrounds: kept between redraws, so they don't load again each time Review refreshes. */
+const liveFrames = new Map<string, HTMLElement>();
+/** How each fits its box (again when the box or the zoom changes). */
+const liveFits = new Map<string, () => void>();
+/** Live Playgrounds shown at actual size (the others are fitted). */
+const liveActual = new Set<string>();
+/** Live Playgrounds filling the Review tab. */
+const liveFull = new Set<string>();
+
+function toggleFull(item: ReviewItem, url: string) {
+  if (liveFull.has(url)) liveFull.delete(url);
+  else {
+    liveFull.clear();
+    liveFull.add(url);
+  }
+  drawDetail(item);
+}
+
+// Esc brings a full-screen Playground back to its place.
+addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !liveFull.size) return;
+  liveFull.clear();
+  const item = current?.items.find((i) => i.id === current?.selected);
+  if (item) drawDetail(item);
+});
 
 /** The look page in a frame once the app is running; until then, how starting it goes. */
 function drawLook(look: string): HTMLElement {
