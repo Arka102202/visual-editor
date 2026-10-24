@@ -35,6 +35,12 @@ export const PLAYGROUND_CSS = `
   .vp-details .row:hover { background: var(--vscode-list-hoverBackground, #8882); }
   .vp-details .row.on { background: var(--vscode-list-activeSelectionBackground, #8884); color: var(--vscode-list-activeSelectionForeground, inherit); }
   .vp-details .row .note { opacity: .6; font-size: 11px; }
+  .vp-details .grp { display: flex; align-items: center; gap: 8px; margin: 10px 0 2px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; opacity: .85; }
+  .vp-details .grp .name { flex: 1; }
+  .vp-details .grp .tag { text-transform: none; letter-spacing: 0; font-weight: 500; font-size: 11px; padding: 1px 8px; border-radius: 10px; background: color-mix(in srgb, var(--vscode-foreground) 12%, transparent); }
+  .vp-details .grp .tag.none { color: var(--vscode-editorWarning-foreground, #cca700); }
+  .vp-details .row.sub { padding-left: 16px; }
+  .vp-details .row.empty { opacity: .5; cursor: default; }
   .vp-details .file { font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; opacity: .8; }
   .vp-details pre { margin: 4px 0 0; padding: 8px; border-radius: 4px; background: color-mix(in srgb, var(--vscode-foreground) 6%, transparent); font: 11px/1.5 var(--vscode-editor-font-family, monospace); white-space: pre-wrap; word-break: break-word; }
   .vp-wait { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; color: #555; font-size: 13px; }
@@ -74,10 +80,55 @@ export function useTip(item: Item | undefined, d: Design | undefined, situation:
   return { tip: `Use this design: make ${d.name} the ${situation ? `design for “${situation}”` : `one ${item?.label ?? 'it'} uses`} (a proposal you review first, with before and after)`, can: true };
 }
 
+/** The title bar's summary: "3 variants · 3 situations · 4 states". */
+export function summary(p: NonNullable<Item['preview']>): string {
+  const n = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
+  return [n(p.variants.length, 'variant'), p.situations ? n(p.situations.names.length, 'situation') : '', n(p.states.length, 'state')].filter(Boolean).join(' · ');
+}
+
+/**
+ * Details' states, in one list: with situations, each situation is a small heading with its design in use (as a tag)
+ * and its states under it; without, the states. Only the state shown is marked; picking a state shows it.
+ */
+export function stateList(p: NonNullable<Item['preview']>, state: string | undefined, pick: (state: string) => void): HTMLElement[] {
+  const item = (name: string, sub: boolean) => {
+    const r = el('div', `row${sub ? ' sub' : ''}${name === state ? ' on' : ''}`);
+    r.append(el('span', undefined, name));
+    r.addEventListener('click', () => pick(name));
+    return r;
+  };
+  const s = p.situations;
+  if (!s) return [el('h4', undefined, 'States'), ...p.states.map((x) => item(x, false))];
+  const out: HTMLElement[] = [el('h4', undefined, 'Situations and states')];
+  const groups = [...s.names.map((name) => ({ name, states: p.states.filter((x) => s.ofState[x] === name) })), { name: '', states: p.states.filter((x) => !s.names.includes(s.ofState[x])) }];
+  for (const g of groups) {
+    if (!g.states.length && !g.name) continue;
+    if (g.name) {
+      const head = el('div', 'grp');
+      const design = p.variants.find((v) => v.inUseFor?.includes(g.name));
+      head.append(el('span', 'name', g.name), el('span', `tag${design ? '' : ' none'}`, design ? design.name : 'no design in use'));
+      head.title = design ? `${design.name} is the design in use for “${g.name}”` : `No design is in use for “${g.name}”`;
+      out.push(head);
+    }
+    out.push(...g.states.map((x) => item(x, !!g.name)));
+    if (g.name && !g.states.length) out.push(el('div', 'row sub empty', 'no state shows it yet'));
+  }
+  return out;
+}
+
+/** Reset's look: dimmed until something was clicked or typed in the board (then there's something to undo). */
+export function showReset(b: HTMLButtonElement, touched: boolean, what: string) {
+  const tip = touched ? `Reset: ${what} back to the starting data (what you clicked or typed is undone)` : 'Reset: nothing to undo yet (click or type inside a tile first: delete a card, open a menu, type in a field)';
+  b.classList.toggle('dim', !touched);
+  b.dataset.tip = tip;
+  b.setAttribute('aria-label', tip);
+}
+
 /** How a design's use reads in Details: "in use", "in use for primary, secondary", "not in use". */
 export function useWords(d: Design, situations: boolean): string {
-  if (situations) return d.inUseFor?.length ? `in use for ${d.inUseFor.join(', ')}` : 'not in use';
-  return d.inUse ? 'in use' : 'not in use';
+  const made = d.for?.length ? ` · made for ${d.for.join(', ')}` : '';
+  if (situations) return (d.inUseFor?.length ? `in use for ${d.inUseFor.join(', ')}` : 'not in use') + made;
+  return (d.inUse ? 'in use' : 'not in use') + made;
 }
 
 /** A short message at the bottom of a window that goes away by itself. */
@@ -116,6 +167,9 @@ export class Playground {
   private readonly compareButton = iconButton('compare', '');
   private readonly previewButton = iconButton('single', '');
   private readonly useButton = iconButton('choose', '');
+  private readonly resetButton = iconButton('restart', 'Reset');
+  /** Something was clicked or typed in the board since it was drawn (Reset has something to undo). */
+  private touched = false;
   private readonly details = el('div', 'vp-details');
   private zoom = 1;
   private fit = true;
@@ -166,8 +220,14 @@ export class Playground {
       const situation = situationOf(this.item, this.chosen?.state);
       if (this.item && useTip(this.item, v, situation).can) deps.useVariant(this.item, v!.id, situation);
     });
-    const reset = iconButton('undo', 'Reset: every tile back to its starting data (what you clicked or typed is undone)');
-    reset.addEventListener('click', () => this.toPage({ type: 'reset' }));
+    const reset = this.resetButton;
+    reset.addEventListener('click', () => {
+      if (!this.touched) return;
+      this.touched = false;
+      showReset(reset, false, 'every tile');
+      this.toPage({ type: 'reset' });
+    });
+    showReset(reset, false, 'every tile');
     bar.append(zoomOut, this.zoomText, zoomIn, this.fitButton, el('span', 'sep'), reset, el('span', 'sep'), this.compareButton, this.previewButton, this.useButton);
 
     const main = el('div', 'vp-main');
@@ -192,7 +252,7 @@ export class Playground {
     this.item = item;
     this.frame.title.textContent = `Playground: ${item.label}`;
     const p = item.preview;
-    this.frame.hint.textContent = p ? `${p.variants.length} variant${p.variants.length === 1 ? '' : 's'} · ${p.states.length} state${p.states.length === 1 ? '' : 's'} · fixed data, no network` : '';
+    this.frame.hint.textContent = p ? `${summary(p)} · fixed data, no network` : '';
     this.frame.open();
     this.onToggle?.();
     this.showCompare();
@@ -214,7 +274,7 @@ export class Playground {
     if (this.item?.id !== item.id) return;
     this.item = item;
     const p = item.preview;
-    if (p) this.frame.hint.textContent = `${p.variants.length} variant${p.variants.length === 1 ? '' : 's'} · ${p.states.length} state${p.states.length === 1 ? '' : 's'} · fixed data, no network`;
+    if (p) this.frame.hint.textContent = `${summary(p)} · fixed data, no network`;
     this.showCompare();
     this.showDetails();
   }
@@ -243,6 +303,10 @@ export class Playground {
     const note = pageNote(data, this.item?.label ?? 'It');
     if (note) this.say(note);
     this.fromPageExtra(data);
+    if (data.type === 'touched') {
+      this.touched = true;
+      showReset(this.resetButton, true, 'every tile');
+    }
     if (data.type === 'drawn') {
       // Drawn again (a reload): the chosen tile and Compare go on.
       if (this.chosen) this.toPage({ type: 'choose', ...this.chosen });
@@ -272,6 +336,8 @@ export class Playground {
     this.notes.replaceChildren();
     this.iframe?.remove();
     const iframe = el('iframe');
+    this.touched = false;
+    showReset(this.resetButton, false, 'every tile');
     iframe.title = `Playground of ${this.item.label}`;
     iframe.src = `${this.app}/__ve/preview?item=${encodeURIComponent(this.item.id)}`;
     this.iframe = iframe;
@@ -369,8 +435,7 @@ export class Playground {
     const open = (path: string) => () => this.deps.post({ type: 'open', path });
     const file = (path: string) => path.split('/').pop() ?? path;
     const out: HTMLElement[] = [el('h4', undefined, 'Variant'), row(v.name, useWords(v, !!p.situations), false, open(v.path)), row(file(v.path), 'open', false, open(v.path), 'file')];
-    out.push(el('h4', undefined, 'States'));
-    for (const s of p.states) out.push(row(s, p.situations?.ofState[s] && p.situations.ofState[s] !== s ? p.situations.ofState[s] : undefined, s === c.state, () => this.choose(c.variant, s)));
+    out.push(...stateList(p, c.state, (s) => this.choose(c.variant, s)));
     out.push(el('h4', undefined, `Fixed data · ${c.state}`));
     if (this.data) {
       out.push(row(file(this.data.file), 'open', false, open(this.data.file), 'file'));

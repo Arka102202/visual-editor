@@ -8,7 +8,7 @@ import type { FromMap } from '../mapMessages';
 import { el } from '../ui/dom';
 import { iconButton, tray, type Icon } from '../ui/buttons';
 import { Frame, type LayoutStore } from '../ui/frame';
-import { inUseFor, makeToast, pageNote, situationOf, useTip, useWords } from './playground';
+import { inUseFor, makeToast, pageNote, showReset, situationOf, stateList, useTip, useWords } from './playground';
 
 export const PREVIEW_CSS = `
   .vq-stage.fill .vp-device { margin: 0; }
@@ -42,6 +42,9 @@ export class PreviewWindow {
   private readonly sizeButtons = new Map<string, HTMLButtonElement>();
   private readonly fitButton = iconButton('fitMap', 'Zoom to fit: the whole screen size in view (off: real size, scroll to see it all)', { cls: 'on' });
   private readonly details = el('div', 'vp-details');
+  private readonly resetButton = iconButton('restart', 'Reset');
+  /** Something was clicked or typed since it was drawn (Reset has something to undo). */
+  private touched = false;
   private readonly useButton = iconButton('choose', '');
   private iframe: HTMLIFrameElement | undefined;
   private item: Item | undefined;
@@ -90,8 +93,14 @@ export class PreviewWindow {
       const situation = situationOf(this.item, this.state);
       if (this.item && useTip(this.item, v, situation).can) deps.useVariant(this.item, v!.id, situation);
     });
-    const reset = iconButton('undo', 'Reset: back to the starting data (what you clicked or typed is undone)');
-    reset.addEventListener('click', () => this.iframe?.contentWindow?.postMessage({ source: 've-preview', type: 'reset' }, '*'));
+    const reset = this.resetButton;
+    reset.addEventListener('click', () => {
+      if (!this.touched) return;
+      this.touched = false;
+      showReset(reset, false, 'it');
+      this.iframe?.contentWindow?.postMessage({ source: 've-preview', type: 'reset' }, '*');
+    });
+    showReset(reset, false, 'it');
     bar.append(sizes, rotate, el('span', 'sep'), this.fitButton, this.zoomText, el('span', 'sep'), reset, el('span', 'sep'), this.useButton);
 
     const main = el('div', 'vp-main');
@@ -160,6 +169,10 @@ export class PreviewWindow {
     const note = pageNote(data, this.item?.label ?? 'It');
     if (note) this.say(note);
     this.fromPageExtra(data);
+    if (data.type === 'touched') {
+      this.touched = true;
+      showReset(this.resetButton, true, 'it');
+    }
     if (data.type === 'drawn' && data.found === false) this.say(`There’s no variant “${this.variant}” any more: choose another in Details.`);
     if (data.type === 'data') {
       this.data = { file: String(data.file), states: (data.states ?? {}) as Record<string, unknown> };
@@ -173,6 +186,8 @@ export class PreviewWindow {
     this.notes.replaceChildren();
     this.iframe?.remove();
     const iframe = el('iframe');
+    this.touched = false;
+    showReset(this.resetButton, false, 'it');
     iframe.title = `Preview of ${this.item.label}`;
     iframe.src = `${this.app}/__ve/preview?item=${encodeURIComponent(this.item.id)}&variant=${encodeURIComponent(this.variant)}&state=${encodeURIComponent(this.state)}`;
     this.iframe = iframe;
@@ -234,8 +249,7 @@ export class PreviewWindow {
     for (const v of p.variants) out.push(row(v.name, p.situations ? useWords(v, true) : v.inUse ? 'in use' : undefined, v.id === this.variant, () => this.switchTo(v.id, this.state)));
     const shown = p.variants.find((v) => v.id === this.variant);
     if (shown) out.push(row(file(shown.path), 'open', false, open(shown.path), 'file'));
-    out.push(el('h4', undefined, 'States'));
-    for (const s of p.states) out.push(row(s, p.situations?.ofState[s] && p.situations.ofState[s] !== s ? p.situations.ofState[s] : undefined, s === this.state, () => this.switchTo(this.variant, s)));
+    out.push(...stateList(p, this.state, (s) => this.switchTo(this.variant, s)));
     out.push(el('h4', undefined, `Fixed data · ${this.state}`));
     if (this.data) {
       out.push(row(file(this.data.file), 'open', false, open(this.data.file), 'file'));
