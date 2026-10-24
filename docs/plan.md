@@ -150,7 +150,7 @@ A one-line proposal, with the before and after shown live in Review, and Undo.
   proposal.
 - **Done when:** a page with links draws and its links show the note.
 
-### 1.12 Tie it together
+### 1.12 Tie it together ✅ done
 - **You get:**
   - card badges ("3 designs · 2 situations · 4 states");
   - a **Variants** tab in Focus;

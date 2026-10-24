@@ -3,7 +3,7 @@
 // with the facts the panel needs from the project: which components are the developer's own, and which files export
 // stores (Zustand, Redux).
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Item, PreviewPanel, ProjectInfo } from '@visual-editor/contract';
 
@@ -42,6 +42,7 @@ export function appPanel(scripts: { page: string; panel: string }): PreviewPanel
     facts: (project: ProjectInfo, items: Item[]) => ({
       components: [...new Set(items.filter((i) => i.map === 'components').map((i) => i.label))],
       stores: storeFiles(project),
+      ...designFacts(project, items),
     }),
   };
 }
@@ -55,4 +56,20 @@ export function builtScripts(dist: string): { page: string; panel: string } | un
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Which components are designs (by their function's name, as React reports it), of which card, and in use or not; and
+ * which cards are previewable: so a picked element can say "Compact design of ProjectCard".
+ */
+export function designFacts(project: ProjectInfo, items: Item[], read: (path: string) => string | undefined = (p) => (existsSync(join(project.root, p)) ? readFileSync(join(project.root, p), 'utf8') : undefined)) {
+  const designs: Record<string, { card: string; design: string; id: string; inUse: boolean; inUseFor?: string[] }> = {};
+  for (const i of items) {
+    for (const v of i.preview?.variants ?? []) {
+      const text = read(v.path) ?? '';
+      const name = /export\s+default\s+function\s+([A-Z][\w$]*)/.exec(text)?.[1] ?? /export\s+default\s+([A-Z][\w$]*)\s*;?\s*$/m.exec(text)?.[1];
+      if (name) designs[name] = { card: i.label, design: v.name, id: v.id, inUse: v.inUse, ...(v.inUseFor ? { inUseFor: v.inUseFor } : {}) };
+    }
+  }
+  return { designs, previewable: items.filter((i) => i.preview).map((i) => i.label) };
 }

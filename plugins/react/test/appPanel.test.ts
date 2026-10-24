@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { checkPlugin } from '../../../packages/shell/src/registry';
-import { appPanel, isStoreFile, storeFiles } from '../src/previewPanel';
+import type { Item } from '@visual-editor/contract';
+import { appPanel, designFacts, isStoreFile, storeFiles } from '../src/previewPanel';
 import { reactPlugin } from '../src/plugin';
 
 test('react app panel: finds the files that make stores (Zustand, Redux)', () => {
@@ -28,5 +29,27 @@ test('react app panel: a Preview panel the shell accepts, with the facts it need
     { id: 'react:component:b', map: 'components', kind: 'shared', label: 'Button' },
     { id: 'react:route:/', map: 'pages', kind: 'route', label: '/' },
   ])) as { components: string[]; stores: string[] };
-  assert.deepEqual(facts, { components: ['Editor', 'Button'], stores: [] });
+  assert.deepEqual(facts, { components: ['Editor', 'Button'], stores: [], designs: {}, previewable: [] });
+});
+
+test('react app panel: which components are designs, of which card (so a picked element can say so)', () => {
+  const at = 'src/components/shared/Button';
+  const item: Item = {
+    id: `react:component:${at}/index.tsx#Button`, map: 'components', kind: 'component', label: 'Button', source: { path: `${at}/index.tsx` },
+    preview: {
+      variants: [
+        { id: 'rounded', name: 'Rounded', path: `${at}/Button.variant.tsx`, inUse: true, inUseFor: ['primary', 'secondary'] },
+        { id: 'sharp', name: 'Sharp', path: `${at}/Button.sharp.variant.tsx`, inUse: true, inUseFor: ['danger'] },
+      ],
+      states: ['primary'],
+    },
+  };
+  const texts: Record<string, string> = {
+    [`${at}/Button.variant.tsx`]: "export const variant = { id: 'rounded' }\nexport default function ButtonRounded() { return null }\n",
+    [`${at}/Button.sharp.variant.tsx`]: "const ButtonSharp = () => null\nexport default ButtonSharp\n",
+  };
+  const f = designFacts({ root: '/x', name: 'shop', files: Object.keys(texts) }, [item], (p) => texts[p]);
+  assert.deepEqual(f.previewable, ['Button']);
+  assert.deepEqual(f.designs.ButtonRounded, { card: 'Button', design: 'Rounded', id: 'rounded', inUse: true, inUseFor: ['primary', 'secondary'] });
+  assert.equal(f.designs.ButtonSharp?.design, 'Sharp');
 });

@@ -20,6 +20,10 @@ interface Node {
 interface Facts {
   components?: string[];
   stores?: string[];
+  /** Design components (by function name): of which card, which design, in use or not. */
+  designs?: Record<string, { card: string; design: string; id: string; inUse: boolean; inUseFor?: string[] }>;
+  /** Cards that can be previewed (by name). */
+  previewable?: string[];
 }
 
 const ICONS = {
@@ -51,6 +55,8 @@ const CSS = `
   .ra-detail, .ra-page { flex: 1; min-height: 0; overflow: auto; padding: 8px 10px 14px; }
   .ra h4 { margin: 12px 0 4px; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; opacity: .65; }
   .ra .ra-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .ra .ra-design { display: flex; align-items: center; gap: 8px; margin: 6px 0 2px; padding: 6px 8px; border-radius: 6px; font-size: 12px; background: color-mix(in srgb, var(--vscode-charts-yellow, #cca700) 12%, transparent); }
+  .ra .ra-design .grow { flex: 1; min-width: 0; }
   .ra .ra-title b { font-family: var(--vscode-editor-font-family, monospace); font-size: 13px; color: var(--tok-type, #4ec9b0); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .ra .ra-title .tray { margin-left: auto; flex: none; }
   .ra .ra-line { display: flex; gap: 6px; align-items: flex-start; padding: 1px 0; font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; min-width: 0; }
@@ -373,6 +379,24 @@ const CSS = `
     acts.append(log);
     title.append(acts);
     box.append(title);
+
+    // A design (or a previewable card): which one, and its Preview and Playground. Looked for in this component and
+    // the ones above it (an element in a card's design belongs to that card).
+    const chain = [d.name, ...(d.owners ?? []).map((o: { name: string }) => o.name)];
+    const found = chain.find((n) => facts.designs?.[n] || facts.previewable?.includes(n));
+    if (found) {
+      const design = facts.designs?.[found];
+      const card = design ? design.card : found;
+      const row = el('div', 'ra-design');
+      const use = design?.inUseFor?.length ? `in use for ${design.inUseFor.join(', ')}` : design?.inUse ? 'the one in use' : '';
+      row.append(el('span', 'grow', design ? `${found === d.name ? '' : 'Part of '}${design.design} design of ${card}${use ? ` (${use})` : ''}` : `${found === d.name ? '' : 'Part of '}${card}, which can be previewed`));
+      const one = button('single', `Preview: ${card}${design ? ` (${design.design})` : ''} on its own, with fixed data`);
+      one.addEventListener('click', () => api.preview(card, design?.id));
+      const all = button('board', `Playground: every design of ${card} in every state`);
+      all.addEventListener('click', () => api.playground(card));
+      row.append(one, all);
+      box.append(row);
+    }
 
     box.append(el('h4', undefined, 'Props'));
     const props = Object.entries(d.props ?? {});
