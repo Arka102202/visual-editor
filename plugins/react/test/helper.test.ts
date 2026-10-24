@@ -4,10 +4,10 @@ import { helperTemplate, helperVersion, updateHelper } from '../src/helper';
 
 const project = { root: '/x', name: 'shop', files: ['src/main.tsx', 'src/visual-editor.tsx'] };
 
-test('helper: the one the plugin ships is version 3', () => {
+test('helper: the one the plugin ships is version 4', () => {
   const t = helperTemplate();
   assert.ok(t, 'found next to the plugin');
-  assert.equal(helperVersion(t), 3);
+  assert.equal(helperVersion(t), 4);
   // Version 1 didn't say its version.
   assert.equal(helperVersion('export function mountPreview() {}'), 1);
 });

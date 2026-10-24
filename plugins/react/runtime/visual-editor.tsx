@@ -1,4 +1,4 @@
-// Visual Editor's helper, version 3 (docs/variants.md). A component's looks (designs) are kept apart from its data, and
+// Visual Editor's helper, version 4 (docs/variants.md). A component's looks (designs) are kept apart from its data, and
 // its data has two parts: dynamic (the real data, in the app) and static (a working prototype with no network, in
 // Preview and the Playground). Visual Editor keeps this file in place (.visual-editor/react/, imported as
 // @visual-editor/react) and updates it when it ships a newer version: don't edit it. Each component folder uses it:
@@ -14,13 +14,14 @@
 //   Name.variant.tsx, Name.<name>.variant.tsx   designs: looks only (UI state like "menu open" is fine; app data is not).
 //
 // Folders made with version 1 (a mock of views, MockData in the chooser) keep working. Version 3: the Playground groups
-// rows by situation, and a design not made for a row's situation says so in its tile.
+// rows by situation, and a design not made for a row's situation says so in its tile. Version 4: a big board draws only
+// the tiles near the screen (the others wait as light placeholders), so many designs and states stay smooth.
 
-import { Component, createContext, Fragment, lazy, Suspense, useContext, useMemo, type ComponentType, type Context, type ReactNode } from 'react';
+import { Component, createContext, Fragment, lazy, Suspense, useContext, useEffect, useMemo, useRef, useState, type ComponentType, type Context, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 /** Which version of this helper the project has (Visual Editor offers an update when it's older). */
-export const HELPER_VERSION = 3;
+export const HELPER_VERSION = 4;
 
 /**
  * real: the app (the dynamic part, the design in use).
@@ -83,6 +84,7 @@ export function goTo(path: string) {
  */
 export function StaticPart<P extends object>({ start, part, props }: { start: () => Promise<{ states: Record<string, object> }>; part: () => Promise<{ default: ComponentType<any> }>; props: P }) {
   const state = useMockState();
+  const waiting = useWaiting();
   const Loaded = useMemo(
     () =>
       lazy(async () => {
@@ -99,10 +101,18 @@ export function StaticPart<P extends object>({ start, part, props }: { start: ()
     [state],
   );
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={waiting}>
       <Loaded props={props} />
     </Suspense>
   );
+}
+
+/**
+ * While a board tile's code loads, it keeps a placeholder's size (so the board doesn't shrink and pull far tiles into
+ * view); anything inside a preview (a page's parts) shows nothing meanwhile, as in the app.
+ */
+function useWaiting(): ReactNode {
+  return useVariantKey() === 'mock' ? <div data-ve-waiting="" /> : null;
 }
 
 /**
@@ -111,6 +121,7 @@ export function StaticPart<P extends object>({ start, part, props }: { start: ()
  */
 export function MockData<P extends object, V extends object>({ load, props, render }: { load: () => Promise<{ states: Record<string, V> }>; props: P; render: (view: V) => ReactNode }) {
   const state = useMockState();
+  const waiting = useWaiting();
   const Loaded = useMemo(
     () =>
       lazy(async () => {
@@ -126,7 +137,7 @@ export function MockData<P extends object, V extends object>({ load, props, rend
     [state],
   );
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={waiting}>
       <Loaded props={props} />
     </Suspense>
   );
@@ -217,12 +228,34 @@ export function makeSwitcher<V extends object, S extends string = string>(design
       return <InUse {...view} />;
     }
     return (
-      <Suspense fallback={null}>
+      <Suspense fallback={<div data-ve-waiting="" />}>
         <Designs view={view} only={only} />
       </Suspense>
     );
   };
 }
+
+/** A tile drawn once it's near the screen (and kept after): a board of many tiles stays light. */
+function WhenNear({ children }: { children: ReactNode }) {
+  const [near, setNear] = useState(false);
+  const spot = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (near || !spot.current) return;
+    const seen = new IntersectionObserver((all) => {
+      if (all.some((e) => e.isIntersecting)) {
+        setNear(true);
+        seen.disconnect();
+      }
+      // Measured from this page itself (not the window around the frame, where a zoomed-out board's margin grows).
+    }, { root: document, rootMargin: '400px' });
+    seen.observe(spot.current);
+    return () => seen.disconnect();
+  }, [near]);
+  return near ? <>{children}</> : <div ref={spot} data-ve-waiting="" />;
+}
+
+/** From how many tiles a board draws only those near the screen. */
+const MANY_TILES = 12;
 
 /** What a preview can be told: draw again from the starting data. */
 export interface PreviewHandle {
@@ -255,16 +288,22 @@ export function mountPreview(
   const columns = options.variants?.length ?? Math.max(1, options.columns ?? 1);
   const Wrap = options.wrap ?? Fragment;
   let round = 0;
+  // A big board draws only the tiles near the screen (each waits as a light placeholder until then).
+  const many = tiles.length * options.states.length > MANY_TILES;
+  const tile = (id: string | undefined, state: string) => {
+    const drawn = (
+      <OnlyContext.Provider value={id}>
+        <VariantKeyProvider value="mock" state={state}>
+          <Chooser />
+        </VariantKeyProvider>
+      </OnlyContext.Provider>
+    );
+    return <Fragment key={id ?? 'every'}>{many ? <WhenNear>{drawn}</WhenNear> : drawn}</Fragment>;
+  };
   const row = (state: string) => (
     <Fragment key={state}>
       <div data-ve-state={state}>{state}</div>
-      {tiles.map((id) => (
-        <OnlyContext.Provider key={id ?? 'every'} value={id}>
-          <VariantKeyProvider value="mock" state={state}>
-            <Chooser />
-          </VariantKeyProvider>
-        </OnlyContext.Provider>
-      ))}
+      {tiles.map((id) => tile(id, state))}
     </Fragment>
   );
   // With situations, the rows come in groups: a heading across the board, then that situation's states.

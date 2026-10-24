@@ -134,6 +134,9 @@ try {
   [data-ve-group] { font: 600 12px/1.4 ui-sans-serif, system-ui, sans-serif; letter-spacing: .04em; text-transform: uppercase; color: #3b82f6; padding: 14px 0 0; border-top: 1px solid rgba(128,128,128,.25); }
   [data-ve-group]:first-child { border-top: 0; padding-top: 0; }
   [data-ve-not-for] { font: 12px/1.5 ui-sans-serif, system-ui, sans-serif; opacity: .45; padding: 6px 0; min-width: 120px; }
+  /* A tile waiting to be drawn (it's not near the screen yet): about a tile's size, so the board doesn't jump. */
+  [data-ve-waiting] { min-width: 160px; min-height: 90px; border-radius: 6px; background: rgba(128,128,128,.08); }
+  html[data-ve-page] [data-ve-waiting] { width: 1280px; height: 640px; }
   /* A page's tile is a laptop-wide screen (not squeezed to its content); Fit shrinks the board. */
   html[data-ve-page] [data-ve-variant] { width: 1280px; }
   /* Preview: one variant in one state, like a page of the app (no names, no board). */

@@ -43,7 +43,7 @@ export function updateHelper(
     title: now < next ? `Update Visual Editor’s helper (version ${now} → ${next})` : `Put Visual Editor’s helper back as it ships (version ${next})`,
     why:
       now < next
-        ? `${now < 2 ? 'Version 2 adds the static part as a working prototype (each tile keeps its own changes, Reset, links that show where they’d go instead of leaving) and situations (one design in use per situation). ' : ''}Version 3 groups the Playground by situation, and a design not made for a situation says so in its tile. Folders made with older versions keep working.`
+        ? `${now < 2 ? 'Version 2 adds the static part as a working prototype (each tile keeps its own changes, Reset, links that show where they’d go instead of leaving) and situations (one design in use per situation). ' : ''}${now < 3 ? 'Version 3 groups the Playground by situation, and a design not made for a situation says so in its tile. ' : ''}Version 4 draws only the tiles near the screen on a big board, so many designs and states stay smooth. Folders made with older versions keep working.`
         : 'The helper was changed by hand; this puts it back as Visual Editor ships it.',
     changes: [{ path, before, after: template }],
   };

@@ -158,7 +158,7 @@ A one-line proposal, with the before and after shown live in Review, and Undo.
   - Preview, Playground and Webview open each other.
 - **Done when:** from any card you reach every view in one click.
 
-### 1.13 Clean-ups
+### 1.13 Clean-ups ✅ done
 - **You get:**
   - temporary files from tools like `sed` no longer counted as changes;
   - the Playground smooth with many tiles on 8 GB (tiles drawn only when on screen);
