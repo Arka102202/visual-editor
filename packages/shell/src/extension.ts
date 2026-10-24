@@ -308,7 +308,9 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
   refreshAgents();
   const assistantsView = new AssistantsView(hub);
   // Agents run from a button: in the background or in a terminal (agentRuns.ts).
-  const agentRuns = new AgentRuns(log);
+  const agentsLog = vscode.window.createOutputChannel('Visual Editor: Agents');
+  const agentRuns = new AgentRuns(log, agentsLog);
+  context.subscriptions.push(agentsLog);
   const agentsView = new AgentsView(
     context.extensionUri,
     registry,
@@ -319,7 +321,14 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     },
     (id) => void vscode.commands.executeCommand('visualEditor.stopJob', { job: { id } }),
     (id) => agentRuns.progress(id),
+    (id) => {
+      const root = current.get()?.project.root;
+      return root ? review.proposals(root).find((p) => p.id === id) : undefined;
+    },
+    { watch: (job) => agentRuns.watch(job), review: (proposal) => review.show(proposal) },
   );
+  // (A proposal approved, sent back or rejected shows in its job's result too.)
+  context.subscriptions.push(review.onChange(() => agentsView.refresh()));
   context.subscriptions.push(agentRuns, agentRuns.onChange(() => agentsView.refresh()));
   context.subscriptions.push(
     hub,
@@ -337,6 +346,7 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     }),
     vscode.commands.registerCommand('visualEditor.connectClaudeCode', () => hub.connectClaudeCode()),
     vscode.commands.registerCommand('visualEditor.addAgents', () => hub.addAgents()),
+    vscode.commands.registerCommand('visualEditor.openAgents', () => agentsView.openPanel()),
     // Stop an agent's job: its next step is to stop (the worker and checker are told so by every job tool).
     vscode.commands.registerCommand('visualEditor.stopJob', async (node?: { job?: { id: string } }) => {
       const root = current.get()?.project.root;

@@ -6,6 +6,7 @@ import * as vscode from 'vscode';
 import { appendFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { JobStore } from '../packages/shell/src/jobs';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -207,6 +208,12 @@ export async function run() {
     const groups = shown().groups;
     const hello = groups.find((g) => g.name === 'Hello');
     if (groups.map((g) => g.name).join() !== 'Visual Editor,Extra,Hello' || hello?.items.map((i) => `${i.kind}:${i.title}`).join() !== 'agent:Write a hello note,skill:How to say hello,tool:Count the project’s files' || hello.items[0].summary !== 'An example agent: writes a one-line hello note for the README.') throw new Error(`agents section: ${JSON.stringify(groups)}`);
+    // A finished job shows under its agent: how it ended, what happened, and what became of its proposal in Review.
+    const proposal = t.review.proposals(root)[0];
+    const at = new Date().toISOString();
+    new JobStore(root).save({ id: 'test-job', agent: 'hello-note', title: 'Write a hello note', request: 'Say hello', status: 'passed', round: 2, rounds: 2, startedAt: at, until: at, proposal: proposal.id, by: 'a button (in the background)', history: [{ at, who: 'Visual Editor', what: 'Started: Say hello' }, { at, who: 'checker', what: 'Sent back: too long' }, { at, who: 'checker', what: 'Passed' }] });
+    const result = (t.agentsView.state() as any).groups.find((g: any) => g.name === 'Hello').items[0].recent?.[0];
+    if (!result || result.status !== 'passed' || result.steps.map((x: any) => x.what).join() !== 'Sent back: too long,Passed' || !/rejected|waiting|approved|undone|sent back/.test(result.inReview ?? '')) throw new Error(`recent result: ${JSON.stringify(result)}`);
     await vscode.commands.executeCommand('visualEditor.agents.focus');
     await wait(1500);
     await shot('11-agents-section');

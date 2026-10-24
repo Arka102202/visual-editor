@@ -49,7 +49,18 @@ export class AgentRuns implements vscode.Disposable {
   private readonly runs = new Map<string, Running>();
   private readonly listeners = new Set<() => void>();
 
-  constructor(private readonly log: vscode.OutputChannel) {}
+  constructor(
+    private readonly log: vscode.OutputChannel,
+    /** What background runs do, step by step, and what Claude says (the developer opens it to watch). */
+    private readonly watchLog: vscode.OutputChannel,
+  ) {}
+
+  /** Shows a running job as it works: its terminal, or the log of background runs. */
+  watch(job: string) {
+    const run = this.runs.get(job);
+    if (run?.terminal) run.terminal.show();
+    else this.watchLog.show(true);
+  }
 
   /** What a running job is doing now, in words (background runs). */
   progress(job: string): string | undefined {
@@ -103,6 +114,7 @@ export class AgentRuns implements vscode.Disposable {
     const child = spawn(process.env.SHELL || '/bin/zsh', ['-lc', `${claudeCommand()} ${args.map(quote).join(' ')}`], { cwd: run.root, env: { ...process.env, FORCE_COLOR: '0' } });
     run.child = child;
     child.stdin.end(prompt);
+    this.watchLog.appendLine(`\n${new Date().toLocaleTimeString()}  ${agent.title} started in the background: “${request(prompt)}”`);
     let buffer = '';
     let result: { cost?: number; text?: string; error?: boolean } = {};
     /** Paying per use (an API key), so the cost is real money and worth showing; "none" means a subscription. */
@@ -118,7 +130,10 @@ export class AgentRuns implements vscode.Disposable {
           const m = JSON.parse(line) as { type: string; subtype?: string; apiKeySource?: string; message?: { content?: { type: string; name?: string; input?: Record<string, unknown> }[] }; total_cost_usd?: number; result?: string; is_error?: boolean };
           if (m.type === 'system' && m.subtype === 'init') paysPerUse = !!m.apiKeySource && m.apiKeySource !== 'none';
           if (m.type === 'result') result = { cost: m.total_cost_usd, text: m.result, error: m.is_error };
-          for (const c of m.message?.content ?? []) if (c.type === 'tool_use' && c.name) this.step(run, c.name, c.input);
+          for (const c of (m.message?.content ?? []) as { type: string; name?: string; text?: string; input?: Record<string, unknown> }[]) {
+            if (c.type === 'tool_use' && c.name) this.step(run, c.name, c.input);
+            else if (c.type === 'text' && c.text?.trim()) this.watchLog.appendLine(`${agent.title}: ${c.text.trim()}`);
+          }
         } catch {
           // not a message
         }
@@ -146,6 +161,7 @@ export class AgentRuns implements vscode.Disposable {
     const role = typeof input?.subagent_type === 'string' ? input.subagent_type : '';
     const text = name === 'Agent' || name === 'Task' ? (/checker/.test(role) ? 'the checker is checking the draft' : /worker/.test(role) ? 'the worker is making the draft' : 'starting a helper') : STEPS[short];
     if (!text) return;
+    if (text !== run.progress) this.watchLog.appendLine(`${new Date().toLocaleTimeString()}  ↳ ${text}`);
     run.progress = text;
     this.fire();
   }
@@ -183,6 +199,9 @@ Request: ${job.request}
 
 ${way === 'background' ? 'Nobody is watching: work without asking questions.' : 'The developer is watching here and may add to the request.'} At the end, say in a few lines what happened.`;
 }
+
+/** The developer's request, from the prompt. */
+const request = (prompt: string) => /^Request: (.*)$/m.exec(prompt)?.[1] ?? '';
 
 /** A word for the shell, quoted. */
 const quote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;

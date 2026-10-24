@@ -23,8 +23,14 @@
       "properties": {
         "visualEditor.agents.runIn": {
           "type": "string",
-          "enum": ["background", "terminal"],
-          "enumDescriptions": ["Quietly, with a progress line and Stop; a notice when it's done.", "In a terminal tab, where you watch it and can talk to it."],
+          "enum": [
+            "background",
+            "terminal"
+          ],
+          "enumDescriptions": [
+            "Quietly, with a progress line and Stop; a notice when it's done.",
+            "In a terminal tab, where you watch it and can talk to it."
+          ],
           "default": "background",
           "description": "Where an agent runs when you start it with the Run an agent command."
         },
@@ -165,6 +171,12 @@
         "icon": "$(debug-disconnect)"
       },
       {
+        "command": "visualEditor.openAgents",
+        "title": "Open the Agents as a tab",
+        "category": "Visual Editor",
+        "icon": "$(screen-full)"
+      },
+      {
         "command": "visualEditor.runAgent",
         "title": "Run an agent",
         "category": "Visual Editor",
@@ -209,6 +221,11 @@
           "command": "visualEditor.addDecision",
           "when": "view == visualEditor.memory",
           "group": "navigation@2"
+        },
+        {
+          "command": "visualEditor.openAgents",
+          "when": "view == visualEditor.agents",
+          "group": "navigation"
         }
       ],
       "view/item/context": [
