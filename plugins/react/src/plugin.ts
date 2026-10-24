@@ -9,6 +9,7 @@ import { useVariant } from './useVariant';
 import { helperTemplate, updateHelper } from './helper';
 import { setupProject } from './setup';
 import { previewFix } from './providers';
+import { previewableTool } from './tools';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -61,6 +62,7 @@ export const reactPlugin: Plugin = {
   useVariant,
   updateHelper: (project) => updateHelper(project),
   previewFix: (project, need) => previewFix(project, need),
+  tools: [previewableTool],
   setup: (project) => setupProject((p) => (existsSync(join(project.root, p)) ? readFileSync(join(project.root, p), 'utf8') : undefined), helperTemplate()),
   readers: [
     {

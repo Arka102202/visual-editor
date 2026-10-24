@@ -169,7 +169,7 @@ A one-line proposal, with the before and after shown live in Review, and Undo.
 
 ## Phase 2: The agent foundation, and the first agents
 
-### 2.1 Plugin slots for tools, skills and agents
+### 2.1 Plugin slots for tools, skills and agents ✅ done
 - **You get:** plugins can hand the shell their tools (code Claude calls), skills (know-how) and agents (worker plus
   checker). The shell collects them.
 - **Done when:** the React plugin's first tool shows up in Claude Code.
