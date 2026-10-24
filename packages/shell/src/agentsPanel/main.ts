@@ -1,8 +1,8 @@
 // The Agents section in Visual Editor's side panel: what each plugin gives Claude, as coloured badges (Agent, Skill,
 // Tool), each with a pop-over in plain words; an agent at work shows its round and a Stop button. Plain DOM.
 
-import type { AgentsEntry, FromAgents, ToAgents } from '../agentsMessages';
-import { addStyles, el } from '../ui/dom';
+import type { AgentsEntry, FromAgents, JobResult, ToAgents } from '../agentsMessages';
+import { addStyles, ago, el } from '../ui/dom';
 import { iconButton, installTips, tray } from '../ui/buttons';
 
 declare function acquireVsCodeApi(): { postMessage(message: FromAgents): void };
@@ -32,6 +32,19 @@ addStyles(`
   .badge.tool { --c: var(--vscode-charts-green, #89d185); }
   .row .buttons { display: flex; gap: 2px; }
   .row .buttons button { padding: 1px 3px; }
+  .result { display: flex; align-items: baseline; gap: 6px; padding: 1px 12px 1px 30px; font-size: 12px; cursor: pointer; outline: none; }
+  .result:hover, .result:focus-visible { background: var(--vscode-list-hoverBackground); }
+  .result .ask { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: .85; }
+  .result .when { flex: none; opacity: .55; font-size: 11px; }
+  .mark { flex: none; font-weight: 700; width: 1em; text-align: center; }
+  .mark.ok { color: var(--vscode-testing-iconPassed, #73c991); }
+  .mark.bad { color: var(--vscode-errorForeground, #f48771); }
+  .mark.off { opacity: .6; }
+  .resultbox { margin: 2px 12px 6px 30px; padding: 6px 8px; border-left: 2px solid var(--vscode-charts-purple, #b180d7); font-size: 12px; line-height: 1.45; background: color-mix(in srgb, var(--vscode-charts-purple, #b180d7) 7%, transparent); }
+  .resultbox .head { margin: 0 0 4px; }
+  .resultbox .steps { margin: 0 0 6px; padding-left: 18px; }
+  .resultbox .steps li { margin-bottom: 3px; }
+  .resultbox .proof { margin-bottom: 6px; opacity: .9; }
   .progress { margin: -2px 12px 4px 20px; padding-left: 8px; font-size: 11px; opacity: .75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .progress::before { content: '↳ '; }
   .working { flex: none; font-size: 11px; color: var(--vscode-charts-yellow, #cca700); white-space: nowrap; }
@@ -118,11 +131,13 @@ function draw(m: ToAgents) {
       row.append(el('span', `badge ${e.kind}`, KINDS[e.kind].label), el('span', 'title', e.title));
       if (e.job?.running) {
         row.append(el('span', 'working', `${e.job.status} · ${e.job.round}/${e.job.rounds}`));
-        const stop = iconButton('stop', `Stop ${e.title}: it stops at its next step`);
         const id = e.job.id;
+        const watch = iconButton('console', `Watch ${e.title} work: ${/terminal/.test(e.job.by) ? 'its terminal' : 'what it does and says, step by step'}`);
+        watch.addEventListener('click', () => vscode.postMessage({ type: 'watch', job: id }));
+        const stop = iconButton('stop', `Stop ${e.title}: it stops at its next step`);
         stop.addEventListener('click', () => vscode.postMessage({ type: 'stop', job: id }));
         row.append(tray(el('span', 'buttons')));
-        row.lastElementChild!.append(stop);
+        row.lastElementChild!.append(watch, stop);
       } else if (e.kind === 'agent') {
         // Run it: it asks what you want, then works in the background (or in a terminal you can watch and talk to).
         const name = e.name;
@@ -148,6 +163,8 @@ function draw(m: ToAgents) {
       document.body.append(row);
       // A run from a button: what it's doing now.
       if (e.job?.running && e.job.progress) document.body.append(el('div', 'progress', e.job.progress));
+      // Its last results: how each ended; a click opens what happened and the proof.
+      for (const r of e.recent ?? []) document.body.append(...drawResult(r));
       if (open.has(e.title)) {
         const about = el('div', `about ${e.kind}`);
         about.append(...aboutOf(e));
@@ -155,6 +172,53 @@ function draw(m: ToAgents) {
       }
     }
   }
+}
+
+/** How a job ended: a mark and its colour. */
+const ENDED: Record<string, { mark: string; cls: string; words: string }> = {
+  passed: { mark: '✓', cls: 'ok', words: 'passed' },
+  failed: { mark: '✗', cls: 'bad', words: 'didn’t pass' },
+  stopped: { mark: '■', cls: 'off', words: 'stopped' },
+  'out of time': { mark: '⏱', cls: 'off', words: 'ran out of time' },
+};
+
+/** A finished job: one line (mark, what was asked, round, when), and, opened, its steps, proof and Review. */
+function drawResult(r: JobResult): HTMLElement[] {
+  const ended = ENDED[r.status] ?? { mark: '•', cls: 'off', words: r.status };
+  const line = el('div', 'result');
+  line.tabIndex = 0;
+  line.append(el('span', `mark ${ended.cls}`, ended.mark), el('span', 'ask', r.request), el('span', 'when', ago(r.at)));
+  const key = `job ${r.id}`;
+  const toggle = () => {
+    if (open.has(key)) open.delete(key);
+    else open.add(key);
+    if (last) draw(last);
+  };
+  line.addEventListener('click', toggle);
+  line.addEventListener('keydown', (ev) => (ev.key === 'Enter' || ev.key === ' ') && toggle());
+  if (!open.has(key)) return [line];
+  const box = el('div', 'resultbox');
+  box.append(el('p', 'head', `It ${ended.words} in round ${r.round} of ${r.rounds}${r.inReview ? `: ${r.inReview}` : ''}. Started from ${r.by}.`));
+  const steps = el('ol', 'steps');
+  for (const s of r.steps) {
+    const li = el('li');
+    li.append(el('b', undefined, `${s.who}: `), document.createTextNode(s.what));
+    steps.append(li);
+  }
+  box.append(steps);
+  if (r.proof?.length) {
+    const proof = el('div', 'proof');
+    for (const p of r.proof) proof.append(el('div', undefined, `${p.mark} ${p.title}`));
+    box.append(proof);
+  }
+  if (r.proposal) {
+    const id = r.proposal;
+    const inReview = iconButton('proposed', 'Open it in Review: the change, its proof and the pictures, live');
+    inReview.addEventListener('click', () => vscode.postMessage({ type: 'review', proposal: id }));
+    box.append(tray(el('div', 'buttons')));
+    box.lastElementChild!.append(inReview);
+  }
+  return [line, box];
 }
 
 addEventListener('message', (e: MessageEvent<ToAgents>) => {

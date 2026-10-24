@@ -12,6 +12,27 @@ export interface AgentsEntry {
   claudeName: string;
   /** An agent's latest job: working now (it can be stopped), or how it ended. */
   job?: { id: string; status: string; round: number; rounds: number; request: string; running: boolean; progress?: string; by: string };
+  /** An agent's last jobs that ended, newest first, with what happened and the proof. */
+  recent?: JobResult[];
+}
+
+/** A finished job, as the Agents section shows it. */
+export interface JobResult {
+  id: string;
+  status: string;
+  request: string;
+  round: number;
+  rounds: number;
+  /** When it started. */
+  at: string;
+  by: string;
+  /** What happened, oldest first (hand-ins, verdicts with reasons, stops). */
+  steps: { who: string; what: string }[];
+  /** The proposal it became, and its proof (✓ passed, ✗ didn't, • a note, ▣ a picture). */
+  proposal?: string;
+  /** What the developer did with it in Review, in words ("waiting for you", "approved"…). */
+  inReview?: string;
+  proof?: { mark: string; title: string }[];
 }
 
 /** Shell → Agents section. */
@@ -30,4 +51,8 @@ export type FromAgents =
   | { type: 'addAgents' }
   | { type: 'stop'; job: string }
   /** Run an agent from its button: in the background or in a terminal. */
-  | { type: 'run'; agent: string; way: 'background' | 'terminal' };
+  | { type: 'run'; agent: string; way: 'background' | 'terminal' }
+  /** Watch a running job: its log (in the background) or its terminal. */
+  | { type: 'watch'; job: string }
+  /** Open a job's proposal in Review. */
+  | { type: 'review'; proposal: string };
