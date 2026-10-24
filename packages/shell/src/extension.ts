@@ -26,6 +26,7 @@ import { takePicture } from './pictures';
 import { ClaudeAgents } from './hub/claudeAgents';
 import { AssistantsView, chooseAssistant } from './hub/assistantsView';
 import { AgentsView } from './hub/agentsView';
+import { AgentRuns, type RunWay } from './hub/agentRuns';
 import { vscodeFiles } from './vscodeFiles';
 
 export function activate(context: vscode.ExtensionContext): ShellApi {
@@ -306,6 +307,8 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
   };
   refreshAgents();
   const assistantsView = new AssistantsView(hub);
+  // Agents run from a button: in the background or in a terminal (agentRuns.ts).
+  const agentRuns = new AgentRuns(log);
   const agentsView = new AgentsView(
     context.extensionUri,
     registry,
@@ -315,7 +318,9 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
       return root ? new JobStore(root).list() : [];
     },
     (id) => void vscode.commands.executeCommand('visualEditor.stopJob', { job: { id } }),
+    (id) => agentRuns.progress(id),
   );
+  context.subscriptions.push(agentRuns, agentRuns.onChange(() => agentsView.refresh()));
   context.subscriptions.push(
     hub,
     assistantsView,
@@ -341,9 +346,45 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
       const id = node?.job?.id ?? (running.length === 1 ? running[0].id : (await vscode.window.showQuickPick(running.map((j) => ({ label: j.title, description: `${j.status}, round ${j.round} of ${j.rounds}`, detail: j.request, id: j.id })), { placeHolder: 'Which job should stop?' }))?.id);
       const j = running.find((x) => x.id === id);
       if (!j) return void (running.length ? undefined : vscode.window.showInformationMessage('No agent is working right now.'));
-      store.save({ ...j, status: 'stopped', history: [...j.history, { at: new Date().toISOString(), who: 'developer', what: 'Stopped.' }] });
+      // (A run from a button also ends its process.)
+      agentRuns.stop(root, j.id);
       agentsView.refresh();
       void vscode.window.showInformationMessage(`${j.title} is stopping: it stops at its next step.`);
+    }),
+    // Run an agent: which one, what it should do (in the developer's words), and where (the setting, or the button's).
+    vscode.commands.registerCommand('visualEditor.runAgent', async (name?: string, way?: RunWay) => {
+      const state = current.get();
+      if (!state) return void vscode.window.showInformationMessage('Open a project first.');
+      const mine = registry.agents().filter(({ plugin }) => state.detected.some((d) => d.plugin.id === plugin.id));
+      if (!mine.length) return void vscode.window.showInformationMessage(`No agent works on ${state.project.name} yet.`);
+      const chosen = name
+        ? mine.find((a) => a.agent.name === name)
+        : (await vscode.window.showQuickPick(mine.map((a) => ({ label: a.agent.title, detail: a.agent.summary ?? a.agent.description, a })), { placeHolder: 'Which agent?' }))?.a;
+      if (!chosen) return;
+      const agent = chosen.agent;
+      const claude = hub.assistants().find((a) => a.id === 'claude');
+      if (claude?.state !== 'on') {
+        const pick = await vscode.window.showWarningMessage(`${agent.title} runs with Claude Code: connect it first.`, 'Connect Claude Code');
+        if (pick) await hub.connectClaudeCode();
+        return;
+      }
+      if (claude.agents === 'off') {
+        const pick = await vscode.window.showWarningMessage(`Add Visual Editor’s agents to Claude Code first, so it knows ${agent.title}.`, 'Add agents');
+        if (pick) await hub.addAgents();
+        return;
+      }
+      const request = await vscode.window.showInputBox({
+        title: `${agent.title}: what should it do?`,
+        prompt: agent.summary ?? agent.description,
+        placeHolder: agent.name === 'new-variant' ? 'e.g. ProjectCard: a big coloured initial with the name under it' : 'In your own words',
+        ignoreFocusOut: true,
+      });
+      if (!request?.trim()) return;
+      const config = vscode.workspace.getConfiguration('visualEditor.agents');
+      const where = way ?? config.get<RunWay>('runIn', 'background');
+      agentRuns.start(state.project.root, agent, request, where, config.get<number>('maxCostUsd', 0));
+      agentsView.refresh();
+      if (where === 'background') void vscode.window.showInformationMessage(`${agent.title} is working in the background: follow it in the Agents section (Stop is there too). The result comes to Review.`);
     }),
     registry.onChange(refreshAgents),
     { dispose: () => clearTimeout(agentsTimer) },

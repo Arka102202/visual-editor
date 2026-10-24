@@ -231,6 +231,11 @@ function safeRealpath(path: string): string {
 }
 
 /** Runs a shell command in a folder; says whether it worked, and whether the command wasn't found at all. */
+/** `claude`, found where it's usually installed even when VS Code's own PATH doesn't have it (for a shell command). */
+export function claudeCommand(): string {
+  return `PATH="${CLAUDE_DIRS.join(':')}:$PATH" claude`;
+}
+
 export function run(command: string, cwd: string): Promise<{ ok: boolean; notFound: boolean; output: string }> {
   return new Promise((resolve) => {
     // A login shell, so the developer's PATH (where `claude` lives) is used.

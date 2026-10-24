@@ -18,6 +18,24 @@
     "onStartupFinished"
   ],
   "contributes": {
+    "configuration": {
+      "title": "Visual Editor",
+      "properties": {
+        "visualEditor.agents.runIn": {
+          "type": "string",
+          "enum": ["background", "terminal"],
+          "enumDescriptions": ["Quietly, with a progress line and Stop; a notice when it's done.", "In a terminal tab, where you watch it and can talk to it."],
+          "default": "background",
+          "description": "Where an agent runs when you start it with the Run an agent command."
+        },
+        "visualEditor.agents.maxCostUsd": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Only if you pay Claude per use (an API key): the most an agent run in the background may spend, in US dollars, before it stops. 0: no limit. With a Claude subscription, runs use your plan's allowance like chat does; they're always limited to 3 rounds and 20 minutes, and you can stop them."
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         {
@@ -145,6 +163,12 @@
         "title": "Disconnect",
         "category": "Visual Editor",
         "icon": "$(debug-disconnect)"
+      },
+      {
+        "command": "visualEditor.runAgent",
+        "title": "Run an agent",
+        "category": "Visual Editor",
+        "icon": "$(play)"
       },
       {
         "command": "visualEditor.stopJob",
