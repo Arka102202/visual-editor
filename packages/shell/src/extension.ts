@@ -8,7 +8,7 @@ import { PluginsView } from './pluginsView';
 import { ProjectIndex } from './projectIndex';
 import { ProjectsView } from './projectsView';
 import { findWorkspace, isIgnoredPath, isProjectFile } from './projects';
-import { basename, relative, sep } from 'node:path';
+import { basename, join, relative, sep } from 'node:path';
 import { CurrentProject } from './currentProject';
 import { MapPanel } from './mapPanel';
 import { AppProxies } from './proxy/appProxies';
@@ -18,7 +18,10 @@ import { ProjectSetups } from './projectSetup';
 import { askEntry, MemoryView, ProjectMemory } from './memoryView';
 import type { MemoryEntry } from './memory';
 import { Hub, run } from './hub/hub';
-import { DraftStore } from './drafts';
+import { DRAFTS_DIR, DraftStore } from './drafts';
+import { draftItems } from './draftItems';
+import { DraftApps } from './proxy/draftApps';
+import { takePicture } from './pictures';
 import { ClaudeAgents } from './hub/claudeAgents';
 import { AssistantsView, chooseAssistant } from './hub/assistantsView';
 import { AgentsView } from './hub/agentsView';
@@ -226,6 +229,30 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
   );
 
   // The assistant hub: Claude Code reads the map, rules and memory, and proposes changes into Review.
+  // A draft's own app, for pictures of it: the project's Vite with the draft's files on top (one at a time).
+  const draftApps = new DraftApps({
+    script: context.asAbsolutePath('dist/draftServer.js'),
+    node: { command: process.execPath, env: { ELECTRON_RUN_AS_NODE: '1' } },
+    log: (line) => log.appendLine(line),
+    proxyOptions: (root) => ({ fakes: () => proxies.fakesOf(root) }),
+  });
+  context.subscriptions.push(draftApps);
+  // Review shows a picture in a proposal's proof live: the card's Playground with the proposal's changes on top while
+  // it waits (as the files are now, once applied), in the draft's own app.
+  review.setLive(async (root, p, card) => {
+    const state = index.snapshot().find((s) => s.project.root === root);
+    if (!state) throw new Error('That project isn’t open.');
+    const shown = { id: p.id, revision: p.status === 'proposed' ? 1 : 0, changes: p.status === 'proposed' ? p.changes : [] };
+    const { project, items } = await draftItems(state, shown, (path) => vscodeFiles(root, changes).read(path));
+    const item = items.find((i) => i.id === card);
+    if (!item?.preview) throw new Error('This card can’t be shown in the Playground any more.');
+    const plugin = state.detected.find(({ plugin: x }) => item.id.startsWith(`${x.id}:`))?.plugin;
+    const app = await draftApps.open(root, shown, (id) => {
+      const it = items.find((i) => i.id === id);
+      return it && plugin?.previewPage?.(it, project);
+    });
+    return `${app}/__ve/preview?item=${encodeURIComponent(item.id)}`;
+  });
   const hub = new Hub(context, {
     projects: () => index.snapshot(),
     current: () => current.get(),
@@ -238,6 +265,23 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     tools: () => registry.tools(),
     drafts: (root) => new DraftStore(root).list(),
     saveDraft: (root, d) => new DraftStore(root).save(d),
+    // A draft in the Playground: its cards read with the draft on top, drawn by the draft's own app, and pictured.
+    pictures: async (root, draft, card) => {
+      const state = index.snapshot().find((s) => s.project.root === root);
+      if (!state) return 'That project isn’t open.';
+      const { project, items } = await draftItems(state, draft, (path) => vscodeFiles(root, changes).read(path));
+      const item = items.find((i) => i.id === card) ?? items.find((i) => i.label === card && i.preview);
+      if (!item?.preview) return `${card} can’t be shown in the Playground as this draft leaves it: it isn’t previewable${item ? '' : ' (no card by that name)'}.`;
+      const plugin = state.detected.find(({ plugin: p }) => item.id.startsWith(`${p.id}:`))?.plugin;
+      const app = await draftApps.open(root, draft, (id) => {
+        const it = items.find((i) => i.id === id);
+        return it && plugin?.previewPage?.(it, project);
+      });
+      const image = join(root, DRAFTS_DIR, draft.id, `${item.label.replace(/[^\w.-]+/g, '-')}-v${draft.revision}.png`);
+      const picture = await takePicture(`${app}/__ve/preview?item=${encodeURIComponent(item.id)}`, image);
+      draftApps.touch();
+      return { image, card: item.label, cardId: item.id, designs: item.preview.variants.map((v) => v.name), states: item.preview.states, ...picture };
+    },
   }, log, new ClaudeAgents(context, () => ({ tools: registry.tools(), skills: registry.skills(), agents: registry.agents() }), run, log));
   void hub.start();
   // Plugins arrive one by one as their extensions start: once they've settled, the agents follow what they give.

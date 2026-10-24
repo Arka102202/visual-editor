@@ -6,7 +6,7 @@ import * as vscode from 'vscode';
 import { webviewPage } from './webviewPage';
 import { vscodeFiles } from './vscodeFiles';
 import { join } from 'node:path';
-import type { Disposable } from '@visual-editor/contract';
+import type { Disposable, Item } from '@visual-editor/contract';
 import type { OutsideChanges } from './changes';
 import type { CurrentProject } from './currentProject';
 import type { ProjectMemory } from './memoryView';
@@ -25,6 +25,10 @@ export class Review implements vscode.Disposable {
   private readonly subscriptions: vscode.Disposable[] = [];
   /** Each project's app, for proposals that show how they look. */
   private readonly apps = new Map<string, NonNullable<ToReview['app']>>();
+  /** Pictures shown live, by proposal and card ("<proposal> <card>"). */
+  private readonly lives = new Map<string, { url?: string; progress?: string; error?: string }>();
+  /** Shows a card's Playground running with a proposal's changes on top (its own app), and gives its address. */
+  private live: ((root: string, p: Proposal, card: string) => Promise<string>) | undefined;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -40,6 +44,11 @@ export class Review implements vscode.Disposable {
       index.onChange(() => this.loadNewProjects()),
       current.onChange(() => void this.send()),
     );
+  }
+
+  /** How pictures in a proposal's proof are shown live (set once the draft apps exist). */
+  setLive(live: (root: string, p: Proposal, card: string) => Promise<string>) {
+    this.live = live;
   }
 
   /** Proposals in a project, newest first. */
@@ -78,17 +87,60 @@ export class Review implements vscode.Disposable {
     const panel = vscode.window.createWebviewPanel('visualEditor.review', 'Review', vscode.ViewColumn.Active, {
       enableScripts: true,
       retainContextWhenHidden: true,
-      localResourceRoots: [dist],
+      // (and the projects' folders: pictures kept as proof with drafts)
+      localResourceRoots: [dist, ...(vscode.workspace.workspaceFolders ?? []).map((f) => f.uri)],
     });
     panel.iconPath = vscode.Uri.joinPath(this.extensionUri, 'media', 'icon.svg');
-    // Proposals that show how they look frame the app (its dev server, through the proxy).
-    panel.webview.html = webviewPage(panel.webview, vscode.Uri.joinPath(dist, 'review.js'), 'Review', 'frame-src http://127.0.0.1:* http://localhost:*;');
+    // Proposals that show how they look frame the app (its dev server, through the proxy); pictures in their proof are
+    // the projects' files.
+    panel.webview.html = webviewPage(panel.webview, vscode.Uri.joinPath(dist, 'review.js'), 'Review', `frame-src http://127.0.0.1:* http://localhost:*; img-src ${panel.webview.cspSource};`);
     panel.webview.onDidReceiveMessage((m: FromReview) => void this.receive(m), undefined, this.subscriptions);
     panel.onDidDispose(() => {
       this.panel = undefined;
       this.ready = false;
     });
     this.panel = panel;
+  }
+
+  /**
+   * What of a proposal can be tried live: the previewable cards whose files it changes (a design, the static part, a
+   * new file in the card's folder…), and the ones running now.
+   */
+  private liveParts(p: Proposal, items: Item[]): Pick<ReviewItem, 'cards' | 'live'> {
+    if (!this.live) return {};
+    const paths = p.changes.map((c) => c.path);
+    const dir = (path: string) => path.slice(0, path.lastIndexOf('/') + 1);
+    const cards = items
+      .filter((i) => i.preview && i.source)
+      .filter((i) => {
+        const own = [i.source!.path, ...(i.preview!.files ?? []), ...i.preview!.variants.map((v) => v.path)];
+        return paths.some((path) => own.includes(path) || dir(path) === dir(i.source!.path));
+      })
+      .map((i) => ({ id: i.id, label: i.label }));
+    const ids = new Set([...cards.map((c) => c.id), ...(p.evidence ?? []).flatMap((e) => (e.card ? [e.card] : []))]);
+    const live = Object.fromEntries([...ids].filter((id) => this.lives.has(`${p.id} ${id}`)).map((id) => [id, this.lives.get(`${p.id} ${id}`)!]));
+    return { ...(cards.length ? { cards } : {}), ...(Object.keys(live).length ? { live } : {}) };
+  }
+
+  /**
+   * A picture in a proposal's proof, live: the card's Playground running with the proposal's changes on top (while it
+   * waits) or as the files are now (once applied), in its own app; or back to the picture.
+   */
+  private async showLive(root: string, id: string, card: string, on: boolean) {
+    const key = `${id} ${card}`;
+    const p = this.store(root).get(id);
+    if (!on || !p || !this.live) {
+      this.lives.delete(key);
+      return this.send();
+    }
+    this.lives.set(key, { progress: 'Starting it with these changes on top (nothing changes in your files)…' });
+    void this.send();
+    try {
+      this.lives.set(key, { url: await this.live(root, p, card) });
+    } catch (e) {
+      this.lives.set(key, { error: e instanceof Error ? e.message : String(e) });
+    }
+    void this.send();
   }
 
   /** A proposal from the assistant hub: saved, shown in Review, and announced. */
@@ -210,6 +262,7 @@ export class Review implements vscode.Disposable {
     }
     this.selected = m.id;
     if (m.type === 'select') return this.send();
+    if (m.type === 'live' || m.type === 'unlive') return this.showLive(root, m.id, m.card, m.type === 'live');
     const store = this.store(root);
     const p = store.get(m.id);
     if (!p) return;
@@ -288,7 +341,8 @@ export class Review implements vscode.Disposable {
         })),
         conflicts: files ? (p.status === 'proposed' ? await conflicts(p, files) : p.status === 'applied' ? await undoConflicts(p, files) : []) : [],
         ...(p.look ? { look: p.look } : {}),
-        ...(p.evidence ? { evidence: p.evidence } : {}),
+        ...(p.evidence ? { evidence: p.evidence.map((e) => (e.image && root && this.panel ? { ...e, src: this.panel.webview.asWebviewUri(vscode.Uri.file(join(root, e.image))).toString() } : e)) } : {}),
+        ...this.liveParts(p, state?.items ?? []),
       });
     }
     if (!this.selected || !items.some((i) => i.id === this.selected)) this.selected = (items.find((i) => i.status === 'proposed') ?? items[0])?.id;

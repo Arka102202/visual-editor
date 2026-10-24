@@ -25,6 +25,11 @@ export interface ProjectInfo {
   packageJson?: PackageJson;
   /** Every file in it, as paths relative to `root` with forward slashes (dependencies and build output left out). */
   files: string[];
+  /**
+   * Contract 8: set when this is the project as a draft would leave it (its id), e.g. read to show the draft in the
+   * Playground: keep nothing from such a reading as the project's own.
+   */
+  draft?: string;
 }
 
 export interface PackageJson {
