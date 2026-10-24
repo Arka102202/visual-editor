@@ -133,6 +133,10 @@ addStyles(`
   .nb-row.prop .strip { background: var(--prop); }
   .nb-row.prop .l { color: var(--prop); }
   .nb-row .tag { --t: var(--vscode-foreground); color: var(--t); background: color-mix(in srgb, var(--t) 18%, transparent); }
+  /* Variants: designs in use marked in the tab's colour; states indented under their situation. */
+  .nb-row.design.inuse .strip { background: var(--tint, #cca700); }
+  .nb-row.design.inuse .tag { --t: var(--tint, #cca700); }
+  .nb-list h4 { font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; opacity: .6; margin: 10px 2px 4px; }
   .nb-row .tag.callback { --t: var(--tok-function, var(--vscode-symbolIcon-functionForeground, #b180d7)); }
   .nb-row .tag.optional { --t: var(--tok-keyword, var(--vscode-charts-yellow, #cca700)); }
   .nb-row .tag.layout { --t: var(--tok-type, var(--vscode-charts-green, #89d185)); }
@@ -443,14 +447,49 @@ const nbPlayground = iconButton('board', 'Playground');
 focus.addTools(nbPreview, nbPlayground, nbZoom, nbOut, nbIn, nbFit, nbOnMap);
 
 /** The Webview: the running app, over everything (from the map's top bar, or its command), to try whole pages. */
-const webview = new Webview({ post: (m) => vscode.postMessage(m), store: layoutStore });
+/** A previewable card on the map, by its name (for plugin panels: a design picked in the Webview). */
+const previewable = (label: string) => [...mv.placedById.values()].map((p) => p.item).find((i) => i.label === label && i.preview);
+const webview = new Webview({
+  post: (m) => vscode.postMessage(m),
+  store: layoutStore,
+  previewCard: (label, variant) => {
+    const item = previewable(label);
+    if (item) preview.open(item, variant);
+  },
+  playgroundCard: (label) => {
+    const item = previewable(label);
+    if (item) playground.open(item);
+  },
+});
 /** Preview: one variant of a card on its own, in one fixed-data state, at a screen size (for cards that have variants). */
 const useVariant = (item: Item, variant: string, situation?: string) => vscode.postMessage({ type: 'useVariant', id: item.id, variant, situation });
 const updateHelper = (item: Item) => vscode.postMessage({ type: 'updateHelper', id: item.id });
 const previewFix = (item: Item, need: string) => vscode.postMessage({ type: 'previewFix', id: item.id, need });
-const preview = new PreviewWindow({ post: (m) => vscode.postMessage(m), store: layoutStore, useVariant, updateHelper, previewFix });
+/**
+ * The address of the page a card is on: a page's own route, or the nearest page that draws it (up the map's lines).
+ * A route with :params opens as written (fill them in, in the Webview's address bar).
+ */
+function pageOf(item: Item): string | undefined {
+  const routeOf = (i: Item | undefined) => (i?.kind === 'page' && i.sub?.startsWith('/') ? i.sub.split(' · ')[0].split(', ')[0] : undefined);
+  const byId = new Map([...mv.placedById.values()].map((p) => [p.item.id, p.item]));
+  const parents = new Map<string, string[]>();
+  for (const l of mv.layout.links) parents.set(l.to, [...(parents.get(l.to) ?? []), l.from]);
+  const seen = new Set<string>();
+  const queue = [item.id];
+  while (queue.length && seen.size < 200) {
+    const id = queue.shift()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const route = routeOf(id === item.id ? item : byId.get(id));
+    if (route) return route;
+    queue.push(...(parents.get(id) ?? []));
+  }
+  return undefined;
+}
+const openWebview = (path: string) => webview.open(path);
+const preview = new PreviewWindow({ post: (m) => vscode.postMessage(m), store: layoutStore, useVariant, updateHelper, previewFix, pageOf, openWebview });
 /** Playground: a card's every variant in every fixed-data state; a chosen tile opens in Preview. */
-const playground = new Playground({ post: (m) => vscode.postMessage(m), store: layoutStore, preview: (item, variant, state) => preview.open(item, variant, state), useVariant, updateHelper, previewFix });
+const playground = new Playground({ post: (m) => vscode.postMessage(m), store: layoutStore, preview: (item, variant, state) => preview.open(item, variant, state), useVariant, updateHelper, previewFix, pageOf, openWebview });
 const previewTip = (label: string) => `Preview: ${label} on its own (the variant in use), with fixed data, at a screen size`;
 const playgroundTip = (label: string) => `Playground: ${label}’s every variant in every state, side by side, with fixed data`;
 
@@ -614,6 +653,7 @@ const TINTS = {
   out: 'var(--tok-keyword, var(--vscode-charts-blue, #3794ff))',
   map: 'var(--tok-string, var(--vscode-charts-orange, #d18616))',
   props: 'var(--tok-function, var(--vscode-charts-purple, #b180d7))',
+  variants: 'var(--tok-number, var(--vscode-charts-yellow, #cca700))',
 };
 
 interface SideTab {
@@ -669,6 +709,47 @@ function showLines(m: CardLines) {
         }),
     },
   ];
+  // Variants: a previewable card's designs (in use, per situation) and states; each opens in Preview.
+  const pv = item.preview;
+  if (pv) {
+    const designRow = (v: NonNullable<Item['preview']>['variants'][number]) => {
+      const row = el('div', `nb-row go design${v.inUse ? ' inuse' : ''}`);
+      const line = el('div', 'what');
+      const t = el('div', 't');
+      t.append(el('span', 'l', v.name));
+      if (v.inUseFor?.length) t.append(el('span', 'tag', `in use for ${v.inUseFor.join(', ')}`));
+      else if (v.inUse) t.append(el('span', 'tag', 'in use'));
+      line.append(t, el('div', 's', v.path.split('/').pop() ?? v.path));
+      row.append(el('span', 'strip'), line);
+      row.dataset.tip = `Preview ${v.name} on its own`;
+      row.addEventListener('click', () => preview.open(item, v.id));
+      return row;
+    };
+    const stateRow = (s: string) => {
+      const row = el('div', 'nb-row go');
+      const line = el('div', 'what');
+      line.append(el('div', 'l', s));
+      row.append(el('span', 'strip'), line);
+      const design = pv.variants.find((v) => (pv.situations ? v.inUseFor?.includes(pv.situations.ofState[s]) : v.inUse)) ?? pv.variants[0];
+      row.dataset.tip = `Preview ${design?.name ?? ''} in “${s}”`;
+      row.addEventListener('click', () => preview.open(item, design?.id, s));
+      return row;
+    };
+    tabs.push({
+      key: 'variants',
+      tint: TINTS.variants,
+      icon: 'board',
+      name: `Variants: ${item.label}’s designs and states (click one to preview it)`,
+      count: pv.variants.length,
+      fill: () => {
+        const out: HTMLElement[] = [el('h4', undefined, 'Designs'), ...pv.variants.map(designRow)];
+        const sit = pv.situations;
+        if (sit) for (const name of sit.names) out.push(el('h4', undefined, name), ...pv.states.filter((s) => sit.ofState[s] === name).map(stateRow));
+        else out.push(el('h4', undefined, 'States'), ...pv.states.map(stateRow));
+        return out;
+      },
+    });
+  }
   focus.setPanels(
     tabs.map((t) => {
       const rows = t.fill();

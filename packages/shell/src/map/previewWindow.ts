@@ -8,7 +8,7 @@ import type { FromMap } from '../mapMessages';
 import { el } from '../ui/dom';
 import { iconButton, tray, type Icon } from '../ui/buttons';
 import { Frame, type LayoutStore } from '../ui/frame';
-import { inUseFor, makeToast, needsRouter, pageNote, showReset, situationOf, stateList, useTip, useWords } from './playground';
+import { inUseFor, makeToast, needsRouter, pageNote, showReset, showWebview, situationOf, stateList, useTip, useWords } from './playground';
 
 export const PREVIEW_CSS = `
   .vq-stage.fill .vp-device { margin: 0; }
@@ -30,6 +30,10 @@ interface Deps {
   useVariant(item: Item, variant: string, situation?: string): void;
   /** "Update the helper": proposes what Preview needs from the card's plugin. */
   updateHelper(item: Item): void;
+  /** The address of the page a card is on (its own route, or the nearest page that draws it), if any. */
+  pageOf?(item: Item): string | undefined;
+  /** Opens the Webview (the running app) at an address. */
+  openWebview?(path: string): void;
   /** Something a preview lacks (React: "router"): the card's plugin proposes it. */
   previewFix(item: Item, need: string): void;
 }
@@ -45,6 +49,7 @@ export class PreviewWindow {
   private readonly fitButton = iconButton('fitMap', 'Zoom to fit: the whole screen size in view (off: real size, scroll to see it all)', { cls: 'on' });
   private readonly details = el('div', 'vp-details');
   private readonly resetButton = iconButton('restart', 'Reset');
+  private readonly webviewButton = iconButton('preview', 'Webview');
   /** Something was clicked or typed since it was drawn (Reset has something to undo). */
   private touched = false;
   private readonly useButton = iconButton('choose', '');
@@ -67,7 +72,12 @@ export class PreviewWindow {
     this.frame.onClose = () => this.onToggle?.();
     const reload = iconButton('reload', 'Draw it again');
     reload.addEventListener('click', () => this.load());
-    this.frame.addTools(reload);
+    // The real thing: the page this card is on, in the Webview (the running app, with real data).
+    this.webviewButton.addEventListener('click', () => {
+      const path = this.item && deps.pageOf?.(this.item);
+      if (path) deps.openWebview?.(path);
+    });
+    this.frame.addTools(this.webviewButton, reload);
 
     const bar = el('div', 'vp-bar');
     const sizes = tray(el('div'));
@@ -126,6 +136,7 @@ export class PreviewWindow {
     this.frame.title.textContent = `Preview: ${item.label}`;
     this.frame.open();
     this.onToggle?.();
+    showWebview(this.webviewButton, item, this.deps.pageOf?.(item));
     this.showDetails();
     if (this.app) this.load();
     else {

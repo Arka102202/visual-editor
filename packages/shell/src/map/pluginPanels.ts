@@ -36,6 +36,9 @@ interface Host {
   /** Loads the app's page again. */
   reload(): void;
   setCount(id: string, count: number | undefined): void;
+  /** Opens Preview or the Playground for a card on the map, by its name. */
+  previewCard?(label: string, variant?: string): void;
+  playgroundCard?(label: string): void;
 }
 
 export class PluginPanels {
@@ -155,6 +158,8 @@ export class PluginPanels {
       openSource: (url, line, column) => this.host.post({ type: 'openSource', url, line, column }),
       openFile: (path, line) => this.host.post({ type: 'open', path, ...(line ? { line } : {}) }),
       openItem: (label, kind) => this.host.post({ type: 'openItem', label, ...(kind ? { kind } : {}) }),
+      preview: (card, variant) => this.host.previewCard?.(card, variant),
+      playground: (card) => this.host.playgroundCard?.(card),
       ui: {
         el,
         button: (icon, name, options) => {
