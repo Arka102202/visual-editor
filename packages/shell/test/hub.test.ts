@@ -2,12 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { CONTRACT_VERSION, type Plugin } from '@visual-editor/contract';
+import { CONTRACT_VERSION, type Plugin, type PluginTool } from '@visual-editor/contract';
 import { startHttpHost } from '../src/hub/http';
 import { createHubServer, type HubHost } from '../src/hub/tools';
 import type { MemoryEntry } from '../src/memory';
 import type { ProjectState } from '../src/projectIndex';
 import type { Proposal } from '../src/proposals';
+import { HUB_TOOLS } from '../src/registry';
 
 const plugin: Plugin = { id: 'react', name: 'React', version: '0', contract: CONTRACT_VERSION, detect: () => ({ reason: 'react is in package.json' }), maps: [{ id: 'components', title: 'Components' }] };
 const state: ProjectState = {
@@ -35,6 +36,7 @@ function fakeHost() {
     readFile: async (_root, path) => files[path],
     propose: (_root, p) => void proposals.unshift(p),
     remember: (_root, e) => void memory.unshift(e),
+    tools: () => [],
   };
   return { host, proposals, memory };
 }
@@ -135,6 +137,43 @@ test('hub: a big project lists its cards a page at a time', async () => {
     assert.equal(first.text.split('\n').length, 201);
     const last = await hub.call('list_cards', { page: 3 });
     assert.match(last.text, /^450 card\(s\), page 3 of 3 \(401–450\):\nreact:C400 /);
+  } finally {
+    await hub.close();
+  }
+});
+
+test('hub: plugins’ tools reach the assistant, run for projects their plugin detected, and say what went wrong', async () => {
+  const { host } = fakeHost();
+  const seen: unknown[] = [];
+  const brief: PluginTool = {
+    name: 'card_brief',
+    title: 'Brief',
+    description: 'A card for a job.',
+    input: { card: { type: 'string', description: 'Card id' }, deep: { type: 'boolean', description: 'More', optional: true }, look: { type: 'string', description: 'Which', optional: true, oneOf: ['one', 'all'] } },
+    run: async ({ card, deep }, ctx) => {
+      seen.push(deep);
+      if (card === 'boom') throw new Error('kaput');
+      if (!ctx.items.some((i) => i.id === card)) return { problem: `No card ${card}` };
+      return `${ctx.project.name}: ${card} · ${await ctx.read('src/Card.tsx')}`;
+    },
+  };
+  const other: Plugin = { ...plugin, id: 'vue', name: 'Vue' };
+  host.tools = () => [{ plugin, tool: brief }, { plugin: other, tool: { ...brief, name: 'vue_brief' } }];
+  const hub = await connect(host);
+  try {
+    const tools = (await hub.client.listTools()).tools;
+    assert.deepEqual(tools.map((t) => t.name).filter((n) => !HUB_TOOLS.includes(n)), ['card_brief', 'vue_brief']);
+    assert.deepEqual(tools.map((t) => t.name).filter((n) => HUB_TOOLS.includes(n)).sort(), [...HUB_TOOLS].sort(), 'HUB_TOOLS lists the hub’s own tools');
+    const t = tools.find((x) => x.name === 'card_brief')!;
+    assert.equal(t.description, '(React) A card for a job.');
+    assert.deepEqual(Object.keys(t.inputSchema.properties ?? {}).sort(), ['card', 'deep', 'look', 'project']);
+    assert.deepEqual(t.inputSchema.required, ['card']);
+    assert.deepEqual(await hub.call('card_brief', { card: 'react:Card', deep: true }), { text: 'shop: react:Card · export const Card = () => null;\n', error: false });
+    assert.deepEqual(seen, [true], 'the project input is the shell’s, not passed on');
+    assert.deepEqual(await hub.call('card_brief', { card: 'nope' }), { text: 'No card nope', error: true });
+    assert.match((await hub.call('card_brief', { card: 'boom' })).text, /stopped with an error \(a bug in the React plugin\): kaput/);
+    assert.match((await hub.call('card_brief', { card: 'x', look: 'some' })).text, /one|all|Invalid/i);
+    assert.match((await hub.call('vue_brief', { card: 'react:Card' })).text, /shop isn't a Vue project/);
   } finally {
     await hub.close();
   }

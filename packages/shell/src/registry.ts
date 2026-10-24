@@ -1,7 +1,12 @@
 // The plugins the shell knows about: added and removed at any time, checked before they're accepted.
 // No VS Code APIs here, so it can be tested on its own.
 
-import { CONTRACT_VERSION, type Disposable, type Plugin } from '@visual-editor/contract';
+import { CONTRACT_VERSION, type Disposable, type Plugin, type PluginAgent, type PluginSkill, type PluginTool } from '@visual-editor/contract';
+
+/** The hub's own tools (hub/tools.ts): a plugin's tool can't take one of these names. */
+export const HUB_TOOLS = ['overview', 'list_cards', 'card', 'memory', 'propose_change', 'proposal_status', 'remember'];
+const TOOL_NAME = /^[a-z][a-z0-9_]{0,47}$/;
+const NAME = /^[a-z][a-z0-9-]{0,47}$/;
 
 export interface PluginProblem {
   /** The plugin's id or name, as far as it can be told. */
@@ -11,7 +16,7 @@ export interface PluginProblem {
 }
 
 /** Why a plugin can't be used, or undefined when it can. */
-export function checkPlugin(plugin: Partial<Plugin> | undefined, taken: (id: string) => boolean): string | undefined {
+export function checkPlugin(plugin: Partial<Plugin> | undefined, taken: (id: string) => boolean, others: Plugin[] = []): string | undefined {
   if (!plugin || typeof plugin !== 'object') return 'It registered nothing usable.';
   if (!plugin.id || !/^[a-z][a-z0-9-]*$/.test(plugin.id)) return 'Its id must be short lowercase letters, digits and dashes, like "react".';
   if (!plugin.name) return 'It has no name to show.';
@@ -32,6 +37,37 @@ export function checkPlugin(plugin: Partial<Plugin> | undefined, taken: (id: str
     panels.add(p.id);
     if (!p.name || typeof p.icon !== 'string' || typeof p.page !== 'string' || typeof p.panel !== 'string') return `Its Preview panel "${p.id}" is missing a name, an icon, or its page or panel script.`;
   }
+  return checkHelpers(plugin, others);
+}
+
+/** Its tools, skills and agents: well formed, and named apart from the hub's tools and every other plugin's. */
+function checkHelpers(plugin: Partial<Plugin>, others: Plugin[]): string | undefined {
+  const toolNames = new Set([...HUB_TOOLS, ...others.flatMap((o) => (o.tools ?? []).map((t) => t.name))]);
+  for (const t of plugin.tools ?? []) {
+    if (!t?.name || !TOOL_NAME.test(t.name)) return 'Each of its tools needs a name of lowercase letters, digits and underscores, like "variant_brief".';
+    if (toolNames.has(t.name)) return `Its tool "${t.name}" has the same name as another tool.`;
+    toolNames.add(t.name);
+    if (!t.title || !t.description || typeof t.run !== 'function') return `Its tool "${t.name}" is missing a title, a description or run().`;
+    for (const [name, input] of Object.entries(t.input ?? {})) {
+      if (name === 'project') return `Its tool "${t.name}" can't have an input called "project": the shell adds that one.`;
+      if (!input?.description || !['string', 'number', 'integer', 'boolean', 'strings'].includes(input.type)) return `Its tool "${t.name}" has an input "${name}" without a type or a description.`;
+    }
+  }
+  const skillNames = new Set(others.flatMap((o) => (o.skills ?? []).map((s) => s.name)));
+  for (const s of plugin.skills ?? []) {
+    if (!s?.name || !NAME.test(s.name)) return 'Each of its skills needs a name of lowercase letters, digits and dashes, like "variant-rules".';
+    if (skillNames.has(s.name)) return `Its skill "${s.name}" has the same name as another plugin's.`;
+    skillNames.add(s.name);
+    if (!s.description || !s.text) return `Its skill "${s.name}" is missing a description or its text.`;
+  }
+  const agentNames = new Set(others.flatMap((o) => (o.agents ?? []).map((a) => a.name)));
+  for (const a of plugin.agents ?? []) {
+    if (!a?.name || !NAME.test(a.name)) return 'Each of its agents needs a name of lowercase letters, digits and dashes, like "make-previewable".';
+    if (agentNames.has(a.name)) return `Its agent "${a.name}" has the same name as another plugin's.`;
+    agentNames.add(a.name);
+    if (!a.title || !a.description || !a.worker?.prompt || !a.checker?.prompt) return `Its agent "${a.name}" is missing a title, a description, or the worker's or checker's instructions.`;
+    if (a.rounds !== undefined && (!Number.isInteger(a.rounds) || a.rounds < 1 || a.rounds > 3)) return `Its agent "${a.name}" can send work back 1 to 3 times, not ${a.rounds}.`;
+  }
   return undefined;
 }
 
@@ -43,7 +79,7 @@ export class PluginRegistry {
 
   /** Adds a plugin. Throws with a readable message when it can't be used (and remembers the problem). */
   register(plugin: Plugin): Disposable {
-    const why = checkPlugin(plugin, (id) => this.plugins.has(id));
+    const why = checkPlugin(plugin, (id) => this.plugins.has(id), [...this.plugins.values()]);
     if (why) {
       const name = (plugin as Partial<Plugin> | undefined)?.name ?? (plugin as Partial<Plugin> | undefined)?.id ?? 'A plugin';
       this.problems.push({ plugin: name, message: why });
@@ -68,6 +104,19 @@ export class PluginRegistry {
 
   get(id: string): Plugin | undefined {
     return this.plugins.get(id);
+  }
+
+  /** Every plugin's tools, skills and agents, each with its plugin. */
+  tools(): { plugin: Plugin; tool: PluginTool }[] {
+    return this.list().flatMap((plugin) => (plugin.tools ?? []).map((tool) => ({ plugin, tool })));
+  }
+
+  skills(): { plugin: Plugin; skill: PluginSkill }[] {
+    return this.list().flatMap((plugin) => (plugin.skills ?? []).map((skill) => ({ plugin, skill })));
+  }
+
+  agents(): { plugin: Plugin; agent: PluginAgent }[] {
+    return this.list().flatMap((plugin) => (plugin.agents ?? []).map((agent) => ({ plugin, agent })));
   }
 
   /** Called whenever plugins are added or removed, or one is refused. */

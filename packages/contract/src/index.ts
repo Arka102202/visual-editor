@@ -178,6 +178,87 @@ export interface Plugin {
    * memory), as a change to review. A string says why not, or what to do instead.
    */
   previewFix?(project: ProjectInfo, need: string): ProposedChange | string;
+  /** Contract 8: tools assistants (Claude Code) can call, through the shell's hub, for projects the plugin detected. */
+  tools?: PluginTool[];
+  /** Contract 8: know-how for assistants, in words (Claude Code skills). */
+  skills?: PluginSkill[];
+  /** Contract 8: jobs an assistant does for the developer: a worker makes a change, a checker proves it. */
+  agents?: PluginAgent[];
+}
+
+// ---------------------------------------------------------------------------
+// Contract 8: tools, skills and agents for assistants
+// ---------------------------------------------------------------------------
+
+/**
+ * A tool Claude calls, e.g. React's `previewable`. The shell adds a `project` input (which project it's about) and
+ * only runs it for projects the plugin detected. Tools read; changes go through the shell's own propose_change.
+ */
+export interface PluginTool {
+  /** Lowercase letters, digits and underscores, unique across every plugin, e.g. "variant_brief". */
+  name: string;
+  /** A few words, e.g. "Components that can be previewed". */
+  title: string;
+  /** What it gives and when to call it, for the assistant. */
+  description: string;
+  /** Its inputs, by name. */
+  input?: Record<string, ToolInput>;
+  run(input: Record<string, unknown>, context: ToolContext): ToolAnswer | Promise<ToolAnswer>;
+}
+
+export interface ToolInput {
+  /** "strings": a list of strings. */
+  type: 'string' | 'number' | 'integer' | 'boolean' | 'strings';
+  description: string;
+  optional?: boolean;
+  /** For a string: the only values it can have. */
+  oneOf?: string[];
+}
+
+/** What a tool is given about the project it's called for. */
+export interface ToolContext {
+  project: ProjectInfo;
+  items: Item[];
+  links: Link[];
+  /** A file's text as the developer sees it (unsaved edits included), or undefined when it doesn't exist. */
+  read(path: string): Promise<string | undefined>;
+}
+
+/** The text the assistant gets, or a problem it should tell the developer about (or work around). */
+export type ToolAnswer = string | { problem: string };
+
+/** Know-how an assistant loads when it's relevant (a Claude Code skill). */
+export interface PluginSkill {
+  /** Lowercase letters, digits and dashes, unique across every plugin, e.g. "variant-rules". */
+  name: string;
+  /** When to use it, for the assistant (it decides from this alone whether to load the rest). */
+  description: string;
+  /** The know-how itself (Markdown). */
+  text: string;
+}
+
+/**
+ * A job an assistant does, in two parts: the worker makes a draft, the checker proves it works or sends it back with
+ * reasons, at most `rounds` times. Started from chat, or from a button (in the background or in a terminal).
+ */
+export interface PluginAgent {
+  /** Lowercase letters, digits and dashes, unique across every plugin, e.g. "make-previewable". */
+  name: string;
+  /** Shown on its button, e.g. "Make previewable". */
+  title: string;
+  /** What it does and when to use it, for the developer and the assistant. */
+  description: string;
+  worker: AgentPart;
+  checker: AgentPart;
+  /** How many times the checker can send the draft back (1 to 3; 3 when not said). */
+  rounds?: number;
+}
+
+export interface AgentPart {
+  /** Its instructions (Markdown). */
+  prompt: string;
+  /** The tools it may use, by name (the hub's and plugins'); none said: the hub's reading tools. */
+  tools?: string[];
 }
 
 /** Contract 8: files a plugin keeps in place in a project, written by the shell without review (the developer chose that). */

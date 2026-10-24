@@ -38,3 +38,25 @@ test('registry: plugins that cannot be used are refused with a reason the develo
   assert.equal(checkPlugin(undefined, () => false), 'It registered nothing usable.');
   assert.equal(r.list().length, 1, 'refused plugins are not added');
 });
+
+test('registry: tools, skills and agents are checked and collected from every plugin', () => {
+  const tool = (name: string) => ({ name, title: 'T', description: 'D', run: () => 'ok' });
+  const agent = { name: 'make-previewable', title: 'Make previewable', description: 'D', worker: { prompt: 'Do' }, checker: { prompt: 'Check' } };
+  const r = new PluginRegistry();
+  r.register(plugin({ id: 'a', name: 'A', tools: [tool('variant_brief')], skills: [{ name: 'variant-rules', description: 'D', text: 'T' }], agents: [agent] }));
+  r.register(plugin({ id: 'b', name: 'B', tools: [tool('routes_brief')] }));
+  assert.deepEqual(r.tools().map((t) => `${t.plugin.id}:${t.tool.name}`), ['a:variant_brief', 'b:routes_brief']);
+  assert.deepEqual(r.skills().map((s) => s.skill.name), ['variant-rules']);
+  assert.deepEqual(r.agents().map((a) => a.agent.name), ['make-previewable']);
+  // Names stay apart: from the hub's tools and from other plugins'.
+  assert.throws(() => r.register(plugin({ id: 'c', tools: [tool('variant_brief')] })), /same name as another tool/);
+  assert.throws(() => r.register(plugin({ id: 'd', tools: [tool('overview')] })), /same name as another tool/);
+  assert.throws(() => r.register(plugin({ id: 'e', agents: [agent] })), /agent "make-previewable" has the same name/);
+  const check = (p: Partial<Plugin>) => checkPlugin(plugin(p), () => false);
+  assert.match(check({ tools: [tool('Bad-Name')] })!, /underscores/);
+  assert.match(check({ tools: [{ ...tool('x'), input: { project: { type: 'string', description: 'p' } } }] })!, /the shell adds that one/);
+  assert.match(check({ tools: [{ ...tool('x'), input: { n: { type: 'date' as never, description: 'n' } } }] })!, /without a type/);
+  assert.match(check({ skills: [{ name: 's', description: 'D', text: '' }] })!, /missing a description or its text/);
+  assert.match(check({ agents: [{ ...agent, checker: { prompt: '' } }] })!, /checker's instructions/);
+  assert.match(check({ agents: [{ ...agent, rounds: 5 }] })!, /1 to 3 times, not 5/);
+});

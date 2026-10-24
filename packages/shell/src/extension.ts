@@ -232,6 +232,7 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     readFile: (root, path) => vscodeFiles(root, changes).read(path),
     propose: (root, p) => review.receiveProposal(root, p),
     remember: (root, e) => memory.update(root, e),
+    tools: () => registry.tools(),
   }, log);
   void hub.start();
   const assistantsView = new AssistantsView(hub);
