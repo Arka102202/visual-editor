@@ -6,6 +6,7 @@ import * as vscode from 'vscode';
 import { webviewPage } from './webviewPage';
 import { vscodeFiles } from './vscodeFiles';
 import { join } from 'node:path';
+import { cardsTouched } from './draftItems';
 import type { Disposable, Item } from '@visual-editor/contract';
 import type { OutsideChanges } from './changes';
 import type { CurrentProject } from './currentProject';
@@ -108,15 +109,7 @@ export class Review implements vscode.Disposable {
    */
   private liveParts(p: Proposal, items: Item[]): Pick<ReviewItem, 'cards' | 'live'> {
     if (!this.live) return {};
-    const paths = p.changes.map((c) => c.path);
-    const dir = (path: string) => path.slice(0, path.lastIndexOf('/') + 1);
-    const cards = items
-      .filter((i) => i.preview && i.source)
-      .filter((i) => {
-        const own = [i.source!.path, ...(i.preview!.files ?? []), ...i.preview!.variants.map((v) => v.path)];
-        return paths.some((path) => own.includes(path) || dir(path) === dir(i.source!.path));
-      })
-      .map((i) => ({ id: i.id, label: i.label }));
+    const cards = cardsTouched(items, p.changes.map((c) => c.path)).map((i) => ({ id: i.id, label: i.label }));
     const ids = new Set([...cards.map((c) => c.id), ...(p.evidence ?? []).flatMap((e) => (e.card ? [e.card] : []))]);
     const live = Object.fromEntries([...ids].filter((id) => this.lives.has(`${p.id} ${id}`)).map((id) => [id, this.lives.get(`${p.id} ${id}`)!]));
     return { ...(cards.length ? { cards } : {}), ...(Object.keys(live).length ? { live } : {}) };

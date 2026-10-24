@@ -22,3 +22,16 @@ export async function draftItems(state: ProjectState, draft: Pick<Draft, 'id' | 
   }
   return { project, items };
 }
+
+/**
+ * The cards that can be previewed which these paths change: a file of theirs (a design, the static part, the data…) or
+ * a new file in their folder.
+ */
+export function cardsTouched(items: Item[], paths: string[]): Item[] {
+  const dir = (path: string) => path.slice(0, path.lastIndexOf('/') + 1);
+  return items.filter((i) => {
+    if (!i.preview || !i.source) return false;
+    const own = [i.source.path, ...(i.preview.files ?? []), ...i.preview.variants.map((v) => v.path)];
+    return paths.some((path) => own.includes(path) || dir(path) === dir(i.source!.path));
+  });
+}

@@ -31,23 +31,29 @@
       "visualEditor": [
         {
           "id": "visualEditor.projects",
-          "name": "Projects"
+          "name": "Projects",
+          "initialSize": 2
         },
         {
           "id": "visualEditor.assistants",
-          "name": "Assistants"
+          "name": "Assistants",
+          "initialSize": 1
         },
         {
+          "type": "webview",
           "id": "visualEditor.agents",
-          "name": "Agents"
+          "name": "Agents",
+          "initialSize": 4
         },
         {
           "id": "visualEditor.memory",
-          "name": "Memory"
+          "name": "Memory",
+          "initialSize": 3
         },
         {
           "id": "visualEditor.plugins",
-          "name": "Plugins"
+          "name": "Plugins",
+          "initialSize": 1
         }
       ]
     },
@@ -139,6 +145,12 @@
         "title": "Disconnect",
         "category": "Visual Editor",
         "icon": "$(debug-disconnect)"
+      },
+      {
+        "command": "visualEditor.stopJob",
+        "title": "Stop the agent",
+        "category": "Visual Editor",
+        "icon": "$(debug-stop)"
       },
       {
         "command": "visualEditor.addAgents",

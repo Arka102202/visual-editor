@@ -61,6 +61,8 @@ export const ICONS = {
   key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M14.5 8.5l2 2"/>',
   trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
   add: '<path d="M12 5v14M5 12h14"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  plug: '<path d="M9 3v4M15 3v4M7 7h10v3a5 5 0 0 1-10 0zM12 15v6"/>',
   panels: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 9v11"/>',
   dockLeft: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 4h6v16H3"/>',
   dockRight: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4h6v16h-6"/>',

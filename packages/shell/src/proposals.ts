@@ -26,7 +26,7 @@ export interface FileChange {
  */
 export interface Evidence {
   kind: 'check' | 'note' | 'picture';
-  /** What it is, e.g. "Check variant folders against the rules". */
+  /** What it is, e.g. "Check the preview setup". */
   title: string;
   text: string;
   /** For a check: whether it passed (unknown when it didn't say). */

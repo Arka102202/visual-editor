@@ -202,10 +202,11 @@ export async function run() {
     const updated = () => existsSync(cache) && readdirSync(cache).some((v) => existsSync(join(cache, v, 'agents', 'extra-job-worker.md')));
     await until(() => updated() && t.hub.assistants()[0].agents === 'on', 'Claude Code to update to the new agents', 30_000);
     // The Agents section lists what each plugin gives (Hello's agent, skill and tool; the extra plugin's agent).
-    const labels = (nodes: any[]) => nodes.map((n) => String(t.agentsView.getTreeItem(n).label));
-    const top = t.agentsView.getChildren();
-    const hello = top.find((n: any) => n.plugin?.id === 'hello');
-    if (labels(top).join() !== 'Visual Editor,Extra,Hello' || labels(t.agentsView.getChildren(hello)).join() !== 'Write a hello note,hello-greetings,Count the project’s files') throw new Error(`agents section: ${labels(top)} / ${hello && labels(t.agentsView.getChildren(hello))}`);
+    // (Each as a coloured badge: Agent, Skill or Tool, with a plain-words pop-over.)
+    const shown = () => t.agentsView.state() as { status?: { action: string }; groups: { name: string; items: { kind: string; title: string; summary: string }[] }[] };
+    const groups = shown().groups;
+    const hello = groups.find((g) => g.name === 'Hello');
+    if (groups.map((g) => g.name).join() !== 'Visual Editor,Extra,Hello' || hello?.items.map((i) => `${i.kind}:${i.title}`).join() !== 'agent:Write a hello note,skill:How to say hello,tool:Count the project’s files' || hello.items[0].summary !== 'An example agent: writes a one-line hello note for the README.') throw new Error(`agents section: ${JSON.stringify(groups)}`);
     await vscode.commands.executeCommand('visualEditor.agents.focus');
     await wait(1500);
     await shot('11-agents-section');
@@ -216,7 +217,7 @@ export async function run() {
     await t.hub.disconnectClaudeCode();
     await until(() => t.hub.claudeState() === 'off', 'the hub to be gone from Claude Code settings', 15_000);
     if (t.hub.assistants()[0].agents !== 'off' || local().enabledPlugins?.[agents.ref]) throw new Error('the agents are still installed');
-    if (labels(t.agentsView.getChildren()).join() !== 'Claude Code isn’t connected,Visual Editor,Hello') throw new Error(`agents section after disconnect: ${labels(t.agentsView.getChildren())}`);
+    if (shown().status?.action !== 'connect' || shown().groups.map((g) => g.name).join() !== 'Visual Editor,Hello') throw new Error(`agents section after disconnect: ${JSON.stringify(shown())}`);
     // The test's own marketplace points at this throwaway VS Code's storage: take it out of Claude Code again.
     await new Promise((done) => require('node:child_process').exec(`claude plugin marketplace remove ${agents.marketplace}`, { cwd: root, env: { ...process.env, PATH: `${join(homedir(), '.local/bin')}:${process.env.PATH}` } }, done));
   });

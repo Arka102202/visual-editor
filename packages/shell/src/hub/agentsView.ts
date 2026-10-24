@@ -1,114 +1,87 @@
-// The "Agents" list in Visual Editor's side panel: what each plugin gives assistants (agents, skills, tools), with
-// what each does on hover, and whether Claude Code has them for this folder. (Running, progress and results come with
-// the Agents panel, plan step 2.7.)
+// The "Agents" section in Visual Editor's side panel (a small page: agentsPanel/main.ts): what each plugin gives
+// assistants, as coloured badges (Agent, Skill, Tool) with a pop-over in plain words, whether Claude Code has them for
+// this folder, and each agent's job (working now, with Stop, or how the last one ended).
 
 import * as vscode from 'vscode';
-import type { Disposable, Plugin, PluginAgent, PluginSkill, PluginTool } from '@visual-editor/contract';
+import type { Disposable } from '@visual-editor/contract';
+import type { AgentsEntry, FromAgents, ToAgents } from '../agentsMessages';
 import type { PluginRegistry } from '../registry';
+import { webviewPage } from '../webviewPage';
 import type { Hub } from './hub';
+import { finished, type Job } from '../jobs';
 
-type Node =
-  | { kind: 'status'; text: string; tip: string; command?: string; icon: string }
-  | { kind: 'shell' }
-  | { kind: 'plugin'; plugin: Plugin }
-  | { kind: 'agent'; agent: PluginAgent }
-  | { kind: 'skill'; skill: PluginSkill }
-  | { kind: 'tool'; tool: PluginTool };
-
-export class AgentsView implements vscode.TreeDataProvider<Node>, vscode.Disposable {
-  private readonly emitter = new vscode.EventEmitter<void>();
-  readonly onDidChangeTreeData = this.emitter.event;
+export class AgentsView implements vscode.WebviewViewProvider, vscode.Disposable {
+  private view: vscode.WebviewView | undefined;
   private readonly off: Disposable[];
 
   constructor(
+    private readonly extensionUri: vscode.Uri,
     private readonly registry: PluginRegistry,
     private readonly hub: Hub,
+    /** The open project's agent jobs, newest first. */
+    private readonly jobs: () => Job[] = () => [],
+    /** Stops a job (it stops at its next step). */
+    private readonly stop: (id: string) => void = () => {},
   ) {
-    this.off = [registry.onChange(() => this.emitter.fire()), hub.onChange(() => this.emitter.fire())];
+    this.off = [registry.onChange(() => this.refresh()), hub.onChange(() => this.refresh())];
   }
 
-  getChildren(node?: Node): Node[] {
-    if (!node) {
-      const plugins = this.registry.list().filter((p) => p.agents?.length || p.skills?.length || p.tools?.length);
-      return [...this.status(), { kind: 'shell' }, ...plugins.map((plugin) => ({ kind: 'plugin', plugin }) as const)];
-    }
-    if (node.kind !== 'plugin') return [];
-    const p = node.plugin;
-    return [
-      ...(p.agents ?? []).map((agent) => ({ kind: 'agent', agent }) as const),
-      ...(p.skills ?? []).map((skill) => ({ kind: 'skill', skill }) as const),
-      ...(p.tools ?? []).map((tool) => ({ kind: 'tool', tool }) as const),
+  resolveWebviewView(view: vscode.WebviewView) {
+    this.view = view;
+    const dist = vscode.Uri.joinPath(this.extensionUri, 'dist');
+    view.webview.options = { enableScripts: true, localResourceRoots: [dist] };
+    view.webview.html = webviewPage(view.webview, vscode.Uri.joinPath(dist, 'agentsPanel.js'), 'Agents');
+    view.webview.onDidReceiveMessage((m: FromAgents) => {
+      if (m.type === 'ready') this.refresh();
+      else if (m.type === 'connect') void vscode.commands.executeCommand('visualEditor.connectAssistant');
+      else if (m.type === 'addAgents') void vscode.commands.executeCommand('visualEditor.addAgents');
+      else if (m.type === 'stop') this.stop(m.job);
+    });
+    view.onDidChangeVisibility(() => view.visible && this.refresh());
+  }
+
+  /** What the section shows. */
+  state(): ToAgents {
+    const jobs = this.jobs();
+    const groups: ToAgents['groups'] = [
+      {
+        name: 'Visual Editor',
+        items: [{ kind: 'skill', title: 'How to use the map', summary: 'Claude reads this first: look things up on Visual Editor’s map instead of searching files, follow your project’s rules, and send every change to Review.', claudeName: 'visual-editor:visual-editor' }],
+      },
     ];
-  }
-
-  /** Whether Claude Code can use them here, with what to do when it can't. */
-  private status(): Node[] {
-    const claude = this.hub.assistants().find((a) => a.id === 'claude');
-    if (!claude || claude.state !== 'on')
-      return [{ kind: 'status', text: 'Claude Code isn’t connected', tip: 'Connect Claude Code to use these: its agents and know-how come with it.', command: 'visualEditor.connectAssistant', icon: 'plug' }];
-    if (claude.agents === 'off')
-      return [{ kind: 'status', text: 'Not added to Claude Code yet', tip: 'Claude Code is connected, but Visual Editor’s agents and know-how aren’t added to it for this folder. Click to add them.', command: 'visualEditor.addAgents', icon: 'add' }];
-    return [];
-  }
-
-  getTreeItem(node: Node): vscode.TreeItem {
-    switch (node.kind) {
-      case 'status': {
-        const item = new vscode.TreeItem(node.text);
-        item.tooltip = node.tip;
-        item.iconPath = new vscode.ThemeIcon(node.icon);
-        if (node.command) item.command = { command: node.command, title: '' };
-        return item;
-      }
-      case 'shell': {
-        const item = new vscode.TreeItem('Visual Editor');
-        item.description = 'how to use the map';
-        item.tooltip = 'Know-how every assistant gets: use the map tools before searching files, follow the project’s rules, and change code only through Review.';
-        item.iconPath = new vscode.ThemeIcon('book');
-        return item;
-      }
-      case 'plugin': {
-        const p = node.plugin;
-        const item = new vscode.TreeItem(p.name, vscode.TreeItemCollapsibleState.Expanded);
-        item.description = [count(p.agents, 'agent'), count(p.skills, 'skill'), count(p.tools, 'tool')].filter(Boolean).join(' · ');
-        item.tooltip = `What the ${p.name} plugin gives assistants.`;
-        item.iconPath = new vscode.ThemeIcon('extensions');
-        return item;
-      }
-      case 'agent': {
-        const a = node.agent;
-        const item = new vscode.TreeItem(a.title);
-        item.description = 'agent';
-        const rounds = a.rounds ?? 3;
-        item.tooltip = new vscode.MarkdownString(
-          `**${a.title}**\n\n${a.description}\n\nA worker makes the change; a checker proves it or sends it back (at most ${rounds === 1 ? 'once' : `${rounds} times`}). In Claude Code: \`visual-editor:${a.name}\`.`,
-        );
-        item.iconPath = new vscode.ThemeIcon('hubot');
-        return item;
-      }
-      case 'skill': {
-        const item = new vscode.TreeItem(node.skill.name);
-        item.description = 'know-how';
-        item.tooltip = `${node.skill.description}\n\nIn Claude Code: visual-editor:${node.skill.name}`;
-        item.iconPath = new vscode.ThemeIcon('book');
-        return item;
-      }
-      case 'tool': {
-        const item = new vscode.TreeItem(node.tool.title);
-        item.description = 'tool';
-        item.tooltip = `${node.tool.description}\n\nClaude calls it as ${node.tool.name}.`;
-        item.iconPath = new vscode.ThemeIcon('tools');
-        return item;
-      }
+    for (const p of this.registry.list()) {
+      const items: AgentsEntry[] = [
+        ...(p.agents ?? []).map((a): AgentsEntry => {
+          const job = jobs.find((j) => j.agent === a.name);
+          return {
+            kind: 'agent',
+            title: a.title,
+            summary: a.summary ?? a.description,
+            claudeName: `visual-editor:${a.name}`,
+            ...(job ? { job: { id: job.id, status: job.status, round: job.round, rounds: job.rounds, request: job.request, running: !finished(job) } } : {}),
+          };
+        }),
+        ...(p.skills ?? []).map((s): AgentsEntry => ({ kind: 'skill', title: s.title ?? s.name, summary: s.summary ?? s.description, claudeName: `visual-editor:${s.name}` })),
+        ...(p.tools ?? []).map((t): AgentsEntry => ({ kind: 'tool', title: t.title, summary: t.summary ?? t.description, claudeName: t.name })),
+      ];
+      if (items.length) groups.push({ name: p.name, items });
     }
+    const claude = this.hub.assistants().find((a) => a.id === 'claude');
+    const status: ToAgents['status'] =
+      !claude || claude.state !== 'on'
+        ? { text: 'Claude Code isn’t connected, so it can’t use these yet.', tip: 'Connect Claude Code: its agents, skills and tools come with it', action: 'connect' }
+        : claude.agents === 'off'
+          ? { text: 'Claude Code is connected, but these aren’t added to it yet.', tip: 'Add Visual Editor’s agents and skills to Claude Code for this folder', action: 'addAgents' }
+          : undefined;
+    return { type: 'show', ...(status ? { status } : {}), groups };
+  }
+
+  /** Something changed (plugins, the connection, a job): draw again. */
+  refresh() {
+    if (this.view?.visible) void this.view.webview.postMessage(this.state());
   }
 
   dispose() {
     for (const d of this.off) d.dispose();
-    this.emitter.dispose();
   }
-}
-
-function count(list: unknown[] | undefined, word: string): string {
-  return list?.length ? `${list.length} ${word}${list.length === 1 ? '' : 's'}` : '';
 }
