@@ -134,6 +134,8 @@ export type FromMap =
   | { type: 'useVariant'; id: string; variant: string; situation?: string }
   /** Add or update what Preview needs from the plugins (React: Visual Editor's helper), as a proposal. */
   | { type: 'updateHelper'; id: string }
+  /** Something a preview needs (React: "router"): the card's plugin proposes it. */
+  | { type: 'previewFix'; id: string; need: string }
   /** Open the developer's own file for a place in the code the browser runs (a console message's). */
   | { type: 'openSource'; url: string; line: number; column: number }
   /** Open the stylesheet a CSS rule comes from, at that rule. */

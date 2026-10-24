@@ -57,6 +57,13 @@ interface Deps {
   useVariant(item: Item, variant: string, situation?: string): void;
   /** "Update the helper": proposes what Preview needs from the card's plugin. */
   updateHelper(item: Item): void;
+  /** Something a preview lacks (React: "router"): the card's plugin proposes it. */
+  previewFix(item: Item, need: string): void;
+}
+
+/** A preview stopped for want of a router (a link outside one), in an error's words. */
+export function needsRouter(text: string): boolean {
+  return /context of a <Router>|useHref\(\)|useNavigate\(\) may be used only|useLocation\(\) may be used only|<Link> outside a <Router>|property 'basename'|reading 'basename'/i.test(text);
 }
 
 type Design = NonNullable<Item['preview']>['variants'][number];
@@ -149,7 +156,7 @@ export function makeToast(host: HTMLElement): (text: string) => void {
 export function pageNote(data: Record<string, unknown>, name: string): string | undefined {
   if (data.type === 'blocked') return `A variant tried to call ${String(data.method)} ${String(data.url)}. Visual Editor blocked it: variants show looks only, with fixed data. Move the call to ${name}.data.tsx and pass what it gives in ${name}View.`;
   if (data.type === 'missing') return data.what === 'helper' ? 'The project doesn’t have Visual Editor’s helper (src/visual-editor.tsx) yet, so nothing can be drawn.' : 'The project’s helper (src/visual-editor.tsx) is from before the Playground: it needs updating (it has no mountPreview).';
-  if (data.type === 'error') return `Something stopped while drawing: ${String(data.text)}`;
+  if (data.type === 'error') return needsRouter(String(data.text)) ? undefined : `Something stopped while drawing: ${String(data.text)}`;
   if (data.type === 'drawn') {
     const broken = (data.broken as { id: string; text: string }[] | undefined) ?? [];
     return broken.length ? broken.map((b) => `The variant “${b.id}” stopped while drawing: ${b.text}`).join('\n') : undefined;
@@ -463,6 +470,16 @@ export class Playground {
 
   /** What the page says that this window acts on: where the prototype would go, an older helper. */
   private fromPageExtra(data: Record<string, unknown>) {
+    if (data.type === 'needs' || (data.type === 'error' && needsRouter(String(data.text)))) {
+      const what = data.type === 'needs' ? String(data.what) : 'router';
+      if (what === 'router' && this.item) {
+        const item = this.item;
+        const add = iconButton('add', 'Add src/visual-editor.providers.tsx with a router in memory (a proposal you review first)');
+        add.addEventListener('click', () => this.deps.previewFix(item, 'router'));
+        this.say(`Links on this page need a router around them, and previews don’t have one yet, so it stopped drawing. Visual Editor can add a small file that wraps previews in a router held in memory (links then show where they’d go, and stay on the page).`, add);
+      }
+      return;
+    }
     if (data.type === 'goto') this.toast(`Would open ${String(data.path) || 'another page'}. A preview is one page, so it stays here.`);
     else if (data.type === 'old' && this.item) {
       const item = this.item;

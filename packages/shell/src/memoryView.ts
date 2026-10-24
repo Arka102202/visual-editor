@@ -75,7 +75,21 @@ export class ProjectMemory {
   }
 }
 
-type Node = { kind: 'group'; group: 'rule' | 'decision' | 'change'; entries: MemoryEntry[] } | { kind: 'entry'; entry: MemoryEntry } | { kind: 'note'; text: string };
+type Node =
+  | { kind: 'group'; group: 'rule' | 'decision' | 'change'; entries: MemoryEntry[]; waiting: Proposal[] }
+  | { kind: 'entry'; entry: MemoryEntry }
+  | { kind: 'waiting'; proposal: Proposal }
+  | { kind: 'note'; text: string };
+
+/** Each outcome's icon and colour (the theme's own chart colours): waiting yellow, applied green, rejected red… */
+const LOOKS: Record<Outcome | 'waiting', { icon: string; colour?: string }> = {
+  waiting: { icon: 'clock', colour: 'charts.yellow' },
+  applied: { icon: 'check', colour: 'charts.green' },
+  rejected: { icon: 'close', colour: 'charts.red' },
+  'sent-back': { icon: 'reply', colour: 'charts.orange' },
+  undone: { icon: 'discard', colour: 'disabledForeground' },
+};
+const icon = (look: { icon: string; colour?: string }) => new vscode.ThemeIcon(look.icon, look.colour ? new vscode.ThemeColor(look.colour) : undefined);
 
 const GROUPS = {
   rule: { title: 'Rules', empty: 'No rules yet', icon: 'law' },
@@ -89,12 +103,21 @@ export class MemoryView implements vscode.TreeDataProvider<Node>, vscode.Disposa
   private readonly emitter = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.emitter.event;
   private readonly offs: Disposable[];
+  /** Proposals waiting for review (from Review, given once it exists). */
+  private waiting: ((root: string) => Proposal[]) | undefined;
 
   constructor(
     private readonly memory: ProjectMemory,
     private readonly current: CurrentProject,
   ) {
     this.offs = [memory.onChange(() => this.emitter.fire()), current.onChange(() => this.emitter.fire())];
+  }
+
+  /** Shows waiting proposals at the top of Recent changes (they come and go with Review). */
+  setWaiting(list: (root: string) => Proposal[], onChange: (fn: () => void) => Disposable) {
+    this.waiting = list;
+    this.offs.push(onChange(() => this.emitter.fire()));
+    this.emitter.fire();
   }
 
   getChildren(node?: Node): Node[] {
@@ -106,10 +129,12 @@ export class MemoryView implements vscode.TreeDataProvider<Node>, vscode.Disposa
         kind: 'group',
         group,
         entries: all.filter((e) => e.kind === group).slice(0, group === 'change' ? RECENT : undefined),
+        waiting: group === 'change' ? (this.waiting?.(root) ?? []).filter((p) => p.status === 'proposed') : [],
       }));
     }
     if (node.kind !== 'group') return [];
-    return node.entries.length ? node.entries.map((entry) => ({ kind: 'entry', entry })) : [{ kind: 'note', text: GROUPS[node.group].empty }];
+    const children: Node[] = [...node.waiting.map((proposal) => ({ kind: 'waiting' as const, proposal })), ...node.entries.map((entry) => ({ kind: 'entry' as const, entry }))];
+    return children.length ? children : [{ kind: 'note', text: GROUPS[node.group].empty }];
   }
 
   getTreeItem(node: Node): vscode.TreeItem {
@@ -120,10 +145,22 @@ export class MemoryView implements vscode.TreeDataProvider<Node>, vscode.Disposa
     }
     if (node.kind === 'group') {
       const g = GROUPS[node.group];
-      const item = new vscode.TreeItem(g.title, node.group === 'change' ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.Expanded);
-      item.description = node.entries.length ? String(node.entries.length) : '';
+      // Recent changes opens by itself when something is waiting for review.
+      const open = node.group !== 'change' || node.waiting.length > 0;
+      const item = new vscode.TreeItem(g.title, open ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
+      item.description = node.waiting.length ? `${node.waiting.length} waiting · ${node.entries.length}` : node.entries.length ? String(node.entries.length) : '';
       item.iconPath = new vscode.ThemeIcon(g.icon);
       item.contextValue = `group-${node.group}`;
+      return item;
+    }
+    if (node.kind === 'waiting') {
+      const p = node.proposal;
+      const item = new vscode.TreeItem(p.title);
+      item.description = `waiting for you · ${p.by.name} · ${new Date(p.createdAt).toLocaleDateString()}`;
+      item.iconPath = icon(LOOKS.waiting);
+      item.tooltip = new vscode.MarkdownString([`**${p.title}**`, p.why ?? '', 'Waiting for your review: click to open it in Review.'].filter(Boolean).join('\n\n'));
+      item.command = { command: 'visualEditor.openReview', title: 'Open in Review', arguments: [p.id] };
+      item.contextValue = 'waiting';
       return item;
     }
     const e = node.entry;
@@ -131,7 +168,7 @@ export class MemoryView implements vscode.TreeDataProvider<Node>, vscode.Disposa
     const when = new Date(e.at).toLocaleDateString();
     if (e.kind === 'change') {
       item.description = `${OUTCOME_WORDS[e.outcome ?? 'applied']} · ${e.by.name} · ${when}`;
-      item.iconPath = new vscode.ThemeIcon(e.outcome === 'applied' ? 'check' : e.outcome === 'undone' ? 'discard' : e.outcome === 'rejected' ? 'close' : 'reply');
+      item.iconPath = icon(LOOKS[e.outcome ?? 'applied']);
       if (e.proposal) item.command = { command: 'visualEditor.openReview', title: 'Open in Review', arguments: [e.proposal] };
     } else {
       item.description = e.kind === 'note' ? 'note' : when;
