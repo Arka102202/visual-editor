@@ -276,6 +276,10 @@ export interface PreviewPanelApi {
   openFile(path: string, line?: number): void;
   /** Opens the code of a card on the map, found by its name (and kind), e.g. a component. */
   openItem(label: string, kind?: string): void;
+  /** Contract 8: opens Preview for a previewable card, found by its name: one design on its own (the one in use unless said). */
+  preview(card: string, variant?: string): void;
+  /** Contract 8: opens the Playground for a previewable card, found by its name: every design in every state. */
+  playground(card: string): void;
   /** The shell's look, so plugin panels match it: buttons (icon only, name on hover) and values. */
   ui: {
     el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K];

@@ -47,6 +47,9 @@ const DEVICES: { id: string; icon: Icon; name: string; width: number; height: nu
 interface Deps {
   post(message: FromMap): void;
   store: LayoutStore;
+  /** Opens Preview or the Playground for a card, by its name (from a plugin's panel, e.g. a picked design). */
+  previewCard?(label: string, variant?: string): void;
+  playgroundCard?(label: string): void;
 }
 
 export class Webview {
@@ -90,6 +93,8 @@ export class Webview {
       changed: () => this.arrangePanels(),
       reload: () => this.reload(),
       setCount: (id, count) => this.frame.updatePanel(id, { count }),
+      previewCard: (label, variant) => deps.previewCard?.(label, variant),
+      playgroundCard: (label) => deps.playgroundCard?.(label),
     });
     this.arrangePanels();
     this.pickButton.addEventListener('click', () => this.setPicking(!this.picking));

@@ -57,6 +57,10 @@ interface Deps {
   useVariant(item: Item, variant: string, situation?: string): void;
   /** "Update the helper": proposes what Preview needs from the card's plugin. */
   updateHelper(item: Item): void;
+  /** The address of the page a card is on (its own route, or the nearest page that draws it), if any. */
+  pageOf?(item: Item): string | undefined;
+  /** Opens the Webview (the running app) at an address. */
+  openWebview?(path: string): void;
   /** Something a preview lacks (React: "router"): the card's plugin proposes it. */
   previewFix(item: Item, need: string): void;
 }
@@ -138,6 +142,14 @@ export function useWords(d: Design, situations: boolean): string {
   return (d.inUse ? 'in use' : 'not in use') + made;
 }
 
+/** The Webview button's look: the page a card is on, or why there's none. */
+export function showWebview(b: HTMLButtonElement, item: Item | undefined, path: string | undefined) {
+  const tip = path ? `Webview: the real ${item?.kind === 'page' ? 'page' : `page ${item?.label ?? 'it'} is on`} (${path}), running with real data` : `Webview: ${item?.label ?? 'it'} isn’t on a page the map knows (no route draws it)`;
+  b.classList.toggle('dim', !path);
+  b.dataset.tip = tip;
+  b.setAttribute('aria-label', tip);
+}
+
 /** A short message at the bottom of a window that goes away by itself. */
 export function makeToast(host: HTMLElement): (text: string) => void {
   const box = el('div', 'vp-toast');
@@ -175,6 +187,7 @@ export class Playground {
   private readonly previewButton = iconButton('single', '');
   private readonly useButton = iconButton('choose', '');
   private readonly resetButton = iconButton('restart', 'Reset');
+  private readonly webviewButton = iconButton('preview', 'Webview');
   /** Something was clicked or typed in the board since it was drawn (Reset has something to undo). */
   private touched = false;
   private readonly details = el('div', 'vp-details');
@@ -201,7 +214,12 @@ export class Playground {
     this.frame.onClose = () => this.onToggle?.();
     const reload = iconButton('reload', 'Draw it again');
     reload.addEventListener('click', () => this.load());
-    this.frame.addTools(reload);
+    // The real thing: the page this card is on, in the Webview (the running app, with real data).
+    this.webviewButton.addEventListener('click', () => {
+      const path = this.item && deps.pageOf?.(this.item);
+      if (path) deps.openWebview?.(path);
+    });
+    this.frame.addTools(this.webviewButton, reload);
 
     const bar = el('div', 'vp-bar');
     const zoomOut = iconButton('zoomOut', 'Zoom out');
@@ -262,6 +280,7 @@ export class Playground {
     this.frame.hint.textContent = p ? `${summary(p)} · fixed data, no network` : '';
     this.frame.open();
     this.onToggle?.();
+    showWebview(this.webviewButton, item, this.deps.pageOf?.(item));
     this.showCompare();
     this.showDetails();
     if (this.app) this.load();
