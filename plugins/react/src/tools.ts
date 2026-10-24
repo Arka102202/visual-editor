@@ -176,6 +176,7 @@ export const checkVariantFilesTool: PluginTool = {
   description:
     'Checks variant folders against the rules (docs/variants.md): missing pieces, designs that use data, a static part that is not a prototype, what would ship to users, states missing what they need. With draft, checks the project as the draft would leave it: the folders it touches, and whether anything that imported a changed file can no longer find it. Ends with PASSED or PROBLEMS.',
   input: { card: { type: 'string', description: 'Only this component\'s folder (card id or name)', optional: true } },
+  checks: true,
   run: async ({ card }, ctx) => {
     const model = await modelOf(ctx);
     const folders = model.variantFolders ?? [];
