@@ -1,4 +1,4 @@
-import { StaticPart, useVariantKey } from '../../../../visual-editor'
+import { StaticPart, useVariantKey } from '@visual-editor/react'
 import ProjectCardData from './ProjectCard.data'
 import type { ProjectCardProps } from './ProjectCard.types'
 

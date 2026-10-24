@@ -31,10 +31,13 @@ ProjectList/
   ProjectList.cards.variant.tsx    another design (id "cards")
 ```
 
-Once per project:
+Once per project, kept in place by Visual Editor (you never edit it):
 
-- `src/visual-editor.tsx`: the small helper every folder uses (it says its version). Visual Editor adds it, and
-  updates it, as proposals: Preview and the Playground offer **Update the helper** when a project's is older.
+- `.visual-editor/react/visual-editor.tsx`: **the helper**, the small toolbox every folder uses, imported by its short
+  name `@visual-editor/react`. As soon as Visual Editor opens a React project, it writes the helper and adds that short
+  name to the project's TypeScript and Vite configs (one line each, in the project's own style), and says so in a
+  notice. When a newer Visual Editor ships a newer helper, the file is updated the same way, never to an older one.
+  Commit these with your next commit. (Folders made before this imported `src/visual-editor.tsx`; that still works.)
 - `src/visual-editor.providers.tsx` **(optional)**: what every preview is wrapped in, such as a router in memory or a
   theme. Visual Editor offers it when a design needs it (links, for example).
 
@@ -86,7 +89,7 @@ has one).
 - It's a short, plain component (so the map reads it like any other), using the helper's `StaticPart`:
 
 ```tsx
-import { StaticPart, useVariantKey } from '../../visual-editor'
+import { StaticPart, useVariantKey } from '@visual-editor/react'
 import ProjectListData from './ProjectList.data'
 import type { ProjectListProps } from './ProjectList.types'
 
@@ -185,8 +188,12 @@ export default makeSwitcher<ButtonView, ButtonSituation>({
 
 - A design may say which situations it's made for: `variant = { id: 'sharp', name: 'Sharp', for: ['danger'] }`.
   Without `for`, it can serve any of them.
-- The Playground groups by situation. Preview lets you pick one. "Use this design" asks **for which situation**, and
-  changes only that line.
+- Each state shows one situation (its value for that prop: `kind: 'danger'`), so states are usually named after
+  them (`primary`, `danger`, `danger disabled`); with situations, a `default` state isn't needed.
+- The Playground groups its rows by situation; a design not made for a row's situation says so in its tile. Preview
+  shows the situation of the state you pick. "Use this design" works for the situation of the tile you chose, and
+  changes only that line (importing the design if needed, and dropping the import of a design no situation uses any
+  more, so it doesn't ship).
 
 ---
 
@@ -210,7 +217,9 @@ Each problem shows on the card, in words, with what to do:
 - **Missing pieces:** chooser, types, dynamic part, static part, starting data, switcher, at least one design.
 - **Each design:** has a unique id, takes `NameView`, and uses no data.
 - **The static part:** no API, store, router or data hooks; navigation through `goTo` only.
-- **The starting data:** has a `default` state, and each state has everything `NameStart` needs.
+- **The starting data:** has a `default` state (not needed with situations), and each state has everything `NameStart`
+  needs.
+- **Situations:** every situation has a design in use, made for it, and at least one state that shows it.
 - **What ships to users:** the static part, the starting data and the designs that aren't in use are loaded only in
   development.
 - **The switcher:** imports a design in use the normal way (for every situation, if there are situations), and lists

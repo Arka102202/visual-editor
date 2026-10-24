@@ -6,7 +6,10 @@ import { reactPackage, SHARED_FROM_WORDS, wantsFile } from './cards';
 import { readingWorker } from './workerClient';
 import { previewPage } from './previewPage';
 import { useVariant } from './useVariant';
-import { updateHelper } from './helper';
+import { helperTemplate, updateHelper } from './helper';
+import { setupProject } from './setup';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 export * from './cards';
 
@@ -56,6 +59,7 @@ export const reactPlugin: Plugin = {
   previewPage,
   useVariant,
   updateHelper: (project) => updateHelper(project),
+  setup: (project) => setupProject((p) => (existsSync(join(project.root, p)) ? readFileSync(join(project.root, p), 'utf8') : undefined), helperTemplate()),
   readers: [
     {
       id: 'react',

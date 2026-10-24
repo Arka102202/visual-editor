@@ -10,6 +10,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import type { Item, ProjectInfo } from '@visual-editor/contract';
+import { helperTemplate, helperVersion } from './helper';
+import { HELPER_PATH } from './setup';
 
 const HELPER = /(^|\/)visual-editor\.[cm]?[jt]sx?$/;
 
@@ -18,8 +20,9 @@ export function providersFile(project: ProjectInfo): string | undefined {
   return project.files.filter((f) => /(^|\/)visual-editor\.providers\.[cm]?[jt]sx?$/.test(f) && !f.includes('node_modules')).sort((a, b) => a.length - b.length)[0];
 }
 
-/** The project's helper file (src/visual-editor.tsx), if it has one. */
+/** The project's helper file: in the extension's folder (.visual-editor/react/), or where version 1 put it (src/). */
 export function helperFile(project: ProjectInfo): string | undefined {
+  if (project.files.includes(HELPER_PATH) || (project.root && existsSync(join(project.root, HELPER_PATH)))) return HELPER_PATH;
   return project.files.filter((f) => HELPER.test(f) && !f.includes('node_modules')).sort((a, b) => a.length - b.length)[0];
 }
 
@@ -68,6 +71,10 @@ export function previewPage(item: Item, project: ProjectInfo): string | undefine
     variants: item.preview.variants.map((v) => v.id),
     // A page is seen at a screen's width; a component at its own size.
     page: item.kind === 'page',
+    // Situations (Button: primary, danger…): the Playground groups its rows by them.
+    situations: item.preview.situations,
+    // The newest helper (an older one in the project is offered an update).
+    latestHelper: helperVersion(helperTemplate() ?? ''),
   };
   return `<!doctype html>
 <html lang="en">
@@ -124,6 +131,9 @@ try {
   [data-ve-variant][data-ve-selected]::before { content: attr(data-ve-variant-name) "  · in use"; }
   [data-ve-variant-error] { font: 12px/1.5 ui-monospace, monospace; color: #b42318; max-width: 280px; white-space: pre-wrap; }
   [data-ve-grid] { width: max-content; }
+  [data-ve-group] { font: 600 12px/1.4 ui-sans-serif, system-ui, sans-serif; letter-spacing: .04em; text-transform: uppercase; color: #3b82f6; padding: 14px 0 0; border-top: 1px solid rgba(128,128,128,.25); }
+  [data-ve-group]:first-child { border-top: 0; padding-top: 0; }
+  [data-ve-not-for] { font: 12px/1.5 ui-sans-serif, system-ui, sans-serif; opacity: .45; padding: 6px 0; min-width: 120px; }
   /* A page's tile is a laptop-wide screen (not squeezed to its content); Fit shrinks the board. */
   html[data-ve-page] [data-ve-variant] { width: 1280px; }
   /* Preview: one variant in one state, like a page of the app (no names, no board). */
@@ -175,9 +185,10 @@ try {
       note('The project’s helper (' + config.helper + ') is older: it has no mountPreview. Visual Editor can update it.');
       tell({ type: 'missing', what: 'mountPreview' });
     } else {
-      // An older helper is said first: a folder made for a newer one can't load with it.
-      const v2 = (helper.HELPER_VERSION ?? 1) >= 2;
-      if (!v2) tell({ type: 'old', what: 'helper', version: helper.HELPER_VERSION ?? 1 });
+      // An older helper is said first (with an update to offer): a folder made for a newer one can't load with it.
+      const version = helper.HELPER_VERSION ?? 1;
+      const v2 = version >= 2;
+      if (version < config.latestHelper) tell({ type: 'old', what: 'helper', version, latest: config.latestHelper });
       const chooser = await import(/* @vite-ignore */ config.chooser).catch((e) => {
         if (v2) throw e;
         // Made for the newer helper (the note above says how to update it).
@@ -188,10 +199,15 @@ try {
       // project's providers around it. Version 1: the designs of a state drawn together, and a note to update.
       const wrap = v2 && config.providers ? (await import(/* @vite-ignore */ config.providers).catch(() => ({}))).default : undefined;
       const tiles = single ? [single.variant] : compared ?? config.variants;
+      // Situations: Review's before and after shows only the one that changes; the Playground groups rows by them.
+      const sit = config.situations;
+      const situated = asked.get('situation');
+      const rowStates = single ? [single.state] : sit && situated ? config.states.filter((s) => sit.ofState[s] === situated) : config.states;
+      const groups = sit && !single && !situated ? [...sit.names.map((n) => ({ title: n, states: config.states.filter((s) => sit.ofState[s] === n) })), { title: 'other', states: config.states.filter((s) => !sit.names.includes(sit.ofState[s])) }].filter((g) => g.states.length) : undefined;
       const drawn = helper.mountPreview(
         document.getElementById('ve-preview'),
         chooser.default,
-        v2 ? { states: single ? [single.state] : config.states, variants: tiles.map((id) => ({ id })), wrap } : single ? { states: [single.state], columns: 1 } : { states: config.states, columns: config.columns },
+        v2 ? { states: groups ? groups.flatMap((g) => g.states) : rowStates, variants: tiles.map((id) => ({ id })), wrap, groups } : single ? { states: [single.state], columns: 1 } : { states: rowStates, columns: config.columns },
       );
       // The static part "going" somewhere (or a link): a preview is one page, so it says where it would go.
       addEventListener('visual-editor:go', (e) => tell({ type: 'goto', path: String(e.detail) }));

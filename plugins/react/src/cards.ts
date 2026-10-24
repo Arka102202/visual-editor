@@ -66,7 +66,11 @@ export function toMaps(model: FeModel): ReadResult {
     const inFolder = (p: string) => (f.dir ? p.startsWith(`${f.dir}/`) && !p.slice(f.dir.length + 1).includes('/') : !p.includes('/'));
     for (const c of model.components) if (c.id !== chooser.id && inFolder(c.path)) partOf.set(c.id, chooser.id);
     const parts = [...new Set([...Object.values(f.files), ...f.variants.map((v) => v.path)])].filter((p): p is string => !!p && p !== f.files.chooser).sort();
-    preview.set(chooser.id, { variants: f.variants.map((v) => ({ ...v, inUse: v.id === f.selected })), states: f.states, files: parts, ...(f.problems?.length ? { problems: f.problems } : {}) });
+    // With situations, a design is in use for the situations it's named for (one design can serve several).
+    const inUseFor = (id: string) => (f.situations ? f.situations.names.filter((s) => f.situations!.inUse[s] === id) : []);
+    const variants = f.variants.map((v) => (f.situations ? { ...v, inUse: inUseFor(v.id).length > 0, inUseFor: inUseFor(v.id) } : { ...v, inUse: v.id === f.selected }));
+    const situations = f.situations ? { situations: { prop: f.situations.prop, names: f.situations.names, ofState: f.situations.ofState } } : {};
+    preview.set(chooser.id, { variants, states: f.states, files: parts, ...situations, ...(f.problems?.length ? { problems: f.problems } : {}) });
     dataFile.set(chooser.id, f.files.data);
   }
   const own = (id: string) => partOf.get(id) ?? id;

@@ -66,7 +66,7 @@ test('variant checks: each broken rule is said in words, with what to do', () =>
   const has = (files: { path: string; text: string }[], words: RegExp) => assert.ok(problems(files).some((p) => words.test(p)), `${words}: ${JSON.stringify(problems(files))}`);
 
   // Another variant loaded up front ships to users.
-  has(change('.switcher.tsx', "import type { ProjectCardView }", "import Compact from './ProjectCard.compact.variant'\nimport type { ProjectCardView }"), /loads Compact up front, so it would ship to users/);
+  has(change('.switcher.tsx', "import type { ProjectCardView }", "import Compact from './ProjectCard.compact.variant'\nimport type { ProjectCardView }"), /loads Compact up front, but it isn’t in use, so it would ship to users/);
   // A variant left out of the list isn't shown in Preview.
   has(change('.switcher.tsx', ", import('./ProjectCard.compact.variant')", ''), /Compact isn’t in ProjectCard\.switcher\.tsx’s list/);
   // The list must be for development only.
@@ -148,4 +148,41 @@ test('variants v1: a folder made the version 1 way is read and breaks no rule', 
   // Its states are views: one missing what the view needs is said so.
   const broken = v1.map((x) => (x.path.endsWith('.mock.ts') ? { ...x, text: x.text.replace("'no description': { ...base, description: '' },", "'no description': { name: 'x', description: '' },") } : x));
   assert.ok((readModel(broken).variantFolders![0].problems ?? []).some((p) => /missing updated, accentColor, onOpen, onDelete \(ProjectCardView needs them\)/.test(p)));
+});
+
+// Situations: a Button with one design in use per situation (primary, secondary: Rounded; danger: Sharp).
+const bAt = 'src/components/shared/Button';
+const button = readdirSync('plugins/react/test/fixtures/variant-situations/Button').map((f) => ({ path: `${bAt}/${f}`, text: readFileSync(join('plugins/react/test/fixtures/variant-situations/Button', f), 'utf8') }));
+const inButton = (file: string, from: string, to: string) => button.map((x) => (x.path === `${bAt}/${file}` ? { ...x, text: x.text.replace(from, to) } : x));
+
+test('situations: the design in use for each situation, and the situation each state shows', () => {
+  const [f] = readModel(button).variantFolders!;
+  assert.deepEqual(f.situations, {
+    prop: 'kind',
+    names: ['primary', 'secondary', 'danger'],
+    inUse: { primary: 'rounded', secondary: 'rounded', danger: 'sharp' },
+    ofState: { primary: 'primary', secondary: 'secondary', danger: 'danger', 'danger disabled': 'danger' },
+  });
+  assert.deepEqual(f.variants.find((v) => v.id === 'pill')?.for, ['primary', 'secondary']);
+  assert.deepEqual(f.problems ?? [], []);
+  // On the map: each design says which situations it's in use for.
+  const card = toMaps(readModel(button)).items.find((i) => i.label === 'Button')!;
+  assert.deepEqual(card.preview?.variants.map((v) => `${v.id}:${(v.inUseFor ?? []).join('+') || '-'}`), ['pill:-', 'rounded:primary+secondary', 'sharp:danger']);
+  assert.equal(card.preview?.situations?.prop, 'kind');
+});
+
+test('situations: each broken rule is said in words', () => {
+  const problems = (files: typeof button) => readModel(files).variantFolders![0].problems ?? [];
+  // A situation with no design in use.
+  const noDanger = inButton('Button.switcher.tsx', '    danger: Sharp,\n', '');
+  assert.ok(problems(noDanger).some((p) => /has no design in use for “danger”/.test(p)), problems(noDanger).join(' | '));
+  // A design used for a situation it isn't made for.
+  const pillForDanger = inButton('Button.switcher.tsx', "import Sharp from './Button.sharp.variant'", "import Sharp from './Button.sharp.variant'\nimport Pill from './Button.pill.variant'").map((x) => (x.path.endsWith('.switcher.tsx') ? { ...x, text: x.text.replace('danger: Sharp,', 'danger: Pill,') } : x));
+  assert.ok(problems(pillForDanger).some((p) => /Pill is in use for “danger”, but it’s made only for “primary”, “secondary”/.test(p)), problems(pillForDanger).join(' | '));
+  // A situation no state shows.
+  const noSecondary = inButton('Button.mock.ts', "  secondary:         { ...base, kind: 'secondary', label: 'Cancel' },\n", '');
+  assert.ok(problems(noSecondary).some((p) => /No state in Button\.mock\.ts shows “secondary”/.test(p)), problems(noSecondary).join(' | '));
+  // A design loaded up front that no situation uses ships for nothing.
+  const pillUpFront = inButton('Button.switcher.tsx', "import Sharp from './Button.sharp.variant'", "import Sharp from './Button.sharp.variant'\nimport Pill from './Button.pill.variant'");
+  assert.ok(problems(pillUpFront).some((p) => /loads Pill up front, but it isn’t in use/.test(p)), problems(pillUpFront).join(' | '));
 });

@@ -124,7 +124,7 @@ A one-line proposal, with the before and after shown live in Review, and Undo.
   ask**.
 - **Done when:** ProjectCard looks and works exactly as before in the app, and in the Playground.
 
-### 1.9 Situations
+### 1.9 Situations ✅ done
 - **You get:**
   - `types` declares the situations (Button: primary, secondary, danger);
   - the switcher has one line per situation, and a design says which situations it serves;

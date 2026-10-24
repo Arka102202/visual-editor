@@ -38,13 +38,29 @@ export function checkFolder(folder: VariantFolder, files: SourceFile[], componen
 
   // The switcher: the variant in use, what loads up front, and the list for Preview.
   const sw = text(folder.files.switcher) ?? '';
-  if (!folder.selected && folder.variants.length) out.push(`${base(folder.files.switcher)} doesn’t import a variant the normal way, so the app has no variant in use.`);
+  if (!folder.selected && !folder.situations && folder.variants.length) out.push(`${base(folder.files.switcher)} doesn’t import a variant the normal way, so the app has no variant in use.`);
+  // Situations: a design in use for every one, made for it, and a state that shows it.
+  const sit = folder.situations;
+  if (sit) {
+    for (const s of sit.names) {
+      const id = sit.inUse[s];
+      if (!id) out.push(`${base(folder.files.switcher)} has no design in use for “${s}”: add it to inUse (${s}: TheDesign).`);
+      else {
+        const v = folder.variants.find((x) => x.id === id);
+        if (v?.for && !v.for.includes(s)) out.push(`${v.name} is in use for “${s}”, but it’s made only for ${v.for.map((x) => `“${x}”`).join(', ')}. Use another design for “${s}”, or add it to ${base(v.path)}’s \`for\`.`);
+      }
+      if (folder.files.mock && !Object.values(sit.ofState).includes(s)) out.push(`No state in ${base(folder.files.mock)} shows “${s}” (${sit.prop}: '${s}'), so the Playground can’t show its design.`);
+    }
+    for (const s of Object.keys(sit.inUse)) if (!sit.names.includes(s)) out.push(`${base(folder.files.switcher)} has a design in use for “${s}”, which isn’t one of ${n}Situation (${sit.names.join(', ')}).`);
+  }
   // Read from the code itself (a commented-out line doesn't count).
   const swImports = importsOf(sw);
   const upFront = swImports.upFront;
+  // Designs in use: the one (or one per situation); any other loaded up front would ship to users.
+  const inUse = new Set(folder.situations ? Object.values(folder.situations.inUse) : folder.selected ? [folder.selected] : []);
   for (const v of folder.variants) {
     const file = base(v.path).replace(/\.[jt]sx?$/, '');
-    if (v.id !== folder.selected && upFront.some((u) => u.replace(/\.[jt]sx?$/, '') === file)) out.push(`${base(folder.files.switcher)} loads ${v.name} up front, so it would ship to users. List it only in the development-only list (import()).`);
+    if (!inUse.has(v.id) && upFront.some((u) => u.replace(/\.[jt]sx?$/, '') === file)) out.push(`${base(folder.files.switcher)} loads ${v.name} up front, but it isn’t in use, so it would ship to users. List it only in the development-only list (import()).`);
   }
   const listed = swImports.onRequest.map((m) => m.replace(/\.[jt]sx?$/, ''));
   for (const v of folder.variants) {
@@ -92,7 +108,8 @@ export function checkFolder(folder: VariantFolder, files: SourceFile[], componen
 
   // States: a default, and everything they need (version 2: what the static part starts from; version 1: the view).
   if (folder.files.mock) {
-    if (folder.states.length && !folder.states.includes('default')) out.push(`${base(folder.files.mock)} has no “default” state: Preview starts with it.`);
+    // (With situations, states are named after them: Preview starts with the first.)
+    if (folder.states.length && !folder.states.includes('default') && !folder.situations) out.push(`${base(folder.files.mock)} has no “default” state: Preview starts with it.`);
     if (!folder.states.length) out.push(`${base(folder.files.mock)} has no states (export const states = { default: { … } }).`);
     const type = folder.version === 2 ? `${n}Start` : `${n}View`;
     const typesText = text(folder.files.types) ?? '';

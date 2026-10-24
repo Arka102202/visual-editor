@@ -1,4 +1,4 @@
-import { makeSwitcher } from '../../../../visual-editor'
+import { makeSwitcher } from '@visual-editor/react'
 // The variant in use: change this line to use another.
 import Selected, { variant } from './ProjectCard.variant'
 import type { ProjectCardView } from './ProjectCard.types'

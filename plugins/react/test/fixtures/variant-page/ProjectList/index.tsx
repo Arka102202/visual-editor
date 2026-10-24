@@ -1,4 +1,4 @@
-import { StaticPart, useVariantKey } from '../../visual-editor'
+import { StaticPart, useVariantKey } from '@visual-editor/react'
 import ProjectListData from './ProjectList.data'
 
 // The static part and its starting data: development only (left out of production builds).

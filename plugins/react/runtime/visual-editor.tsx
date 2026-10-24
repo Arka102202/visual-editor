@@ -1,7 +1,7 @@
-// Visual Editor's helper, version 2 (docs/variants.md). A component's looks (designs) are kept apart from its data, and
+// Visual Editor's helper, version 3 (docs/variants.md). A component's looks (designs) are kept apart from its data, and
 // its data has two parts: dynamic (the real data, in the app) and static (a working prototype with no network, in
-// Preview and the Playground). This file goes into the project once (Visual Editor adds it, and updates it, as
-// proposals); each component folder uses it:
+// Preview and the Playground). Visual Editor keeps this file in place (.visual-editor/react/, imported as
+// @visual-editor/react) and updates it when it ships a newer version: don't edit it. Each component folder uses it:
 //
 //   index.tsx                 the chooser: what the app imports. The dynamic part in the app; the static part in Preview.
 //   Name.types.ts             NameProps (what a parent passes), NameStart (what the static part starts from), NameView
@@ -13,13 +13,14 @@
 //                             development.
 //   Name.variant.tsx, Name.<name>.variant.tsx   designs: looks only (UI state like "menu open" is fine; app data is not).
 //
-// Folders made with version 1 (a mock of views, MockData in the chooser) keep working.
+// Folders made with version 1 (a mock of views, MockData in the chooser) keep working. Version 3: the Playground groups
+// rows by situation, and a design not made for a row's situation says so in its tile.
 
 import { Component, createContext, Fragment, lazy, Suspense, useContext, useMemo, type ComponentType, type Context, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 /** Which version of this helper the project has (Visual Editor offers an update when it's older). */
-export const HELPER_VERSION = 2;
+export const HELPER_VERSION = 3;
 
 /**
  * real: the app (the dynamic part, the design in use).
@@ -179,6 +180,14 @@ export function makeSwitcher<V extends object, S extends string = string>(design
             const inUse = inUseFor(p.view);
             const situation = bySituation ? String((p.view as Record<string, unknown>)[bySituation.situation]) : undefined;
             const shown = modules.filter((m) => (!p.only || m.variant.id === p.only) && (!situation || !m.variant.for || m.variant.for.includes(situation)));
+            // One tile for a design not made for this situation: it says so (the board keeps its columns).
+            const notFor = p.only && !shown.length ? modules.find((m) => m.variant.id === p.only) : undefined;
+            if (notFor)
+              return (
+                <div data-ve-variant={notFor.variant.id} data-ve-variant-name={notFor.variant.name ?? notFor.variant.id} data-ve-not-for={situation}>
+                  Not made for “{situation}”
+                </div>
+              );
             return (
               <KeyContext.Provider value="mock-selected">
                 {shown.map((m) => {
@@ -229,7 +238,7 @@ export interface PreviewHandle {
 export function mountPreview(
   container: HTMLElement,
   Chooser: ComponentType<Record<string, never>>,
-  options: { states: string[]; columns?: number; variants?: { id: string }[]; wrap?: ComponentType<{ children: ReactNode }> },
+  options: { states: string[]; columns?: number; variants?: { id: string }[]; wrap?: ComponentType<{ children: ReactNode }>; groups?: { title: string; states: string[] }[] },
 ): PreviewHandle & { root: ReturnType<typeof createRoot> } {
   const root = createRoot(container);
   container.addEventListener(
@@ -246,20 +255,32 @@ export function mountPreview(
   const columns = options.variants?.length ?? Math.max(1, options.columns ?? 1);
   const Wrap = options.wrap ?? Fragment;
   let round = 0;
+  const row = (state: string) => (
+    <Fragment key={state}>
+      <div data-ve-state={state}>{state}</div>
+      {tiles.map((id) => (
+        <OnlyContext.Provider key={id ?? 'every'} value={id}>
+          <VariantKeyProvider value="mock" state={state}>
+            <Chooser />
+          </VariantKeyProvider>
+        </OnlyContext.Provider>
+      ))}
+    </Fragment>
+  );
+  // With situations, the rows come in groups: a heading across the board, then that situation's states.
+  const groups = options.groups?.length ? options.groups : [{ title: '', states: options.states }];
   const draw = () =>
     root.render(
       <Wrap>
         <div key={round} data-ve-grid="" style={{ display: 'grid', gridTemplateColumns: `max-content repeat(${columns}, max-content)`, gap: '28px 32px', alignItems: 'start' }}>
-          {options.states.map((state) => (
-            <Fragment key={state}>
-              <div data-ve-state={state}>{state}</div>
-              {tiles.map((id) => (
-                <OnlyContext.Provider key={id ?? 'every'} value={id}>
-                  <VariantKeyProvider value="mock" state={state}>
-                    <Chooser />
-                  </VariantKeyProvider>
-                </OnlyContext.Provider>
-              ))}
+          {groups.map((g) => (
+            <Fragment key={g.title || 'all'}>
+              {g.title ? (
+                <div data-ve-group={g.title} style={{ gridColumn: '1 / -1' }}>
+                  {g.title}
+                </div>
+              ) : null}
+              {g.states.map(row)}
             </Fragment>
           ))}
         </div>

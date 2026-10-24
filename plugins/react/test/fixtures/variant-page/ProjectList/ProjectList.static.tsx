@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { goTo } from '../../visual-editor'
+import { goTo } from '@visual-editor/react'
 import { toEditor } from '@constants/routes'
 import ProjectListSwitcher from './ProjectList.switcher'
 import type { ProjectListStart } from './ProjectList.types'

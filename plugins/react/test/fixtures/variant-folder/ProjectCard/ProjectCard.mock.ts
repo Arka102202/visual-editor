@@ -1,4 +1,4 @@
-import { goTo } from '../../../../visual-editor'
+import { goTo } from '@visual-editor/react'
 import type { ProjectCardStart } from './ProjectCard.types'
 
 const ago = (minutes: number) => Date.now() - minutes * 60_000

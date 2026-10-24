@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ProjectInfo, ProposedChange } from '@visual-editor/contract';
 import { helperFile } from './previewPage';
+import { HELPER_PATH } from './setup';
 
 /** The helper this plugin ships (next to its built code, or in the source tree when running tests). */
 export function helperTemplate(): string | undefined {
@@ -25,7 +26,7 @@ export function updateHelper(
   template: string | undefined = helperTemplate(),
 ): ProposedChange | string {
   if (!template) return 'Visual Editor’s helper couldn’t be found in the React plugin (reinstall it).';
-  const path = helperFile(project) ?? 'src/visual-editor.tsx';
+  const path = helperFile(project) ?? HELPER_PATH;
   const before = read(path);
   const next = helperVersion(template);
   if (before === undefined) {
@@ -42,7 +43,7 @@ export function updateHelper(
     title: now < next ? `Update Visual Editor’s helper (version ${now} → ${next})` : `Put Visual Editor’s helper back as it ships (version ${next})`,
     why:
       now < next
-        ? 'Version 2 adds the static part as a working prototype (each tile keeps its own changes, Reset, links that show where they’d go instead of leaving) and situations (one design in use per situation). Folders made with version 1 keep working.'
+        ? `${now < 2 ? 'Version 2 adds the static part as a working prototype (each tile keeps its own changes, Reset, links that show where they’d go instead of leaving) and situations (one design in use per situation). ' : ''}Version 3 groups the Playground by situation, and a design not made for a situation says so in its tile. Folders made with older versions keep working.`
         : 'The helper was changed by hand; this puts it back as Visual Editor ships it.',
     changes: [{ path, before, after: template }],
   };

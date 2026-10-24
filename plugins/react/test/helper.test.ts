@@ -4,10 +4,10 @@ import { helperTemplate, helperVersion, updateHelper } from '../src/helper';
 
 const project = { root: '/x', name: 'shop', files: ['src/main.tsx', 'src/visual-editor.tsx'] };
 
-test('helper: the one the plugin ships is version 2', () => {
+test('helper: the one the plugin ships is version 3', () => {
   const t = helperTemplate();
   assert.ok(t, 'found next to the plugin');
-  assert.equal(helperVersion(t), 2);
+  assert.equal(helperVersion(t), 3);
   // Version 1 didn't say its version.
   assert.equal(helperVersion('export function mountPreview() {}'), 1);
 });
@@ -17,7 +17,7 @@ test('helper: added when missing, updated when older, left alone when current or
   const added = updateHelper({ ...project, files: ['src/main.tsx'] }, () => undefined, t);
   assert.ok(typeof added !== 'string');
   assert.equal(added.title, 'Add Visual Editor’s helper (version 2)');
-  assert.deepEqual(added.changes, [{ path: 'src/visual-editor.tsx', before: null, after: t }]);
+  assert.deepEqual(added.changes, [{ path: '.visual-editor/react/visual-editor.tsx', before: null, after: t }]);
 
   const older = updateHelper(project, () => '// v1\nexport function mountPreview() {}\n', t);
   assert.ok(typeof older !== 'string');

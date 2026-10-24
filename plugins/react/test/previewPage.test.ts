@@ -23,7 +23,8 @@ test('preview page: the page loads the helper and the chooser, with the states a
   };
   const html = previewPage(item, project)!;
   const config = JSON.parse(/const config = (\{.*\});/.exec(html)![1]);
-  assert.deepEqual({ ...config, css: undefined, variants: undefined }, { name: 'ProjectCard', chooser: '/src/cards/ProjectCard/index.tsx', helper: '/src/visual-editor.tsx', css: undefined, states: ['default', 'long name'], columns: 2, variants: undefined, page: false });
+  assert.equal(config.latestHelper, 3);
+  assert.deepEqual({ ...config, css: undefined, variants: undefined, latestHelper: undefined }, { name: 'ProjectCard', chooser: '/src/cards/ProjectCard/index.tsx', helper: '/src/visual-editor.tsx', css: undefined, states: ['default', 'long name'], columns: 2, variants: undefined, page: false, latestHelper: undefined });
   assert.match(html, /Preview is static: no network calls/);
   assert.match(html, /\/@vite\/client/);
   // Preview: one variant in one state, from the page's address (?variant=…&state=…).
