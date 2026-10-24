@@ -17,7 +17,8 @@ const extensions = ['packages', 'plugins'].flatMap((group) =>
     .filter((dir) => existsSync(join(dir, 'src/extension.ts'))),
 );
 
-const common = { bundle: true, platform: 'node', format: 'cjs', target: 'node20', sourcemap: true, logLevel: 'warning' };
+// Markdown is bundled as text (e.g. docs/variants.md, the React plugin's know-how for assistants).
+const common = { bundle: true, platform: 'node', format: 'cjs', target: 'node20', sourcemap: true, logLevel: 'warning', loader: { '.md': 'text' } };
 const builds = extensions.flatMap((dir) => [
   { ...common, entryPoints: [join(dir, 'src/extension.ts')], outfile: join(dir, 'dist/extension.js'), external: ['vscode'] },
   // Work done off VS Code's own thread (src/worker.ts), e.g. reading a big project: dist/worker.js.

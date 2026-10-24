@@ -4,7 +4,7 @@
 import { CONTRACT_VERSION, type Disposable, type Plugin, type PluginAgent, type PluginSkill, type PluginTool } from '@visual-editor/contract';
 
 /** The hub's own tools (hub/tools.ts): a plugin's tool can't take one of these names. */
-export const HUB_TOOLS = ['overview', 'list_cards', 'card', 'memory', 'propose_change', 'proposal_status', 'remember'];
+export const HUB_TOOLS = ['overview', 'list_cards', 'card', 'memory', 'propose_change', 'proposal_status', 'remember', 'save_draft', 'read_draft', 'submit_draft'];
 const TOOL_NAME = /^[a-z][a-z0-9_]{0,47}$/;
 const NAME = /^[a-z][a-z0-9-]{0,47}$/;
 
@@ -49,7 +49,7 @@ function checkHelpers(plugin: Partial<Plugin>, others: Plugin[]): string | undef
     toolNames.add(t.name);
     if (!t.title || !t.description || typeof t.run !== 'function') return `Its tool "${t.name}" is missing a title, a description or run().`;
     for (const [name, input] of Object.entries(t.input ?? {})) {
-      if (name === 'project') return `Its tool "${t.name}" can't have an input called "project": the shell adds that one.`;
+      if (name === 'project' || name === 'draft') return `Its tool "${t.name}" can't have an input called "${name}": the shell adds that one.`;
       if (!input?.description || !['string', 'number', 'integer', 'boolean', 'strings'].includes(input.type)) return `Its tool "${t.name}" has an input "${name}" without a type or a description.`;
     }
   }

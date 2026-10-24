@@ -7,7 +7,8 @@ import { z } from 'zod';
 import type { Item, Plugin, PluginTool, ToolInput } from '@visual-editor/contract';
 import { forCard, rulesText, type MemoryEntry } from '../memory';
 import type { ProjectState } from '../projectIndex';
-import { newId, parseProposal, type Proposal } from '../proposals';
+import { newId, parseProposal, safePath, type FileChange, type Proposal } from '../proposals';
+import type { Draft } from '../drafts';
 
 export const SERVER_NAME = 'visual-editor';
 
@@ -27,6 +28,8 @@ export interface HubHost {
   remember(root: string, e: MemoryEntry): void;
   /** Every plugin's tools (registry.tools()). */
   tools(): { plugin: Plugin; tool: PluginTool }[];
+  drafts(root: string): Draft[];
+  saveDraft(root: string, d: Draft): void;
 }
 
 /** Assistants send technical names ("claude-code"); show them nicely. */
@@ -43,6 +46,8 @@ between them), its rules and decisions, and the history of reviewed changes.
 - NEVER edit files directly. Every change goes through propose_change: the developer sees it in Review and approves,
   sends it back with a note, or rejects it. Then call proposal_status; if it was sent back, read the note and propose
   again.
+- For bigger jobs, work in a draft: save_draft keeps the files apart (nothing changes), plugin tools given its id
+  (draft) look at the project as it would leave it, read_draft shows it, and submit_draft sends it to Review.
 - When you and the developer agree on something worth keeping, call remember.
 Card ids look like "react:component:src/Card.tsx#Card". Several projects may be open: pass project (its name) when it
 matters; otherwise the one on the map is used.`;
@@ -270,18 +275,138 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
     },
   );
 
-  // Plugins' tools: run only for projects their plugin detected.
+  server.registerTool(
+    'save_draft',
+    {
+      title: 'Save a draft',
+      description:
+        'Keeps proposed files apart as a draft, without changing anything in the project: for work that is checked before the developer sees it. Give each file\'s complete new content (or null to remove it). With draft (an id), changes that draft: these files replace or join its files. Plugin tools given the draft id look at the project as the draft would leave it; submit_draft sends it to Review.',
+      inputSchema: {
+        title: z.string().describe('Short, plain words: what changes'),
+        why: z.string().describe('Why, in plain words, for the developer'),
+        changes: z.array(z.object({ path: z.string().describe('Relative to the project folder'), content: z.string().nullable().describe('The whole new file, or null to remove it') })).min(1),
+        cards: z.array(z.string()).optional().describe('Card ids it is about'),
+        draft: z.string().optional().describe('A draft id to change, from an earlier save_draft'),
+        project: projectArg,
+      },
+    },
+    async ({ title, why, changes, cards, draft, project }) => {
+      const s = await pick(project);
+      if (typeof s === 'string') return fail(s);
+      const root = s.project.root;
+      const old = draft ? host.drafts(root).find((d) => d.id === draft) : undefined;
+      if (draft && !old) return fail(`No draft "${draft}" in ${s.project.name}. Leave draft out to start a new one.`);
+      if (old?.status === 'submitted') return fail(`Draft ${old.id} was already sent to Review (proposal ${old.proposal}). Save a new draft instead.`);
+      const files = new Map((old?.changes ?? []).map((c) => [c.path, c]));
+      for (const c of changes) {
+        const path = c.path.replace(/\\/g, '/').replace(/^\.\//, '');
+        if (!safePath(path)) return fail(`${c.path} isn't a place in the project a change can go.`);
+        // What the file was when the draft first touched it (submit_draft checks it's still so).
+        const before = files.get(path)?.before ?? (await host.readFile(root, path)) ?? null;
+        if (before === null && c.content === null) return fail(`${path} doesn't exist, so it can't be removed.`);
+        if (before === c.content) files.delete(path);
+        else files.set(path, { path, before, after: c.content });
+      }
+      if (!files.size) return fail('Every file would stay the same: there is nothing to save.');
+      const now = new Date().toISOString();
+      const d: Draft = {
+        id: old?.id ?? newId(),
+        title,
+        why,
+        by: old?.by ?? { kind: 'assistant', name: client },
+        createdAt: old?.createdAt ?? now,
+        updatedAt: now,
+        status: 'draft',
+        changes: [...files.values()].sort((a, b) => a.path.localeCompare(b.path)),
+        ...(cards?.length ? { items: cards } : old?.items ? { items: old.items } : {}),
+      };
+      host.saveDraft(root, d);
+      return reply(`Draft ${d.id} saved: ${changeWords(d.changes)}. Nothing in the project changed.\nPlugin tools given draft "${d.id}" look at the project as it would leave it (for example to check it); read_draft shows it; submit_draft sends it to Review.`);
+    },
+  );
+
+  server.registerTool(
+    'read_draft',
+    {
+      title: 'Read a draft',
+      description: 'A draft\'s title, why, files and their new content (or one file with path). Without an id, lists the drafts.',
+      inputSchema: { id: z.string().optional(), path: z.string().optional().describe('Only this file'), project: projectArg },
+      annotations: readOnly,
+    },
+    async ({ id, path, project }) => {
+      const s = await pick(project);
+      if (typeof s === 'string') return fail(s);
+      const root = s.project.root;
+      const all = host.drafts(root);
+      if (!id) return reply(all.length ? all.slice(0, 20).map((d) => `${d.id} · ${d.status === 'submitted' ? `sent to Review (${d.proposal})` : 'draft'} · ${d.title} · ${changeWords(d.changes)}`).join('\n') : 'No drafts yet.');
+      const d = all.find((x) => x.id === id);
+      if (!d) return fail(`No draft "${id}" in ${s.project.name}.`);
+      const out = [`${d.title} (${d.status === 'submitted' ? `sent to Review as proposal ${d.proposal}` : 'a draft'}, by ${d.by.name})`, `Why: ${d.why}`, 'Files:'];
+      for (const c of d.changes) {
+        const now = (await host.readFile(root, c.path)) ?? null;
+        out.push(`- ${c.path} (${c.before === null ? 'new' : c.after === null ? 'removed' : 'changed'}${c.after !== null ? `, ${c.after.split('\n').length} lines` : ''})${now !== c.before && d.status === 'draft' ? ' · changed in the project since: save it again' : ''}`);
+      }
+      const shown = path ? d.changes.filter((c) => c.path === path) : d.changes;
+      if (path && !shown.length) return fail(`Draft ${d.id} doesn't change ${path}.`);
+      const size = shown.reduce((n, c) => n + (c.after?.length ?? 0), 0);
+      if (size > 60_000) out.push('', 'Too long to show together: ask for one file at a time with path.');
+      else for (const c of shown) if (c.after !== null) out.push('', `--- ${c.path}`, c.after);
+      return reply(out.join('\n'));
+    },
+  );
+
+  server.registerTool(
+    'submit_draft',
+    {
+      title: 'Send a draft to Review',
+      description: 'Turns a checked draft into a proposal: it waits in Review until the developer approves, sends it back or rejects it. Then check proposal_status.',
+      inputSchema: { id: z.string(), project: projectArg },
+    },
+    async ({ id, project }) => {
+      const s = await pick(project);
+      if (typeof s === 'string') return fail(s);
+      const root = s.project.root;
+      const d = host.drafts(root).find((x) => x.id === id);
+      if (!d) return fail(`No draft "${id}" in ${s.project.name}.`);
+      if (d.status === 'submitted') return fail(`Draft ${d.id} is already in Review as proposal ${d.proposal}.`);
+      const moved: string[] = [];
+      for (const c of d.changes) if (((await host.readFile(root, c.path)) ?? null) !== c.before) moved.push(c.path);
+      if (moved.length) return fail(`These files changed in the project since the draft was saved: ${moved.join(', ')}. Read them again, save the draft again with save_draft (draft: "${d.id}"), check it, then submit it.`);
+      const now = new Date().toISOString();
+      const checked = parseProposal(
+        JSON.stringify({ id: newId(), title: d.title, why: d.why, by: d.by, createdAt: now, status: 'proposed', changes: d.changes, items: d.items, history: [{ at: now, status: 'proposed' }] }),
+        newId(),
+      );
+      if (typeof checked === 'string') return fail(checked);
+      host.propose(root, checked);
+      host.saveDraft(root, { ...d, status: 'submitted', proposal: checked.id, updatedAt: now });
+      return reply(`Draft ${d.id} is now proposal ${checked.id}, waiting in Review for the developer. Nothing has changed yet. Call proposal_status with id "${checked.id}" to see what they decided.`);
+    },
+  );
+
+  // Plugins' tools: run only for projects their plugin detected; with a draft, they see the project as it would be.
+  const draftArg = z.string().optional().describe('A draft id (from save_draft): look at the project as that draft would leave it');
   for (const { plugin, tool } of host.tools()) {
-    const inputSchema: Record<string, z.ZodTypeAny> = { project: projectArg };
+    const inputSchema: Record<string, z.ZodTypeAny> = { project: projectArg, draft: draftArg };
     for (const [name, input] of Object.entries(tool.input ?? {})) inputSchema[name] = zodOf(input);
     server.registerTool(tool.name, { title: tool.title, description: `(${plugin.name}) ${tool.description}`, inputSchema, annotations: readOnly }, async (args) => {
-      const { project, ...input } = args as Record<string, unknown> & { project?: string };
+      const { project, draft: draftId, ...input } = args as Record<string, unknown> & { project?: string; draft?: string };
       const s = await pick(project);
       if (typeof s === 'string') return fail(s);
       if (!s.detected.some((d) => d.plugin.id === plugin.id)) return fail(`${s.project.name} isn't a ${plugin.name} project, so ${tool.name} can't be used for it.`);
+      const root = s.project.root;
+      const draft = draftId ? host.drafts(root).find((d) => d.id === draftId) : undefined;
+      if (draftId && !draft) return fail(`No draft "${draftId}" in ${s.project.name}.`);
+      const changed = new Map((draft?.changes ?? []).map((c) => [c.path, c.after]));
+      const files = draft ? [...s.project.files.filter((f) => changed.get(f) !== null), ...[...changed].filter(([p, after]) => after !== null && !s.project.files.includes(p)).map(([p]) => p)] : s.project.files;
       try {
-        const root = s.project.root;
-        const answer = await tool.run(input, { project: s.project, items: s.items, links: s.links, read: (path) => host.readFile(root, path) });
+        const answer = await tool.run(input, {
+          project: draft ? { ...s.project, files } : s.project,
+          items: s.items,
+          links: s.links,
+          read: async (path) => (changed.has(path) ? (changed.get(path) ?? undefined) : host.readFile(root, path)),
+          ...(draft ? { draft: { id: draft.id, title: draft.title, changes: draft.changes.map((c) => ({ path: c.path, after: c.after })) } } : {}),
+        });
         return typeof answer === 'string' ? reply(answer) : fail(answer.problem);
       } catch (e) {
         return fail(`${tool.name} stopped with an error (a bug in the ${plugin.name} plugin): ${e instanceof Error ? e.message : e}`);
@@ -290,6 +415,14 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
   }
 
   return server;
+}
+
+/** "3 files (2 new, 1 changed)" */
+function changeWords(changes: FileChange[]): string {
+  const n = (what: string, k: number) => (k ? [`${k} ${what}`] : []);
+  const made = changes.filter((c) => c.before === null).length;
+  const gone = changes.filter((c) => c.after === null).length;
+  return `${changes.length} file${changes.length === 1 ? '' : 's'} (${[...n('new', made), ...n('changed', changes.length - made - gone), ...n('removed', gone)].join(', ')})`;
 }
 
 function zodOf(input: ToolInput): z.ZodTypeAny {
