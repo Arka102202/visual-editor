@@ -202,7 +202,7 @@ A one-line proposal, with the before and after shown live in Review, and Undo.
 - **Note:** the cost limit applies to runs Visual Editor starts (2.6: `--max-budget-usd`); in your own chat, Claude
   Code's own limits apply.
 
-### 2.6 The three ways in
+### 2.6 The three ways in ✅ done
 - **You get:**
   - **chat:** the skill runs the worker, then the checker;
   - **a button in the background:** with a progress line and Stop;
