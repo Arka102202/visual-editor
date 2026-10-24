@@ -21,7 +21,7 @@ export interface ClaudeParts {
 /** What the hub's tools are called in Claude Code. */
 const mcp = (tool: string) => `mcp__${SERVER_NAME}__${tool}`;
 /** The hub's tools that only read, for parts that don't say which tools they use. */
-const READING = ['overview', 'list_cards', 'card', 'memory'];
+const READING = ['overview', 'list_cards', 'card', 'memory', 'read_draft'];
 /** Claude Code's own tools that change files: never given (changes reach the developer only as proposals). */
 const CHANGING = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 

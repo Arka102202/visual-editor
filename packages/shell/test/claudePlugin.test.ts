@@ -67,7 +67,7 @@ test('claude plugin: a one-plugin marketplace with the map skill, plugins’ ski
   assert.equal(front(worker).tools, 'mcp__visual-editor__variant_brief, mcp__visual-editor__card, Read');
   assert.match(worker, /Split it\.\n\nNever edit files yourself\./);
   const checker = files['visual-editor/agents/make-previewable-checker.md'];
-  assert.equal(front(checker).tools, 'mcp__visual-editor__overview, mcp__visual-editor__list_cards, mcp__visual-editor__card, mcp__visual-editor__memory, Read, Grep, Glob');
+  assert.equal(front(checker).tools, 'mcp__visual-editor__overview, mcp__visual-editor__list_cards, mcp__visual-editor__card, mcp__visual-editor__memory, mcp__visual-editor__read_draft, Read, Grep, Glob');
   assert.match(checker, /Start your answer with PASSED \(then the proof\) or SENT BACK/);
 });
 

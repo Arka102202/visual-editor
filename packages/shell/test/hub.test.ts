@@ -9,6 +9,7 @@ import type { MemoryEntry } from '../src/memory';
 import type { ProjectState } from '../src/projectIndex';
 import type { Proposal } from '../src/proposals';
 import { HUB_TOOLS } from '../src/registry';
+import type { Draft } from '../src/drafts';
 
 const plugin: Plugin = { id: 'react', name: 'React', version: '0', contract: CONTRACT_VERSION, detect: () => ({ reason: 'react is in package.json' }), maps: [{ id: 'components', title: 'Components' }] };
 const state: ProjectState = {
@@ -25,8 +26,9 @@ const state: ProjectState = {
 
 function fakeHost() {
   const proposals: Proposal[] = [];
+  const drafts: Draft[] = [];
   const memory: MemoryEntry[] = [{ id: 'r', at: '2026-10-18T00:00:00.000Z', kind: 'rule', text: 'Use theme colours', by: { kind: 'developer', name: 'You' } }];
-  const files: Record<string, string> = { 'src/Card.tsx': 'export const Card = () => null;\n' };
+  const files: Record<string, string> = { 'src/Card.tsx': 'export const Card = () => null;\n', 'src/List.tsx': 'export const List = () => null;\n' };
   const host: HubHost = {
     projects: () => [state],
     current: () => state,
@@ -37,8 +39,10 @@ function fakeHost() {
     propose: (_root, p) => void proposals.unshift(p),
     remember: (_root, e) => void memory.unshift(e),
     tools: () => [],
+    drafts: () => drafts,
+    saveDraft: (_root, d) => void drafts.splice(0, drafts.length, d, ...drafts.filter((x) => x.id !== d.id)),
   };
-  return { host, proposals, memory };
+  return { host, proposals, memory, drafts, files };
 }
 
 async function connect(host: HubHost) {
@@ -57,7 +61,7 @@ test('hub: a real MCP client reads the map, the rules and a card', async () => {
   const hub = await connect(host);
   try {
     const tools = (await hub.client.listTools()).tools.map((t) => t.name).sort();
-    assert.deepEqual(tools, ['card', 'list_cards', 'memory', 'overview', 'proposal_status', 'propose_change', 'remember']);
+    assert.deepEqual(tools, ['card', 'list_cards', 'memory', 'overview', 'proposal_status', 'propose_change', 'read_draft', 'remember', 'save_draft', 'submit_draft']);
     const overview = await hub.call('overview');
     assert.match(overview.text, /## shop \(on the map\)/);
     assert.match(overview.text, /Plugins: React \(react is in package.json\)/);
@@ -166,7 +170,7 @@ test('hub: plugins’ tools reach the assistant, run for projects their plugin d
     assert.deepEqual(tools.map((t) => t.name).filter((n) => HUB_TOOLS.includes(n)).sort(), [...HUB_TOOLS].sort(), 'HUB_TOOLS lists the hub’s own tools');
     const t = tools.find((x) => x.name === 'card_brief')!;
     assert.equal(t.description, '(React) A card for a job.');
-    assert.deepEqual(Object.keys(t.inputSchema.properties ?? {}).sort(), ['card', 'deep', 'look', 'project']);
+    assert.deepEqual(Object.keys(t.inputSchema.properties ?? {}).sort(), ['card', 'deep', 'draft', 'look', 'project']);
     assert.deepEqual(t.inputSchema.required, ['card']);
     assert.deepEqual(await hub.call('card_brief', { card: 'react:Card', deep: true }), { text: 'shop: react:Card · export const Card = () => null;\n', error: false });
     assert.deepEqual(seen, [true], 'the project input is the shell’s, not passed on');
@@ -174,6 +178,72 @@ test('hub: plugins’ tools reach the assistant, run for projects their plugin d
     assert.match((await hub.call('card_brief', { card: 'boom' })).text, /stopped with an error \(a bug in the React plugin\): kaput/);
     assert.match((await hub.call('card_brief', { card: 'x', look: 'some' })).text, /one|all|Invalid/i);
     assert.match((await hub.call('vue_brief', { card: 'react:Card' })).text, /shop isn't a Vue project/);
+  } finally {
+    await hub.close();
+  }
+});
+
+test('hub: a draft keeps files apart, plugin tools see the project as it would leave it, and submitting makes a proposal', async () => {
+  const { host, proposals, drafts, files } = fakeHost();
+  const look: PluginTool = {
+    name: 'look',
+    title: 'Look',
+    description: 'What a tool sees.',
+    run: async (_input, ctx) => `${ctx.draft?.id ?? 'no draft'} | ${ctx.project.files.join(',')} | ${await ctx.read('src/New.tsx')} | ${await ctx.read('src/Card.tsx')}`,
+  };
+  host.tools = () => [{ plugin, tool: look }];
+  const hub = await connect(host);
+  try {
+    const saved = await hub.call('save_draft', {
+      title: 'Card gets a title',
+      why: 'To show it',
+      cards: ['react:Card'],
+      changes: [
+        { path: 'src/Card.tsx', content: 'export const Card = ({ title }) => title;\n' },
+        { path: './src/New.tsx', content: 'export const New = 1;\n' },
+        { path: 'src/List.tsx', content: null },
+      ],
+    });
+    assert.equal(saved.error, false, saved.text);
+    const id = drafts[0].id;
+    assert.match(saved.text, new RegExp(`Draft ${id} saved: 3 files \\(1 new, 1 changed, 1 removed\\)\\. Nothing in the project changed\\.`));
+    assert.equal(files['src/Card.tsx'], 'export const Card = () => null;\n', 'the project is untouched');
+    assert.equal(proposals.length, 0);
+
+    // Plugin tools: with the draft, the project as it would be; without, as it is.
+    assert.equal((await hub.call('look', { draft: id })).text, `${id} | src/Card.tsx,src/New.tsx | export const New = 1;\n | export const Card = ({ title }) => title;\n`);
+    assert.equal((await hub.call('look')).text, 'no draft | src/Card.tsx,src/List.tsx | undefined | export const Card = () => null;\n');
+    assert.match((await hub.call('look', { draft: 'nope' })).text, /No draft "nope"/);
+
+    // Changing it: a file put back as it was leaves the draft; the others stay.
+    const again = await hub.call('save_draft', { draft: id, title: 'Card gets a title', why: 'To show it', changes: [{ path: 'src/New.tsx', content: 'export const New = 2;\n' }, { path: 'src/Card.tsx', content: 'export const Card = () => null;\n' }] });
+    assert.match(again.text, /2 files \(1 new, 1 removed\)/);
+    assert.equal(drafts.length, 1, 'the same draft');
+    await hub.call('save_draft', { draft: id, title: 'Card gets a title', why: 'To show it', changes: [{ path: 'src/Card.tsx', content: 'export const Card = ({ title }) => title;\n' }] });
+
+    const list = await hub.call('read_draft');
+    assert.match(list.text, new RegExp(`^${id} · draft · Card gets a title · 3 files`));
+    const read = await hub.call('read_draft', { id });
+    assert.match(read.text, /- src\/Card\.tsx \(changed, 2 lines\)\n- src\/List\.tsx \(removed\)\n- src\/New\.tsx \(new, 2 lines\)/);
+    assert.match(read.text, /--- src\/New\.tsx\nexport const New = 2;/);
+    assert.doesNotMatch((await hub.call('read_draft', { id, path: 'src/Card.tsx' })).text, /--- src\/New/);
+
+    // A file that changed in the project since: submitting waits for the draft to be saved again.
+    files['src/Card.tsx'] = 'export const Card = () => 1;\n';
+    assert.match((await hub.call('read_draft', { id })).text, /src\/Card\.tsx \(changed, 2 lines\) · changed in the project since/);
+    assert.match((await hub.call('submit_draft', { id })).text, /changed in the project since the draft was saved: src\/Card\.tsx/);
+    files['src/Card.tsx'] = 'export const Card = () => null;\n';
+
+    const sent = await hub.call('submit_draft', { id });
+    assert.equal(sent.error, false, sent.text);
+    assert.equal(proposals.length, 1);
+    assert.deepEqual(proposals[0].changes.map((c) => c.path), ['src/Card.tsx', 'src/List.tsx', 'src/New.tsx']);
+    assert.deepEqual(proposals[0].items, ['react:Card']);
+    assert.equal(drafts[0].status, 'submitted');
+    assert.equal(drafts[0].proposal, proposals[0].id);
+    assert.match((await hub.call('submit_draft', { id })).text, /already in Review/);
+    assert.match((await hub.call('save_draft', { draft: id, title: 't', why: 'w', changes: [{ path: 'a.ts', content: 'x' }] })).text, /already sent to Review/);
+    assert.match((await hub.call('save_draft', { title: 't', why: 'w', changes: [{ path: '.visual-editor/x.json', content: 'x' }] })).text, /isn't a place in the project/);
   } finally {
     await hub.close();
   }

@@ -191,8 +191,9 @@ export interface Plugin {
 // ---------------------------------------------------------------------------
 
 /**
- * A tool Claude calls, e.g. React's `previewable`. The shell adds a `project` input (which project it's about) and
- * only runs it for projects the plugin detected. Tools read; changes go through the shell's own propose_change.
+ * A tool Claude calls, e.g. React's `previewable`. The shell adds two inputs: `project` (which project it's about) and
+ * `draft` (look at the project as a draft would leave it, ToolContext.draft), and only runs it for projects the plugin
+ * detected. Tools read; changes go through the shell's drafts and proposals.
  */
 export interface PluginTool {
   /** Lowercase letters, digits and underscores, unique across every plugin, e.g. "variant_brief". */
@@ -220,8 +221,16 @@ export interface ToolContext {
   project: ProjectInfo;
   items: Item[];
   links: Link[];
-  /** A file's text as the developer sees it (unsaved edits included), or undefined when it doesn't exist. */
+  /**
+   * A file's text as the developer sees it (unsaved edits included), or undefined when it doesn't exist. With a draft,
+   * as the draft would leave it.
+   */
   read(path: string): Promise<string | undefined>;
+  /**
+   * The draft the tool was called with (changes an assistant is working on, not yet in Review): `read` and
+   * `project.files` already show the project as it would leave it. `items` and `links` are still today's.
+   */
+  draft?: { id: string; title: string; changes: { path: string; after: string | null }[] };
 }
 
 /** The text the assistant gets, or a problem it should tell the developer about (or work around). */
