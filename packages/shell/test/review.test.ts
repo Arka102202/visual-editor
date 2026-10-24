@@ -145,3 +145,15 @@ test('a proposal can show how it looks: only at the app’s own address', () => 
   assert.equal(read('/\\evil.example/'), undefined);
   assert.equal(read(42), undefined);
 });
+
+test('a file that comes and goes at once (a tool’s temporary file) isn’t a change; a real one deleted is', () => {
+  const outside = new OutsideChanges();
+  // sed -i: a temporary file next to the real one, then the real one changes.
+  outside.note('/p', 'src/a.tsx.tmp1', '/p/src/a.tsx.tmp1', 'created');
+  outside.note('/p', 'src/a.tsx', '/p/src/a.tsx', 'changed');
+  outside.note('/p', 'src/a.tsx.tmp1', '/p/src/a.tsx.tmp1', 'deleted');
+  assert.deepEqual([...outside.get('/p')], ['src/a.tsx']);
+  // A file that was there and is deleted is a change.
+  outside.note('/p', 'src/b.tsx', '/p/src/b.tsx', 'deleted');
+  assert.deepEqual([...outside.get('/p')].sort(), ['src/a.tsx', 'src/b.tsx']);
+});

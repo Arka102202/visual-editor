@@ -10,7 +10,12 @@ export type Mark = 'proposed' | 'changed';
 /** How long after writing a file its change event still counts as ours. */
 const OWN_WRITE_MS = 3000;
 
+/** A file created and deleted within this long came and went (a tool's temporary file). */
+const CAME_AND_WENT_MS = 5000;
+
 export class OutsideChanges {
+  /** When files were created (outside review), to tell a temporary file (created, then deleted at once) from a change. */
+  private readonly born = new Map<string, number>();
   private readonly changed = new Map<string, Set<string>>();
   private readonly ownWrites = new Map<string, number>();
   private readonly listeners = new Set<() => void>();
@@ -21,13 +26,21 @@ export class OutsideChanges {
   }
 
   /** A file in a project changed. `path` is relative to `root`; `absolute` is the full path. */
-  note(root: string, path: string, absolute: string) {
+  note(root: string, path: string, absolute: string, how: 'created' | 'changed' | 'deleted' = 'changed') {
     // Visual Editor's own files (fakes, contracts) aren't changes to the app's code.
     if (isVisualEditorFile(path)) return;
     const until = this.ownWrites.get(absolute);
     if (until !== undefined && until > Date.now()) return;
     this.ownWrites.delete(absolute);
     const set = this.changed.get(root) ?? new Set<string>();
+    // A file that came and went (a tool saving through a temporary file, like sed -i): not a change to the code.
+    const born = this.born.get(absolute);
+    if (how === 'deleted' && born !== undefined && Date.now() - born < CAME_AND_WENT_MS) {
+      this.born.delete(absolute);
+      if (set.delete(path)) this.fire();
+      return;
+    }
+    if (how === 'created' && !set.has(path)) this.born.set(absolute, Date.now());
     if (set.has(path)) return;
     set.add(path);
     this.changed.set(root, set);
