@@ -210,7 +210,7 @@ A one-line proposal, with the before and after shown live in Review, and Undo.
   - a setting for which one the buttons use.
 - **Done when:** the same job gives the same proposal all three ways.
 
-### 2.7 Agents panel
+### 2.7 Agents panel ✅ done
 - **You get:** every agent with what it does, Run now, what's running, and the last results with their proof.
 - **Done when:** you can start, watch, stop and review any agent from one place.
 
