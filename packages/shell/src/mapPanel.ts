@@ -213,6 +213,11 @@ export class MapPanel {
       this.useVariant(m.id, m.variant, m.situation);
     } else if (m.type === 'updateHelper') {
       this.updateHelper(m.id);
+    } else if (m.type === 'previewFix') {
+      const state = this.current.get();
+      const item = state?.items.find((i) => i.id === m.id);
+      const plugin = item && state?.detected.find(({ plugin: p }) => item.id.startsWith(`${p.id}:`))?.plugin;
+      if (state && item && plugin?.previewFix) this.proposeChange(state.project.root, plugin.previewFix(state.project, m.need), item.id);
     } else if (m.type === 'window') {
       void this.toggleWindow();
     } else if (m.type === 'clearChanged') {

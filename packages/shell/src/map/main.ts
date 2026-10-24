@@ -447,9 +447,10 @@ const webview = new Webview({ post: (m) => vscode.postMessage(m), store: layoutS
 /** Preview: one variant of a card on its own, in one fixed-data state, at a screen size (for cards that have variants). */
 const useVariant = (item: Item, variant: string, situation?: string) => vscode.postMessage({ type: 'useVariant', id: item.id, variant, situation });
 const updateHelper = (item: Item) => vscode.postMessage({ type: 'updateHelper', id: item.id });
-const preview = new PreviewWindow({ post: (m) => vscode.postMessage(m), store: layoutStore, useVariant, updateHelper });
+const previewFix = (item: Item, need: string) => vscode.postMessage({ type: 'previewFix', id: item.id, need });
+const preview = new PreviewWindow({ post: (m) => vscode.postMessage(m), store: layoutStore, useVariant, updateHelper, previewFix });
 /** Playground: a card's every variant in every fixed-data state; a chosen tile opens in Preview. */
-const playground = new Playground({ post: (m) => vscode.postMessage(m), store: layoutStore, preview: (item, variant, state) => preview.open(item, variant, state), useVariant, updateHelper });
+const playground = new Playground({ post: (m) => vscode.postMessage(m), store: layoutStore, preview: (item, variant, state) => preview.open(item, variant, state), useVariant, updateHelper, previewFix });
 const previewTip = (label: string) => `Preview: ${label} on its own (the variant in use), with fixed data, at a screen size`;
 const playgroundTip = (label: string) => `Playground: ${label}’s every variant in every state, side by side, with fixed data`;
 

@@ -173,6 +173,11 @@ export interface Plugin {
    * Undefined: nothing to do.
    */
   setup?(project: ProjectInfo): ProjectSetup | undefined;
+  /**
+   * Contract 8: what a preview needs that the plugin can give (React: "router", a providers file with a router in
+   * memory), as a change to review. A string says why not, or what to do instead.
+   */
+  previewFix?(project: ProjectInfo, need: string): ProposedChange | string;
 }
 
 /** Contract 8: files a plugin keeps in place in a project, written by the shell without review (the developer chose that). */

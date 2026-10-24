@@ -8,7 +8,7 @@ import type { FromMap } from '../mapMessages';
 import { el } from '../ui/dom';
 import { iconButton, tray, type Icon } from '../ui/buttons';
 import { Frame, type LayoutStore } from '../ui/frame';
-import { inUseFor, makeToast, pageNote, showReset, situationOf, stateList, useTip, useWords } from './playground';
+import { inUseFor, makeToast, needsRouter, pageNote, showReset, situationOf, stateList, useTip, useWords } from './playground';
 
 export const PREVIEW_CSS = `
   .vq-stage.fill .vp-device { margin: 0; }
@@ -30,6 +30,8 @@ interface Deps {
   useVariant(item: Item, variant: string, situation?: string): void;
   /** "Update the helper": proposes what Preview needs from the card's plugin. */
   updateHelper(item: Item): void;
+  /** Something a preview lacks (React: "router"): the card's plugin proposes it. */
+  previewFix(item: Item, need: string): void;
 }
 
 export class PreviewWindow {
@@ -278,6 +280,16 @@ export class PreviewWindow {
 
   /** What the page says that this window acts on: where the prototype would go, an older helper. */
   private fromPageExtra(data: Record<string, unknown>) {
+    if (data.type === 'needs' || (data.type === 'error' && needsRouter(String(data.text)))) {
+      const what = data.type === 'needs' ? String(data.what) : 'router';
+      if (what === 'router' && this.item) {
+        const item = this.item;
+        const add = iconButton('add', 'Add src/visual-editor.providers.tsx with a router in memory (a proposal you review first)');
+        add.addEventListener('click', () => this.deps.previewFix(item, 'router'));
+        this.say(`Links on this page need a router around them, and previews don’t have one yet, so it stopped drawing. Visual Editor can add a small file that wraps previews in a router held in memory (links then show where they’d go, and stay on the page).`, add);
+      }
+      return;
+    }
     if (data.type === 'goto') this.toast(`Would open ${String(data.path) || 'another page'}. A preview is one page, so it stays here.`);
     else if (data.type === 'old' && this.item) {
       const item = this.item;

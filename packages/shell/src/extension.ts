@@ -59,6 +59,8 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
   context.subscriptions.push(setups);
   const review = new Review(context.extensionUri, index, current, changes, memory, (root, progress) => proxies.open(root, progress));
   const projectsView = new ProjectsView(index, current, review);
+  // Recent changes shows what's waiting for review too (yellow), above what was applied, rejected, sent back.
+  memoryView.setWaiting((root) => review.proposals(root), (fn) => review.onChange(fn));
   context.subscriptions.push(memoryView, vscode.window.registerTreeDataProvider('visualEditor.memory', memoryView));
   context.subscriptions.push(index, review, projectsView, vscode.window.registerTreeDataProvider('visualEditor.projects', projectsView));
   const folders = () => (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
