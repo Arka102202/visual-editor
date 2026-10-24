@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { CONTRACT_VERSION, type Plugin, type PluginTool } from '@visual-editor/contract';
+import { CONTRACT_VERSION, type Plugin, type PluginAgent, type PluginTool } from '@visual-editor/contract';
 import { startHttpHost } from '../src/hub/http';
 import { createHubServer, type HubHost } from '../src/hub/tools';
 import type { MemoryEntry } from '../src/memory';
@@ -10,6 +10,7 @@ import type { ProjectState } from '../src/projectIndex';
 import type { Proposal } from '../src/proposals';
 import { HUB_TOOLS } from '../src/registry';
 import type { Draft } from '../src/drafts';
+import type { Job } from '../src/jobs';
 
 const plugin: Plugin = { id: 'react', name: 'React', version: '0', contract: CONTRACT_VERSION, detect: () => ({ reason: 'react is in package.json' }), maps: [{ id: 'components', title: 'Components' }] };
 const state: ProjectState = {
@@ -27,6 +28,7 @@ const state: ProjectState = {
 function fakeHost() {
   const proposals: Proposal[] = [];
   const drafts: Draft[] = [];
+  const jobs: Job[] = [];
   const memory: MemoryEntry[] = [{ id: 'r', at: '2026-10-18T00:00:00.000Z', kind: 'rule', text: 'Use theme colours', by: { kind: 'developer', name: 'You' } }];
   const files: Record<string, string> = { 'src/Card.tsx': 'export const Card = () => null;\n', 'src/List.tsx': 'export const List = () => null;\n' };
   const host: HubHost = {
@@ -40,9 +42,12 @@ function fakeHost() {
     remember: (_root, e) => void memory.unshift(e),
     tools: () => [],
     drafts: () => drafts,
+    jobs: () => jobs,
+    saveJob: (_root, j) => void jobs.splice(0, jobs.length, j, ...jobs.filter((x) => x.id !== j.id)),
+    agents: () => [],
     saveDraft: (_root, d) => void drafts.splice(0, drafts.length, d, ...drafts.filter((x) => x.id !== d.id)),
   };
-  return { host, proposals, memory, drafts, files };
+  return { host, proposals, memory, drafts, files, jobs };
 }
 
 async function connect(host: HubHost) {
@@ -61,7 +66,7 @@ test('hub: a real MCP client reads the map, the rules and a card', async () => {
   const hub = await connect(host);
   try {
     const tools = (await hub.client.listTools()).tools.map((t) => t.name).sort();
-    assert.deepEqual(tools, ['add_evidence', 'card', 'draft_pictures', 'list_cards', 'memory', 'overview', 'proposal_status', 'propose_change', 'read_draft', 'remember', 'save_draft', 'submit_draft']);
+    assert.deepEqual(tools, [...HUB_TOOLS].sort());
     const overview = await hub.call('overview');
     assert.match(overview.text, /## shop \(on the map\)/);
     assert.match(overview.text, /Plugins: React \(react is in package.json\)/);
@@ -99,7 +104,7 @@ test('hub: changes only arrive as proposals, signed by the assistant, with the c
     assert.deepEqual(p.changes.map((c) => [c.path, c.before]), [['src/Card.tsx', 'export const Card = () => null;\n'], ['src/new.ts', null]]);
     assert.deepEqual(p.items, ['react:Card']);
 
-    assert.match((await hub.call('propose_change', { title: 't', why: 'w', changes: [{ path: '../etc/passwd', content: 'x' }] })).text, /outside the project/);
+    assert.match((await hub.call('propose_change', { title: 't', why: 'w', changes: [{ path: '../etc/passwd', content: 'x' }] })).text, /isn't a place in the project/);
     assert.match((await hub.call('propose_change', { title: 't', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'export const Card = () => null;\n' }] })).text, /would stay the same/);
     assert.equal(proposals.length, 1);
 
@@ -253,10 +258,16 @@ test('hub: a draft keeps files apart, plugin tools see the project as it would l
     assert.equal(drafts[0].evidence.at(-1)?.passed, false);
     assert.match(drafts[0].evidence.at(-1)!.text, /^export const New = 3;\nPROBLEMS$/, 'the check saw the draft');
 
+    // A check failed on this version: it isn't sent; fixed (a new version), the checks not yet run are run, and it goes.
+    const refused = await hub.call('submit_draft', { id });
+    assert.equal(refused.error, true);
+    assert.match(refused.text, /^Not sent to Review: Judge it \(strict: true\) did not pass\.[\s\S]*Fix it \(save_draft with the draft id, then submit_draft again; it is draft/);
+    assert.equal(proposals.length, 0);
+    await hub.call('save_draft', { draft: id, title: 'Card gets a title', why: 'To show it', changes: [{ path: 'src/New.tsx', content: 'export const New = 4;\n' }] });
     const sent = await hub.call('submit_draft', { id });
     assert.equal(sent.error, false, sent.text);
-    assert.match(sent.text, /with its proof \(1\)[\s\S]*Review shows that Judge it \(strict: true\) did not pass/);
-    assert.deepEqual(proposals[0].evidence?.map((e) => [e.title, e.passed]), [['Judge it (strict: true)', false]], 'only this version’s proof');
+    assert.match(sent.text, /waiting in Review for the developer, with its proof: ✓ Judge it\./);
+    assert.deepEqual(proposals[0].evidence?.map((e) => [e.title, e.passed]), [['Judge it', true]], 'only this version’s proof, run by Visual Editor before sending');
     assert.match((await hub.call('add_evidence', { draft: id, title: 't', text: 'x' })).text, /already in Review/);
     assert.equal(proposals.length, 1);
     assert.deepEqual(proposals[0].changes.map((c) => c.path), ['src/Card.tsx', 'src/List.tsx', 'src/New.tsx']);
@@ -296,8 +307,106 @@ test('hub: a picture of a draft in the Playground is kept as proof, problems mar
     assert.match(drafts[0].evidence[0].text, /Problems on the page:\n- A design didn’t draw: tiny: boom/);
     assert.match((await hub.call('draft_pictures', { draft: id, card: 'Nope' })).text, /can’t be shown in the Playground/);
     assert.match((await hub.call('read_draft', { id })).text, /Proof for this version: ✗ Playground: Card/);
-    await hub.call('submit_draft', { id });
+    // A picture with problems keeps it out of Review; a clean picture of the same card replaces it.
+    assert.match((await hub.call('submit_draft', { id })).text, /^Not sent to Review: Playground: Card did not pass/);
+    await hub.call('draft_pictures', { draft: id, card: 'Card' });
+    assert.equal((await hub.call('submit_draft', { id })).error, false);
     assert.equal(proposals[0].evidence?.[0].image, `.visual-editor/drafts/${id}/Card-v1.png`, 'the picture goes to Review with it');
+  } finally {
+    await hub.close();
+  }
+});
+
+test('hub: an agent job: worker hands in, checker needs proof to pass, sends back with reasons, at most its rounds; Stop and time limits hold', async () => {
+  const { host, drafts, proposals, jobs } = fakeHost();
+  const agent: PluginAgent = { name: 'new-variant', title: 'New variant', description: 'A new design.', worker: { prompt: 'w' }, checker: { prompt: 'c' }, rounds: 2 };
+  const judge: PluginTool = { name: 'judge', title: 'Judge it', description: 'A check.', checks: true, run: async (_i, ctx) => ((await ctx.read('src/Tiny.tsx'))?.includes('fetch') ? 'Uses data\nPROBLEMS' : 'Fine\nPASSED') };
+  host.agents = () => [{ plugin, agent }];
+  host.tools = () => [{ plugin, tool: judge }];
+  const hub = await connect(host);
+  try {
+    assert.match((await hub.call('job_start', { agent: 'nope', request: 'x' })).text, /No agent "nope"\. Agents: new-variant/);
+    const started = await hub.call('job_start', { agent: 'new-variant', request: 'A tiny card' });
+    assert.match(started.text, /Job \S+ started \(New variant; at most 2 rounds, 20 minutes; the worker is visual-editor:new-variant-worker/);
+    const id = jobs[0].id;
+    assert.match((await hub.call('job_verdict', { job: id, passed: true })).text, /isn't waiting for the checker \(it's working\)\. Run the worker \(round 1 of 2\)/);
+
+    // Round 1: a draft with a planted mistake.
+    await hub.call('save_draft', { title: 'Tiny', why: 'Small', changes: [{ path: 'src/Tiny.tsx', content: 'fetch("/api")' }] });
+    const draft = drafts[0].id;
+    assert.match((await hub.call('job_hand_in', { job: id, draft, note: 'made it' })).text, /Handed in/);
+    assert.equal(jobs[0].status, 'checking');
+    assert.match((await hub.call('job_verdict', { job: id, passed: true })).text, /A pass needs proof/);
+    await hub.call('judge', { draft });
+    assert.match((await hub.call('job_verdict', { job: id, passed: true })).text, /It can't pass: on this version, Judge it did not pass/);
+    assert.match((await hub.call('job_verdict', { job: id, passed: false })).text, /Say what is wrong/);
+    assert.match((await hub.call('job_verdict', { job: id, passed: false, reasons: 'It calls the API; designs show looks only.' })).text, /Sent back for round 2 of 2/);
+    const status = await hub.call('job_status', { id });
+    assert.match(status.text, /working, round 2 of 2, draft/);
+    assert.match(status.text, /Next: Run the worker again \(round 2 of 2\) with the checker's reasons: It calls the API; designs show looks only\./);
+
+    // Round 2: fixed, checked, passed: it goes to Review with its proof.
+    await hub.call('save_draft', { draft, title: 'Tiny', why: 'Small', changes: [{ path: 'src/Tiny.tsx', content: 'export const Tiny = 1' }] });
+    await hub.call('job_hand_in', { job: id, draft });
+    await hub.call('judge', { draft });
+    const passed = await hub.call('job_verdict', { job: id, passed: true, reasons: 'The check passes.' });
+    assert.match(passed.text, /Passed: it is in Review as proposal \S+, with its proof \(1\)/);
+    assert.equal(jobs[0].status, 'passed');
+    assert.equal(proposals[0].id, jobs[0].proposal);
+    assert.deepEqual(proposals[0].evidence?.map((e) => [e.title, e.passed]), [['Judge it', true]], 'only the proof of the version that passed');
+    assert.match((await hub.call('job_status', { id })).text, /Next: Done: it passed and is waiting in Review/);
+
+    // Out of rounds: a job allowed 1 round fails when sent back.
+    host.agents = () => [{ plugin, agent: { ...agent, rounds: 1 } }];
+    await hub.call('job_start', { agent: 'new-variant', request: 'Another' });
+    const one = jobs[0].id;
+    await hub.call('save_draft', { title: 'T2', why: 'w', changes: [{ path: 'src/T2.tsx', content: 'x' }] });
+    await hub.call('job_hand_in', { job: one, draft: drafts[0].id });
+    assert.match((await hub.call('job_verdict', { job: one, passed: false, reasons: 'Wrong.' })).text, /that was the last round: the job failed/);
+    assert.equal(jobs[0].status, 'failed');
+
+    // Stopped by the developer: every step says to stop.
+    await hub.call('job_start', { agent: 'new-variant', request: 'Third' });
+    jobs[0] = { ...jobs[0], status: 'stopped' };
+    assert.match((await hub.call('job_hand_in', { job: jobs[0].id, draft: drafts[0].id })).text, /isn't waiting for the worker \(it's stopped\)\. The developer stopped it\. Stop now/);
+    // Out of time.
+    await hub.call('job_start', { agent: 'new-variant', request: 'Fourth' });
+    jobs[0] = { ...jobs[0], until: '2000-01-01T00:00:00.000Z' };
+    assert.match((await hub.call('job_status', { id: jobs[0].id })).text, /out of time[\s\S]*Next: It ran out of time\. Stop now/);
+    assert.equal(jobs[0].status, 'out of time', 'saved as out of time');
+  } finally {
+    await hub.close();
+  }
+});
+
+test('hub: propose_change is checked first: a failing check keeps it out of Review; passing, it goes with its proof', async () => {
+  const { host, proposals, drafts } = fakeHost();
+  const judge: PluginTool = { name: 'judge', title: 'Judge it', description: 'A check.', checks: true, run: async (_i, ctx) => ((await ctx.read('src/Card.tsx'))?.includes('fetch') ? 'Calls the API\nPROBLEMS' : 'Fine\nPASSED') };
+  const pictured: string[] = [];
+  host.tools = () => [{ plugin, tool: judge }];
+  host.cardsTouched = async (_root, d) => (d.changes.some((c) => c.path === 'src/Card.tsx') ? ['react:Card'] : []);
+  host.pictures = async (root, d, card) => {
+    pictured.push(card);
+    return { image: `${root}/.visual-editor/drafts/${d.id}/Card-v1.png`, card: 'Card', cardId: card, designs: ['Default'], states: ['default'], tiles: 1, problems: [] };
+  };
+  const hub = await connect(host);
+  try {
+    const bad = await hub.call('propose_change', { title: 'Card loads stats', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'fetch("/api")' }] });
+    assert.equal(bad.error, true);
+    assert.match(bad.text, /^Not sent to Review: Judge it did not pass\.\n--- Judge it\nCalls the API\nPROBLEMS\nFix it \(call propose_change again with the corrected files; it is draft/);
+    assert.equal(proposals.length, 0, 'nothing reached Review');
+
+    const good = await hub.call('propose_change', { title: 'Card says hi', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'export const Card = () => "hi";\n' }] });
+    assert.equal(good.error, false, good.text);
+    assert.match(good.text, /waiting in Review for the developer, with its proof: ✓ Judge it; ▣ Playground: Card\./);
+    assert.deepEqual(proposals[0].evidence?.map((e) => [e.kind, e.title, e.passed]), [['check', 'Judge it', true], ['picture', 'Playground: Card', undefined]]);
+    assert.deepEqual(pictured, ['react:Card']);
+    assert.equal(drafts.find((d) => d.proposal === proposals[0].id)?.status, 'submitted', 'it went through a draft');
+
+    // Files no plugin checks: said plainly, not "nothing was checked".
+    host.tools = () => [];
+    const readme = await hub.call('propose_change', { title: 'README', why: 'w', changes: [{ path: 'README.md', content: 'hi' }] });
+    assert.match(readme.text, /with its proof: • No checks apply to these files/);
   } finally {
     await hub.close();
   }

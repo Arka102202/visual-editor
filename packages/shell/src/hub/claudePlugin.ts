@@ -49,14 +49,14 @@ export function claudePluginFiles(parts: ClaudeParts, version: string, marketpla
     const rounds = agent.rounds ?? 3;
     at(`skills/${agent.name}/SKILL.md`, page({ name: agent.name, description: `${agent.description} (Runs a worker, then a checker that proves the work.)` }, made(plugin), runSkill(agent, rounds)));
     at(`agents/${agent.name}-worker.md`, page(
-      { name: `${agent.name}-worker`, description: `The worker of “${agent.title}”: makes the draft. Run it through the ${agent.name} skill, not on its own.`, tools: toolsOf(agent.worker, toolNames) },
+      { name: `${agent.name}-worker`, description: `The worker of “${agent.title}”: makes the draft. Run it through the ${agent.name} skill, not on its own.`, tools: toolsOf(agent.worker, toolNames, 'worker') },
       made(plugin),
-      `${agent.worker.prompt.trim()}\n\nNever edit files yourself. End with your draft and what you did, in plain words.`,
+      `${WORKER}\n\n## ${agent.title}\n\n${agent.worker.prompt.trim()}`,
     ));
     at(`agents/${agent.name}-checker.md`, page(
-      { name: `${agent.name}-checker`, description: `The checker of “${agent.title}”: proves the worker’s draft or sends it back. Run it through the ${agent.name} skill, not on its own.`, tools: toolsOf(agent.checker, toolNames) },
+      { name: `${agent.name}-checker`, description: `The checker of “${agent.title}”: proves the worker’s draft or sends it back. Run it through the ${agent.name} skill, not on its own.`, tools: toolsOf(agent.checker, toolNames, 'checker') },
       made(plugin),
-      `${agent.checker.prompt.trim()}\n\nNever edit files yourself. Start your answer with PASSED (then the proof) or SENT BACK (then each reason, so the worker can fix it).`,
+      `${CHECKER}\n\n## ${agent.title}\n\n${agent.checker.prompt.trim()}`,
     ));
   }
   return files;
@@ -82,26 +82,56 @@ function mapSkill(tools: ClaudeParts['tools']): string {
 }
 
 function runSkill(agent: PluginAgent, rounds: number): string {
+  const worker = `\`${CLAUDE_PLUGIN}:${agent.name}-worker\``;
+  const checker = `\`${CLAUDE_PLUGIN}:${agent.name}-checker\``;
   return `# ${agent.title}
 
 ${agent.description}
 
-This job has two parts. Run them with the Agent tool, one after the other:
-1. The worker, \`${CLAUDE_PLUGIN}:${agent.name}-worker\`: give it the developer’s request (and, after the first round, the
-   checker’s reasons). It answers with a draft.
-2. The checker, \`${CLAUDE_PLUGIN}:${agent.name}-checker\`: give it the request and the worker’s whole answer. It answers
-   PASSED with its proof, or SENT BACK with its reasons.
+Visual Editor runs this as a job: a worker makes a draft, a checker proves it or sends it back, at most ${rounds} round${rounds === 1 ? '' : 's'}.
+Visual Editor keeps the rounds, the time limit and the developer's Stop. Follow these steps exactly:
 
-When it's sent back, run the worker again with the reasons, then the checker: ${rounds === 1 ? 'only once in all' : `at most ${rounds} times in all`}.
-Then tell the developer, in plain words, what was done and the proof, or why it stopped.
-Never edit files yourself: changes reach the developer only as proposals in Review.
+1. Call \`job_start\` with agent "${agent.name}" and the developer's request in their own words. It gives a job id.
+2. Run the worker ${worker} with the Agent tool. Tell it the job id and the request (from round 2, also the checker's
+   reasons, from \`job_status\`).
+3. Call \`job_status\`. When it says to run the checker, run ${checker} with the job id and the request.
+4. Call \`job_status\` again and do what its "Next" says: run the worker again with the reasons, or stop.
+   Repeat until it says the job passed, failed, was stopped or ran out of time.
+5. Tell the developer in plain words: what was made, the proof, and the proposal waiting in Review; or why it stopped.
+
+Never edit files yourself, and never do the worker's job yourself when it fails: say what happened.
 `;
 }
 
-/** A part's tools in Claude Code's names: the hub's and plugins' get the MCP prefix; tools that change files are left out. */
-function toolsOf(part: AgentPart, hub: Set<string>): string {
-  const names = part.tools ?? [...READING, 'Read', 'Grep', 'Glob'];
-  return names.filter((n) => !CHANGING.has(n)).map((n) => (hub.has(n) ? mcp(n) : n)).join(', ');
+/** What every worker is told first (its own instructions follow). */
+const WORKER = `You are the worker of a Visual Editor job: you are given a job id and a request (after the first round, also the
+checker's reasons, which you must fix).
+- Make the change as a draft with \`save_draft\` (to change your draft, pass its id). Never edit files.
+- Check it yourself first with the plugin check tools, passing the draft, and fix what they find.
+- Then hand it in with \`job_hand_in\` (job, draft, a note) and end your answer with what you did, in plain words.
+- If a job tool says the job was stopped or ran out of time, stop at once.`;
+
+/** What every checker is told first (its own instructions follow). */
+const CHECKER = `You are the checker of a Visual Editor job: you are given a job id. Read the job (\`job_status\`) and its draft
+(\`read_draft\`). Never edit files, and never change the draft: your job is to prove it or send it back.
+- Prove it does what was asked and follows the rules: run the plugin check tools with the draft (their answers are kept
+  as proof for Review), and look for yourself.
+- Then give your verdict with \`job_verdict\`: passed (only with proof that passed on this version) or sent back with
+  specific reasons the worker can act on. End your answer with your verdict and why.
+- If a job tool says the job was stopped or ran out of time, stop at once.`;
+
+/** The tools each role always has, and the ones it never gets (so neither can skip the other). */
+const ROLE_TOOLS = { worker: ['save_draft', 'read_draft', 'job_status', 'job_hand_in'], checker: ['read_draft', 'add_evidence', 'job_status', 'job_verdict'] };
+const NEVER = { worker: ['job_verdict', 'submit_draft', 'propose_change'], checker: ['save_draft', 'job_hand_in', 'submit_draft', 'propose_change'] };
+
+/**
+ * A part's tools in Claude Code's names: its own (the hub's reading tools when it says none), plus what its role always
+ * needs; tools that change files, or that would skip the other role, are left out. The hub's and plugins' get the MCP
+ * prefix.
+ */
+function toolsOf(part: AgentPart, hub: Set<string>, role: 'worker' | 'checker'): string {
+  const names = [...new Set([...(part.tools ?? [...READING, 'Read', 'Grep', 'Glob']), ...ROLE_TOOLS[role]])];
+  return names.filter((n) => !CHANGING.has(n) && !NEVER[role].includes(n)).map((n) => (hub.has(n) ? mcp(n) : n)).join(', ');
 }
 
 const made = (plugin: Plugin) => `Made by the Visual Editor VS Code extension from its ${plugin.name} plugin.`;

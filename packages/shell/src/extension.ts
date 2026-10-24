@@ -19,7 +19,8 @@ import { askEntry, MemoryView, ProjectMemory } from './memoryView';
 import type { MemoryEntry } from './memory';
 import { Hub, run } from './hub/hub';
 import { DRAFTS_DIR, DraftStore } from './drafts';
-import { draftItems } from './draftItems';
+import { JobStore, finished } from './jobs';
+import { cardsTouched, draftItems } from './draftItems';
 import { DraftApps } from './proxy/draftApps';
 import { takePicture } from './pictures';
 import { ClaudeAgents } from './hub/claudeAgents';
@@ -265,6 +266,19 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     tools: () => registry.tools(),
     drafts: (root) => new DraftStore(root).list(),
     saveDraft: (root, d) => new DraftStore(root).save(d),
+    jobs: (root) => new JobStore(root).list(),
+    saveJob: (root, j) => {
+      new JobStore(root).save(j);
+      agentsView.refresh();
+    },
+    agents: () => registry.agents(),
+    // The previewable cards a draft changes, as it leaves them (a new design is part of its card).
+    cardsTouched: async (root, draft) => {
+      const state = index.snapshot().find((s) => s.project.root === root);
+      if (!state) return [];
+      const { items } = await draftItems(state, draft, (path) => vscodeFiles(root, changes).read(path));
+      return cardsTouched(items, draft.changes.map((c) => c.path)).map((i) => i.id);
+    },
     // A draft in the Playground: its cards read with the draft on top, drawn by the draft's own app, and pictured.
     pictures: async (root, draft, card) => {
       const state = index.snapshot().find((s) => s.project.root === root);
@@ -292,13 +306,23 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
   };
   refreshAgents();
   const assistantsView = new AssistantsView(hub);
-  const agentsView = new AgentsView(registry, hub);
+  const agentsView = new AgentsView(
+    context.extensionUri,
+    registry,
+    hub,
+    () => {
+      const root = current.get()?.project.root;
+      return root ? new JobStore(root).list() : [];
+    },
+    (id) => void vscode.commands.executeCommand('visualEditor.stopJob', { job: { id } }),
+  );
   context.subscriptions.push(
     hub,
     assistantsView,
     vscode.window.registerTreeDataProvider('visualEditor.assistants', assistantsView),
     agentsView,
-    vscode.window.registerTreeDataProvider('visualEditor.agents', agentsView),
+    vscode.window.registerWebviewViewProvider('visualEditor.agents', agentsView, { webviewOptions: { retainContextWhenHidden: true } }),
+    current.onChange(() => agentsView.refresh()),
     hub.onChange(updateStatus),
     vscode.commands.registerCommand('visualEditor.chooseAssistant', () => chooseAssistant(hub)),
     vscode.commands.registerCommand('visualEditor.connectAssistant', () => hub.connectClaudeCode()),
@@ -308,6 +332,19 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     }),
     vscode.commands.registerCommand('visualEditor.connectClaudeCode', () => hub.connectClaudeCode()),
     vscode.commands.registerCommand('visualEditor.addAgents', () => hub.addAgents()),
+    // Stop an agent's job: its next step is to stop (the worker and checker are told so by every job tool).
+    vscode.commands.registerCommand('visualEditor.stopJob', async (node?: { job?: { id: string } }) => {
+      const root = current.get()?.project.root;
+      if (!root) return;
+      const store = new JobStore(root);
+      const running = store.list().filter((j) => !finished(j));
+      const id = node?.job?.id ?? (running.length === 1 ? running[0].id : (await vscode.window.showQuickPick(running.map((j) => ({ label: j.title, description: `${j.status}, round ${j.round} of ${j.rounds}`, detail: j.request, id: j.id })), { placeHolder: 'Which job should stop?' }))?.id);
+      const j = running.find((x) => x.id === id);
+      if (!j) return void (running.length ? undefined : vscode.window.showInformationMessage('No agent is working right now.'));
+      store.save({ ...j, status: 'stopped', history: [...j.history, { at: new Date().toISOString(), who: 'developer', what: 'Stopped.' }] });
+      agentsView.refresh();
+      void vscode.window.showInformationMessage(`${j.title} is stopping: it stops at its next step.`);
+    }),
     registry.onChange(refreshAgents),
     { dispose: () => clearTimeout(agentsTimer) },
   );

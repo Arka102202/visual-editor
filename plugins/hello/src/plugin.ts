@@ -17,6 +17,7 @@ export const helloPlugin: Plugin = {
     {
       name: 'hello_files',
       title: 'Count the project’s files',
+      summary: 'Counts the files in your project (an example tool).',
       description: 'How many files the project has (the example plugin’s tool).',
       input: { ending: { type: 'string', description: 'Only files ending with this, e.g. ".md"', optional: true } },
       run: ({ ending }, { project }) => {
@@ -28,6 +29,8 @@ export const helloPlugin: Plugin = {
   skills: [
     {
       name: 'hello-greetings',
+      title: 'How to say hello',
+      summary: 'An example skill: how to greet in this project.',
       description: 'How to greet in this project (the example plugin’s know-how). Use when asked to say hello.',
       text: 'Greet in one short, friendly line, and say how many files the project has (the hello_files tool).',
     },
@@ -36,6 +39,7 @@ export const helloPlugin: Plugin = {
     {
       name: 'hello-note',
       title: 'Write a hello note',
+      summary: 'An example agent: writes a one-line hello note for the README.',
       description: 'Drafts a one-line hello note for the README (the example plugin’s agent).',
       worker: { prompt: 'Draft one friendly line to add to the README that says hello and how many files the project has (use hello_files).', tools: ['hello_files', 'Read'] },
       checker: { prompt: 'Check the draft is a single friendly line, and that its file count matches hello_files.', tools: ['hello_files'] },

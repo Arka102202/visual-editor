@@ -59,16 +59,22 @@ test('claude plugin: a one-plugin marketplace with the map skill, plugins’ ski
   assert.equal(front(run).description, 'Splits a component into its two parts: "dynamic" and static. (Runs a worker, then a checker that proves the work.)');
   assert.match(run, /`visual-editor:make-previewable-worker`/);
   assert.match(run, /`visual-editor:make-previewable-checker`/);
-  assert.match(run, /at most 3 times in all/);
+  assert.match(run, /at most 3 rounds/);
+  assert.match(run, /Call `job_start` with agent "make-previewable"/);
 
   // Tools: the hub's and plugins' in Claude Code's names; tools that change files never given; reading tools by default.
   const worker = files['visual-editor/agents/make-previewable-worker.md'];
   assert.equal(front(worker).name, 'make-previewable-worker');
-  assert.equal(front(worker).tools, 'mcp__visual-editor__variant_brief, mcp__visual-editor__card, Read');
-  assert.match(worker, /Split it\.\n\nNever edit files yourself\./);
+  // Its own tools plus what a worker needs; never the checker's verdict.
+  assert.equal(front(worker).tools, 'mcp__visual-editor__variant_brief, mcp__visual-editor__card, Read, mcp__visual-editor__save_draft, mcp__visual-editor__read_draft, mcp__visual-editor__job_status, mcp__visual-editor__job_hand_in');
+  assert.match(worker, /^You are the worker of a Visual Editor job/m);
+  assert.match(worker, /## Make previewable\n\nSplit it\.\n$/);
   const checker = files['visual-editor/agents/make-previewable-checker.md'];
-  assert.equal(front(checker).tools, 'mcp__visual-editor__overview, mcp__visual-editor__list_cards, mcp__visual-editor__card, mcp__visual-editor__memory, mcp__visual-editor__read_draft, Read, Grep, Glob');
-  assert.match(checker, /Start your answer with PASSED \(then the proof\) or SENT BACK/);
+  assert.equal(front(checker).tools, 'mcp__visual-editor__overview, mcp__visual-editor__list_cards, mcp__visual-editor__card, mcp__visual-editor__memory, mcp__visual-editor__read_draft, Read, Grep, Glob, mcp__visual-editor__add_evidence, mcp__visual-editor__job_status, mcp__visual-editor__job_verdict');
+  assert.match(checker, /never change the draft/);
+  // A checker that names save_draft among its tools still doesn't get it.
+  const sneaky = claudePluginFiles({ ...parts, agents: [{ plugin: react, agent: { ...agent, checker: { prompt: 'x', tools: ['save_draft', 'check_variant_files'] } } }] }, '1', 'm')['visual-editor/agents/make-previewable-checker.md'];
+  assert.doesNotMatch(front(sneaky).tools, /save_draft/);
 });
 
 test('claude plugin: a new version only when what plugins give changes', () => {
@@ -76,5 +82,5 @@ test('claude plugin: a new version only when what plugins give changes', () => {
   assert.equal(claudePluginKey({ ...parts }), key);
   assert.notEqual(claudePluginKey({ ...parts, agents: [{ plugin: react, agent: { ...agent, checker: { prompt: 'Prove it twice.' } } }] }), key);
   assert.notEqual(claudePluginKey({ ...parts, skills: [] }), key);
-  assert.match(claudePluginFiles({ tools: [], skills: [], agents: [{ plugin: react, agent: { ...agent, rounds: 1 } }] }, '1', 'm')['visual-editor/skills/make-previewable/SKILL.md'], /only once in all/);
+  assert.match(claudePluginFiles({ tools: [], skills: [], agents: [{ plugin: react, agent: { ...agent, rounds: 1 } }] }, '1', 'm')['visual-editor/skills/make-previewable/SKILL.md'], /at most 1 round\b/);
 });

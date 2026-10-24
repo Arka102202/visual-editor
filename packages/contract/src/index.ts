@@ -207,6 +207,8 @@ export interface PluginTool {
   title: string;
   /** What it gives and when to call it, for the assistant. */
   description: string;
+  /** What it does, in very simple words, for the developer (shown in the Agents section). */
+  summary?: string;
   /** Its inputs, by name. */
   input?: Record<string, ToolInput>;
   /**
@@ -252,6 +254,10 @@ export interface PluginSkill {
   name: string;
   /** When to use it, for the assistant (it decides from this alone whether to load the rest). */
   description: string;
+  /** Its name for the developer, e.g. "Rules for previewable folders" (the name otherwise). */
+  title?: string;
+  /** What it is, in very simple words, for the developer (shown in the Agents section). */
+  summary?: string;
   /** The know-how itself (Markdown). */
   text: string;
 }
@@ -265,8 +271,10 @@ export interface PluginAgent {
   name: string;
   /** Shown on its button, e.g. "Make previewable". */
   title: string;
-  /** What it does and when to use it, for the developer and the assistant. */
+  /** What it does and when to use it, for the assistant. */
   description: string;
+  /** What it does, in very simple words, for the developer (shown in the Agents section). */
+  summary?: string;
   worker: AgentPart;
   checker: AgentPart;
   /** How many times the checker can send the draft back (1 to 3; 3 when not said). */
