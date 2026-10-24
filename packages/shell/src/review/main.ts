@@ -24,7 +24,9 @@ addStyles(`
   .meta { font-size: 12px; opacity: .7; display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
   .why { margin: 0 0 16px; max-width: 760px; }
   .actions { display: flex; gap: 8px; margin: 0 0 18px; position: sticky; top: -20px; padding: 10px 0; background: var(--vscode-editor-background); z-index: 1; }
-  .warn { border: 1px solid var(--vscode-inputValidation-warningBorder, #d9a400); background: var(--vscode-inputValidation-warningBackground, #d9a40022); border-radius: 6px; padding: 8px 12px; margin-bottom: 14px; }
+  /* A light tint of the theme's warning colour, with the editor's own text colour: readable in any theme (the input
+     warning colours can be solid, with no matching text colour). */
+  .warn { border: 1px solid color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 55%, transparent); background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 12%, var(--vscode-editor-background, #1e1e1e)); color: var(--vscode-editor-foreground, var(--vscode-foreground)); border-radius: 6px; padding: 8px 12px; margin-bottom: 14px; }
   .warn b { display: block; margin-bottom: 4px; }
   .file { border: 1px solid var(--vscode-panel-border, #8884); border-radius: 6px; margin-bottom: 14px; overflow: hidden; }
   .file .head { display: flex; gap: 8px; align-items: center; padding: 6px 12px; background: var(--vscode-editorWidget-background, #8881); font-size: 12px; }

@@ -47,10 +47,37 @@ interface Deps {
   store: LayoutStore;
   /** Opens Preview: one variant on its own, in one state. */
   preview(item: Item, variant: string, state: string): void;
-  /** "Use this design": proposes making this variant the one in use. */
-  useVariant(item: Item, variant: string): void;
+  /** "Use this design": proposes making this variant the one in use (for a situation, when there are situations). */
+  useVariant(item: Item, variant: string, situation?: string): void;
   /** "Update the helper": proposes what Preview needs from the card's plugin. */
   updateHelper(item: Item): void;
+}
+
+type Design = NonNullable<Item['preview']>['variants'][number];
+
+/** The situation a state shows (Button: "danger"), when the card has situations. */
+export function situationOf(item: Item | undefined, state: string | undefined): string | undefined {
+  const s = item?.preview?.situations;
+  return s && state ? s.ofState[state] : undefined;
+}
+
+/** Whether a design is the one in use (for this situation, when there are situations). */
+export function inUseFor(d: Design, situation: string | undefined): boolean {
+  return situation ? !!d.inUseFor?.includes(situation) : d.inUse;
+}
+
+/** Use this design's hover name, and whether there's something to do (a design, not in use, made for the situation). */
+export function useTip(item: Item | undefined, d: Design | undefined, situation: string | undefined): { tip: string; can: boolean } {
+  if (!d) return { tip: 'Use this design: choose a variant that isn’t in use (click its name on the board)', can: false };
+  if (situation && d.for && !d.for.includes(situation)) return { tip: `Use this design: ${d.name} isn’t made for “${situation}”`, can: false };
+  if (inUseFor(d, situation)) return { tip: `Use this design: ${d.name} is already the one in use${situation ? ` for “${situation}”` : ''}`, can: false };
+  return { tip: `Use this design: make ${d.name} the ${situation ? `design for “${situation}”` : `one ${item?.label ?? 'it'} uses`} (a proposal you review first, with before and after)`, can: true };
+}
+
+/** How a design's use reads in Details: "in use", "in use for primary, secondary", "not in use". */
+export function useWords(d: Design, situations: boolean): string {
+  if (situations) return d.inUseFor?.length ? `in use for ${d.inUseFor.join(', ')}` : 'not in use';
+  return d.inUse ? 'in use' : 'not in use';
 }
 
 /** A short message at the bottom of a window that goes away by itself. */
@@ -136,7 +163,8 @@ export class Playground {
     });
     this.useButton.addEventListener('click', () => {
       const v = this.chosen && this.item?.preview?.variants.find((x) => x.id === this.chosen!.variant);
-      if (this.item && v && !v.inUse) deps.useVariant(this.item, v.id);
+      const situation = situationOf(this.item, this.chosen?.state);
+      if (this.item && useTip(this.item, v, situation).can) deps.useVariant(this.item, v!.id, situation);
     });
     const reset = iconButton('undo', 'Reset: every tile back to its starting data (what you clicked or typed is undone)');
     reset.addEventListener('click', () => this.toPage({ type: 'reset' }));
@@ -287,7 +315,8 @@ export class Playground {
   /** The variants Compare shows (the one in use, then the chosen one), when there are two (and others to hide). */
   private compared(): string[] | undefined {
     const variants = this.item?.preview?.variants ?? [];
-    const inUse = variants.find((v) => v.inUse)?.id;
+    const situation = situationOf(this.item, this.chosen?.state);
+    const inUse = variants.find((v) => inUseFor(v, situation))?.id;
     return variants.length > 2 && inUse && this.chosen && this.chosen.variant !== inUse ? [inUse, this.chosen.variant] : undefined;
   }
 
@@ -303,10 +332,10 @@ export class Playground {
     this.previewButton.dataset.tip = ptip;
     this.previewButton.setAttribute('aria-label', ptip);
     // Use this design: for a chosen variant that isn't the one in use.
-    const utip = !v ? 'Use this design: choose a variant that isn’t in use (click its name on the board)' : v.inUse ? `Use this design: ${v.name} is already the one in use` : `Use this design: make ${v.name} the one ${this.item?.label ?? 'it'} uses (a proposal you review first, with before and after)`;
-    this.useButton.classList.toggle('dim', !v || v.inUse);
-    this.useButton.dataset.tip = utip;
-    this.useButton.setAttribute('aria-label', utip);
+    const use = useTip(this.item, v || undefined, situationOf(this.item, this.chosen?.state));
+    this.useButton.classList.toggle('dim', !use.can);
+    this.useButton.dataset.tip = use.tip;
+    this.useButton.setAttribute('aria-label', use.tip);
     // Only when there's something to hide: with two variants, the board already shows just those two.
     this.compareButton.hidden = (this.item?.preview?.variants.length ?? 0) < 3;
     const two = this.compared();
@@ -339,9 +368,9 @@ export class Playground {
     };
     const open = (path: string) => () => this.deps.post({ type: 'open', path });
     const file = (path: string) => path.split('/').pop() ?? path;
-    const out: HTMLElement[] = [el('h4', undefined, 'Variant'), row(v.name, v.inUse ? 'in use' : 'not in use', false, open(v.path)), row(file(v.path), 'open', false, open(v.path), 'file')];
+    const out: HTMLElement[] = [el('h4', undefined, 'Variant'), row(v.name, useWords(v, !!p.situations), false, open(v.path)), row(file(v.path), 'open', false, open(v.path), 'file')];
     out.push(el('h4', undefined, 'States'));
-    for (const s of p.states) out.push(row(s, undefined, s === c.state, () => this.choose(c.variant, s)));
+    for (const s of p.states) out.push(row(s, p.situations?.ofState[s] && p.situations.ofState[s] !== s ? p.situations.ofState[s] : undefined, s === c.state, () => this.choose(c.variant, s)));
     out.push(el('h4', undefined, `Fixed data · ${c.state}`));
     if (this.data) {
       out.push(row(file(this.data.file), 'open', false, open(this.data.file), 'file'));
@@ -374,7 +403,7 @@ export class Playground {
       const item = this.item;
       const update = iconButton('add', 'Update the helper: a proposal you review first');
       update.addEventListener('click', () => this.deps.updateHelper(item));
-      this.say(`This project’s helper (src/visual-editor.tsx) is version ${String(data.version ?? 1)}. Version 2 gives each tile its own prototype, Reset, and links that stay on the page.`, update);
+      this.say(`This project’s helper (src/visual-editor.tsx) is version ${String(data.version ?? 1)}; the newest is version ${String(data.latest ?? '')}. Update it to get every Preview and Playground feature (folders made for the newest need it).`, update);
     }
   }
 

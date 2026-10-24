@@ -131,7 +131,7 @@ export type FromMap =
   /** Preview wants the app's address (the proxy and dev server start when needed). */
   | { type: 'app' }
   /** "Use this design": propose making this variant of the card the one in use. */
-  | { type: 'useVariant'; id: string; variant: string }
+  | { type: 'useVariant'; id: string; variant: string; situation?: string }
   /** Add or update what Preview needs from the plugins (React: Visual Editor's helper), as a proposal. */
   | { type: 'updateHelper'; id: string }
   /** Open the developer's own file for a place in the code the browser runs (a console message's). */

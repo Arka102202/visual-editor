@@ -76,8 +76,13 @@ export interface Item {
 
 /** What Preview can show of a card (a component or page made previewable: docs/variants.md for React). */
 export interface ItemPreview {
-  /** Its looks, the one in use marked. */
-  variants: { id: string; name: string; path: string; inUse: boolean }[];
+  /** Its looks, the one in use marked (with situations: in use for at least one; `inUseFor` says which). */
+  variants: { id: string; name: string; path: string; inUse: boolean; inUseFor?: string[]; for?: string[] }[];
+  /**
+   * Some components have situations (Button: primary, danger…), picked by a prop the parent sets: one design is in use
+   * per situation. Which prop, the situations, and the situation each state shows.
+   */
+  situations?: { prop: string; names: string[]; ofState: Record<string, string> };
   /** The fixed-data states every variant is shown with (default, empty, long name…). */
   states: string[];
   /** What breaks the rules (in words, with what to do): e.g. a variant that calls an API. */
@@ -156,12 +161,28 @@ export interface Plugin {
    * Contract 8: the change that makes another of a card's variants the one in use (only the plugin knows where that's
    * said), for the developer to review. A string says why it can't be done.
    */
-  useVariant?(item: Item, variant: string, project: ProjectInfo): ProposedChange | string;
+  useVariant?(item: Item, variant: string, project: ProjectInfo, situation?: string): ProposedChange | string;
   /**
    * Contract 8: adds or updates what the project needs for Preview from this plugin (React: Visual Editor's helper,
    * src/visual-editor.tsx), as a change to review. A string says why not (e.g. it's up to date).
    */
   updateHelper?(project: ProjectInfo): ProposedChange | string;
+  /**
+   * Contract 8: what the plugin keeps in place in a project it detects (React: its helper and the short name it's
+   * imported by). The shell writes the changes as soon as the project is opened, and tells the developer in `said`.
+   * Undefined: nothing to do.
+   */
+  setup?(project: ProjectInfo): ProjectSetup | undefined;
+}
+
+/** Contract 8: files a plugin keeps in place in a project, written by the shell without review (the developer chose that). */
+export interface ProjectSetup {
+  /** Each file's whole text before (null: a new file) and after; written only if the file still reads `before`. */
+  changes: { path: string; before: string | null; after: string }[];
+  /** What was done, in plain words, for a notice. */
+  said: string;
+  /** What couldn't be done, with what to do. */
+  problems?: string[];
 }
 
 /** Contract 8: a change a plugin works out (e.g. making another variant the one in use), for the developer to review. */
