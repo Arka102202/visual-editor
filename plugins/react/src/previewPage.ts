@@ -209,10 +209,20 @@ try {
         chooser.default,
         v2 ? { states: groups ? groups.flatMap((g) => g.states) : rowStates, variants: tiles.map((id) => ({ id })), wrap, groups } : single ? { states: [single.state], columns: 1 } : { states: rowStates, columns: config.columns },
       );
+      // Something clicked or typed inside a tile (not choosing a tile by its name): Reset has something to undo.
+      let touched = false;
+      const touch = (e) => {
+        const t = e.target instanceof Element ? e.target : null;
+        if (touched || !t || !t.closest('#ve-preview') || t.hasAttribute('data-ve-variant') || t.closest('[data-ve-state], [data-ve-group], [data-ve-not-for]')) return;
+        touched = true;
+        tell({ type: 'touched' });
+      };
+      for (const ev of ['pointerdown', 'keydown', 'input']) addEventListener(ev, touch, true);
       // The static part "going" somewhere (or a link): a preview is one page, so it says where it would go.
       addEventListener('visual-editor:go', (e) => tell({ type: 'goto', path: String(e.detail) }));
       addEventListener('message', (e) => {
         if (!(e.source === parent && e.data && e.data.source === 've-preview' && e.data.type === 'reset')) return;
+        touched = false;
         if (!drawn || !drawn.reset) return location.reload();
         drawn.reset();
         // Drawn again from the starting data: the window puts back what was chosen.
