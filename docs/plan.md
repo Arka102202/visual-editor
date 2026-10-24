@@ -188,7 +188,7 @@ A one-line proposal, with the before and after shown live in Review, and Undo.
   - `save_draft`, `read_draft` and `submit_draft`.
 - **Done when:** Claude can make and check a draft without touching your files.
 
-### 2.4 Drafts and evidence
+### 2.4 Drafts and evidence ✅ done
 - **You get:**
   - drafts are kept apart from proposals;
   - evidence (pictures of the Playground, numbers, test results) is stored with each draft;

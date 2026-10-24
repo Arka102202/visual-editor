@@ -73,7 +73,7 @@ export const reactPlugin: Plugin = {
       // (The whole model is kept for the assistant tools: tools.ts.)
       read: async (files, project) => {
         const { model, result } = await readingWorker.read(files);
-        rememberModel(project.root, model);
+        if (!project.draft) rememberModel(project.root, model);
         return result;
       },
     },
