@@ -174,7 +174,7 @@ A one-line proposal, with the before and after shown live in Review, and Undo.
   checker). The shell collects them.
 - **Done when:** the React plugin's first tool shows up in Claude Code.
 
-### 2.2 Visual Editor's Claude Code plugin
+### 2.2 Visual Editor's Claude Code plugin ✅ done
 - **You get:** one Claude Code plugin built from every installed plugin's skills and agents.
   - It's installed for the project when you press Connect.
   - Projects that are already connected get "Add Visual Editor's agents".
