@@ -288,6 +288,7 @@ export class Review implements vscode.Disposable {
         })),
         conflicts: files ? (p.status === 'proposed' ? await conflicts(p, files) : p.status === 'applied' ? await undoConflicts(p, files) : []) : [],
         ...(p.look ? { look: p.look } : {}),
+        ...(p.evidence ? { evidence: p.evidence } : {}),
       });
     }
     if (!this.selected || !items.some((i) => i.id === this.selected)) this.selected = (items.find((i) => i.status === 'proposed') ?? items[0])?.id;

@@ -1,7 +1,7 @@
 // What the shell and the review page say to each other. Shared by both sides, so they can't drift apart.
 
 import type { Hunk } from './diff';
-import type { Proposal } from './proposals';
+import type { Evidence, Proposal } from './proposals';
 
 export interface ReviewFile {
   path: string;
@@ -24,6 +24,8 @@ export interface ReviewItem {
   conflicts: string[];
   /** A page at the app's address showing how it looks, before and after. */
   look?: string;
+  /** Its proof, when it came from a draft (empty: nothing was checked). */
+  evidence?: Evidence[];
 }
 
 /** Shell → review page. */

@@ -6,7 +6,7 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { safePath, type FileChange } from './proposals';
+import { parseEvidence, safePath, type Evidence, type FileChange } from './proposals';
 
 export const DRAFTS_DIR = '.visual-editor/drafts';
 
@@ -24,6 +24,10 @@ export interface Draft {
   /** Cards it is about. */
   items?: string[];
   proposal?: string;
+  /** Its version: one more each time its files change (proof is about one version). */
+  revision: number;
+  /** Proof: checks run on it and the assistant's notes, each about one version. */
+  evidence: Evidence[];
 }
 
 /** Reads a draft file's contents; checked like a proposal's (it may have been edited by hand). */
@@ -56,6 +60,8 @@ export function parseDraft(text: string, fallbackId: string): Draft | string {
     changes,
     ...(Array.isArray(raw.items) ? { items: (raw.items as unknown[]).filter((i): i is string => typeof i === 'string') } : {}),
     ...(typeof raw.proposal === 'string' ? { proposal: raw.proposal } : {}),
+    revision: typeof raw.revision === 'number' ? raw.revision : 1,
+    evidence: Array.isArray(raw.evidence) ? parseEvidence(raw.evidence) : [],
   };
 }
 

@@ -8,7 +8,7 @@ import { DraftStore, parseDraft, type Draft } from '../src/drafts';
 
 const draft = (id: string, updatedAt: string): Draft => ({
   id, title: 'T', why: 'W', by: { kind: 'assistant', name: 'Claude Code' }, createdAt: updatedAt, updatedAt, status: 'draft',
-  changes: [{ path: 'src/a.ts', before: null, after: 'x' }],
+  changes: [{ path: 'src/a.ts', before: null, after: 'x' }], revision: 1, evidence: [],
 });
 
 test('drafts: saved and listed newest first, the folder kept out of git, bad files skipped', () => {

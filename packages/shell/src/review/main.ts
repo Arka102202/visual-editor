@@ -51,6 +51,14 @@ addStyles(`
   .empty p { opacity: .7; margin: 0 0 16px; }
   .problems { font-size: 12px; padding: 10px 14px; opacity: .8; }
   .try { margin: 18px 14px; }
+  .proof { border: 1px solid var(--vscode-panel-border, #8884); border-radius: 6px; margin-bottom: 18px; }
+  .proof details + details { border-top: 1px solid var(--vscode-panel-border, #8884); }
+  .proof summary { cursor: pointer; padding: 6px 10px; display: flex; gap: 8px; align-items: baseline; }
+  .proof summary .by { margin-left: auto; opacity: .65; font-size: 12px; white-space: nowrap; }
+  .proof .mark { font-weight: 700; width: 1em; text-align: center; }
+  .proof .ok { color: var(--vscode-testing-iconPassed, #73c991); }
+  .proof .bad { color: var(--vscode-errorForeground, #f48771); }
+  .proof pre { margin: 0; padding: 8px 12px 10px 28px; white-space: pre-wrap; font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; max-height: 320px; overflow: auto; }
   .lookhead { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; opacity: .6; margin: 0 0 6px; }
   .look { position: relative; height: 420px; min-height: 160px; resize: vertical; overflow: hidden; border: 1px solid var(--vscode-panel-border, #8884); border-radius: 6px; margin-bottom: 18px; background: #fff; }
   .look iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
@@ -153,6 +161,7 @@ function drawDetail(item: ReviewItem) {
   }
   if (actions.childElementCount) detail.append(actions);
 
+  if (item.evidence) detail.append(...drawProof(item));
   if (item.look) detail.append(el('div', 'lookhead', 'How it looks: before and after (live, with fixed data)'), drawLook(item.look));
   for (const f of item.files) detail.append(drawFile(f));
 
@@ -162,6 +171,38 @@ function drawDetail(item: ReviewItem) {
     history.append(el('div', undefined, `${new Date(h.at).toLocaleString()} · ${STATUS_WORDS[h.status]}${h.note ? `: “${h.note}”` : ''}`));
   }
   detail.append(history);
+}
+
+/**
+ * Its proof, from its draft: each check Visual Editor ran (✓ passed, ✗ didn't) and each note from the assistant, open
+ * to read in full. Said plainly when nothing was checked or a check didn't pass.
+ */
+function drawProof(item: ReviewItem): HTMLElement[] {
+  const proof = item.evidence ?? [];
+  const out: HTMLElement[] = [];
+  const failed = proof.filter((e) => e.passed === false);
+  if (!proof.length || failed.length) {
+    const warn = el('div', 'warn');
+    warn.append(el('b', undefined, proof.length ? 'Not every check passed:' : 'Nothing was checked:'));
+    warn.append(el('div', undefined, proof.length ? failed.map((e) => e.title).join('; ') : `${item.by.name} sent this without proof that it works. Read the changes closely.`));
+    out.push(warn);
+  }
+  if (!proof.length) return out;
+  out.push(el('div', 'lookhead', `Proof (${proof.length})`));
+  const box = el('div', 'proof');
+  for (const e of proof) {
+    const entry = el('details');
+    const summary = el('summary');
+    summary.append(
+      el('span', `mark${e.passed === true ? ' ok' : e.passed === false ? ' bad' : ''}`, e.passed === true ? '✓' : e.passed === false ? '✗' : '•'),
+      el('span', undefined, e.title),
+      el('span', 'by', e.kind === 'check' ? `checked by ${e.by}` : `said by ${e.by}`),
+    );
+    entry.append(summary, el('pre', undefined, e.text));
+    box.append(entry);
+  }
+  out.push(box);
+  return out;
 }
 
 /** The look page in a frame once the app is running; until then, how starting it goes. */

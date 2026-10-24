@@ -204,6 +204,11 @@ export interface PluginTool {
   description: string;
   /** Its inputs, by name. */
   input?: Record<string, ToolInput>;
+  /**
+   * It checks work: its answer about a draft is kept with the draft as proof, and Review shows it next to the change.
+   * An answer whose last line is PASSED or PROBLEMS is marked passed or not.
+   */
+  checks?: boolean;
   run(input: Record<string, unknown>, context: ToolContext): ToolAnswer | Promise<ToolAnswer>;
 }
 
