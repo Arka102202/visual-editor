@@ -52,11 +52,13 @@ test('registry: tools, skills and agents are checked and collected from every pl
   assert.throws(() => r.register(plugin({ id: 'c', tools: [tool('variant_brief')] })), /same name as another tool/);
   assert.throws(() => r.register(plugin({ id: 'd', tools: [tool('overview')] })), /same name as another tool/);
   assert.throws(() => r.register(plugin({ id: 'e', agents: [agent] })), /agent "make-previewable" has the same name/);
+  assert.throws(() => r.register(plugin({ id: 'f', skills: [{ name: 'make-previewable', description: 'D', text: 'T' }] })), /skill "make-previewable" has the same name as another skill or agent/);
   const check = (p: Partial<Plugin>) => checkPlugin(plugin(p), () => false);
   assert.match(check({ tools: [tool('Bad-Name')] })!, /underscores/);
   assert.match(check({ tools: [{ ...tool('x'), input: { project: { type: 'string', description: 'p' } } }] })!, /the shell adds that one/);
   assert.match(check({ tools: [{ ...tool('x'), input: { n: { type: 'date' as never, description: 'n' } } }] })!, /without a type/);
   assert.match(check({ skills: [{ name: 's', description: 'D', text: '' }] })!, /missing a description or its text/);
+  assert.match(check({ skills: [{ name: 'visual-editor', description: 'D', text: 'T' }] })!, /same name/);
   assert.match(check({ agents: [{ ...agent, checker: { prompt: '' } }] })!, /checker's instructions/);
   assert.match(check({ agents: [{ ...agent, rounds: 5 }] })!, /1 to 3 times, not 5/);
 });

@@ -9,6 +9,7 @@ import { readFileSync, realpathSync, unwatchFile, watchFile } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { Disposable } from '@visual-editor/contract';
+import type { AgentsState, ClaudeAgents } from './claudeAgents';
 import { startHttpHost, type HttpHost } from './http';
 import { createHubServer, friendlyClient, SERVER_NAME, type HubHost } from './tools';
 
@@ -29,6 +30,8 @@ export interface Assistant {
   state: ClaudeState;
   /** It talked to the hub since VS Code started. */
   talking: boolean;
+  /** Visual Editor's agents and know-how (its Claude Code plugin) are installed for this folder. */
+  agents: AgentsState;
 }
 
 export class Hub implements vscode.Disposable {
@@ -42,6 +45,7 @@ export class Hub implements vscode.Disposable {
     private readonly context: vscode.ExtensionContext,
     private readonly host: HubHost,
     private readonly log: vscode.OutputChannel,
+    private readonly agents?: ClaudeAgents,
   ) {
     // Connected or disconnected some other way (a terminal, Claude Code's /mcp): the list follows.
     watchFile(claudeConfig(), { interval: 2000 }, () => this.fire());
@@ -108,7 +112,8 @@ export class Hub implements vscode.Disposable {
 
   /** Every assistant that can connect, with its state. */
   assistants(): Assistant[] {
-    return [{ id: 'claude', name: 'Claude Code', state: this.claudeState(), talking: this.connected().includes('Claude Code') }];
+    const folder = this.folder;
+    return [{ id: 'claude', name: 'Claude Code', state: this.claudeState(), talking: this.connected().includes('Claude Code'), agents: folder && this.agents ? this.agents.state(folder) : 'off' }];
   }
 
   /** Assistants that talked to the hub since VS Code started, by name. */
@@ -133,10 +138,13 @@ export class Hub implements vscode.Disposable {
     const result = await run(this.addCommand(), folder);
     if (result.ok) {
       this.problem = undefined;
+      // Its agents and know-how come with it, for this folder too.
+      const agentsProblem = await this.agents?.install(folder);
       this.fire();
       void vscode.window.showInformationMessage(
-        'Claude Code is connected to Visual Editor for this folder. Start a new Claude Code session (or run /mcp), then ask in words, e.g. "give me an overview of this project". Its changes arrive in Review.',
+        `Claude Code is connected to Visual Editor for this folder${agentsProblem ? '' : ', with Visual Editor’s agents'}. Start a new Claude Code session (or run /mcp), then ask in words, e.g. "give me an overview of this project". Its changes arrive in Review.`,
       );
+      if (agentsProblem) void vscode.window.showWarningMessage(`Visual Editor’s agents weren’t added: ${agentsProblem}`);
       return;
     }
     const pick = await vscode.window.showWarningMessage(
@@ -160,9 +168,38 @@ export class Hub implements vscode.Disposable {
       void vscode.window.showWarningMessage(`Couldn't disconnect Claude Code. In a terminal here, run: claude mcp remove ${SERVER_NAME} -s local`);
       return;
     }
+    await this.agents?.uninstall(folder);
     for (const name of [...this.clients]) if (friendlyClient(name) === 'Claude Code') this.clients.delete(name);
     this.fire();
     void vscode.window.showInformationMessage('Claude Code is disconnected from Visual Editor for this folder. Start a new Claude Code session for it to take effect.');
+  }
+
+  /** Adds Visual Editor's agents and know-how to Claude Code for this folder (connected before they existed). */
+  async addAgents() {
+    const folder = this.folder;
+    if (!folder || !this.agents) return;
+    const problem = await this.agents.install(folder);
+    this.fire();
+    if (problem) void vscode.window.showWarningMessage(`Visual Editor’s agents weren’t added: ${problem}`);
+    else void vscode.window.showInformationMessage('Visual Editor’s agents are added to Claude Code for this folder. Start a new Claude Code session to use them.');
+  }
+
+  /**
+   * When plugins change what they give assistants: a new version of the agents, which Claude Code updates to for this
+   * folder; a folder connected before agents existed is asked once whether to add them.
+   */
+  async refreshAgents() {
+    const folder = this.folder;
+    if (!folder || !this.agents) return;
+    if (await this.agents.update(folder)) {
+      this.fire();
+      void vscode.window.showInformationMessage('Visual Editor’s agents for Claude Code were updated. Start a new Claude Code session to use the new ones.');
+    }
+    if (this.claudeState() === 'on' && this.agents.shouldAsk(folder)) {
+      await this.agents.asked();
+      const pick = await vscode.window.showInformationMessage('Claude Code is connected to Visual Editor here. Add Visual Editor’s agents and know-how to it too?', 'Add agents');
+      if (pick) await this.addAgents();
+    }
   }
 
   onChange(fn: () => void): Disposable {
@@ -194,7 +231,7 @@ function safeRealpath(path: string): string {
 }
 
 /** Runs a shell command in a folder; says whether it worked, and whether the command wasn't found at all. */
-function run(command: string, cwd: string): Promise<{ ok: boolean; notFound: boolean; output: string }> {
+export function run(command: string, cwd: string): Promise<{ ok: boolean; notFound: boolean; output: string }> {
   return new Promise((resolve) => {
     // A login shell, so the developer's PATH (where `claude` lives) is used.
     const PATH = [...CLAUDE_DIRS, process.env.PATH ?? ''].join(':');

@@ -37,6 +37,11 @@ export async function run() {
     // The hub's address and key, so the driver can point a real Claude Code at it.
     await until(() => !!t.hub.url, 'the hub');
     writeFileSync(join(requests, 'hub.json'), JSON.stringify({ url: t.hub.url, token: t.hub.token }));
+    // CONNECT=1: press Connect, as the developer would (Claude Code's settings for this folder get the hub and the agents).
+    if (process.env.VISUAL_EDITOR_CONNECT === '1') {
+      await t.hub.connectClaudeCode();
+      say(`connected: ${t.hub.claudeState()}, agents ${t.hub.assistants()[0].agents}`);
+    }
     writeFileSync(join(requests, 'ready'), '');
     await until(() => existsSync(join(requests, 'stop')), 'stop', Number(process.env.HOLD_S ?? 600) * 1000).catch(() => say('held until the time ran out'));
   } catch (e) {

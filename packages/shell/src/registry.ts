@@ -53,18 +53,18 @@ function checkHelpers(plugin: Partial<Plugin>, others: Plugin[]): string | undef
       if (!input?.description || !['string', 'number', 'integer', 'boolean', 'strings'].includes(input.type)) return `Its tool "${t.name}" has an input "${name}" without a type or a description.`;
     }
   }
-  const skillNames = new Set(others.flatMap((o) => (o.skills ?? []).map((s) => s.name)));
+  // Skills and agents share one list in Claude Code (an agent comes with a skill of its name), next to the shell's own.
+  const skillNames = new Set(['visual-editor', ...others.flatMap((o) => [...(o.skills ?? []), ...(o.agents ?? [])].map((s) => s.name))]);
   for (const s of plugin.skills ?? []) {
     if (!s?.name || !NAME.test(s.name)) return 'Each of its skills needs a name of lowercase letters, digits and dashes, like "variant-rules".';
-    if (skillNames.has(s.name)) return `Its skill "${s.name}" has the same name as another plugin's.`;
+    if (skillNames.has(s.name)) return `Its skill "${s.name}" has the same name as another skill or agent.`;
     skillNames.add(s.name);
     if (!s.description || !s.text) return `Its skill "${s.name}" is missing a description or its text.`;
   }
-  const agentNames = new Set(others.flatMap((o) => (o.agents ?? []).map((a) => a.name)));
   for (const a of plugin.agents ?? []) {
     if (!a?.name || !NAME.test(a.name)) return 'Each of its agents needs a name of lowercase letters, digits and dashes, like "make-previewable".';
-    if (agentNames.has(a.name)) return `Its agent "${a.name}" has the same name as another plugin's.`;
-    agentNames.add(a.name);
+    if (skillNames.has(a.name)) return `Its agent "${a.name}" has the same name as another skill or agent.`;
+    skillNames.add(a.name);
     if (!a.title || !a.description || !a.worker?.prompt || !a.checker?.prompt) return `Its agent "${a.name}" is missing a title, a description, or the worker's or checker's instructions.`;
     if (a.rounds !== undefined && (!Number.isInteger(a.rounds) || a.rounds < 1 || a.rounds > 3)) return `Its agent "${a.name}" can send work back 1 to 3 times, not ${a.rounds}.`;
   }
