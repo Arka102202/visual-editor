@@ -14,6 +14,7 @@ import { MapPanel } from './mapPanel';
 import { AppProxies } from './proxy/appProxies';
 import { OutsideChanges } from './changes';
 import { Review } from './review';
+import { ProjectSetups } from './projectSetup';
 import { askEntry, MemoryView, ProjectMemory } from './memoryView';
 import type { MemoryEntry } from './memory';
 import { Hub } from './hub/hub';
@@ -53,6 +54,9 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
   // Memory: why the project is the way it is (reviewed changes, rules, decisions, notes on cards).
   const memory = new ProjectMemory(index);
   const memoryView = new MemoryView(memory, current);
+  // What plugins keep in place in each project (React: its helper), written as soon as the project is detected.
+  const setups = new ProjectSetups(index, changes, log);
+  context.subscriptions.push(setups);
   const review = new Review(context.extensionUri, index, current, changes, memory, (root, progress) => proxies.open(root, progress));
   const projectsView = new ProjectsView(index, current, review);
   context.subscriptions.push(memoryView, vscode.window.registerTreeDataProvider('visualEditor.memory', memoryView));
@@ -166,6 +170,10 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
       } catch (e) {
         void vscode.window.showErrorMessage(`Couldn't start the app: ${e instanceof Error ? e.message : String(e)}`);
       }
+    }),
+    vscode.commands.registerCommand('visualEditor.setUpProject', (root?: string) => {
+      const r = typeof root === 'string' ? root : current.get()?.project.root;
+      if (r) void setups.run(r, false);
     }),
     vscode.commands.registerCommand('visualEditor.openReview', (proposal?: string) => review.show(typeof proposal === 'string' ? proposal : undefined)),
     vscode.commands.registerCommand('visualEditor.tryProposal', () => review.tryExample()),

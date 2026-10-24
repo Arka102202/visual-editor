@@ -316,7 +316,8 @@ function showCard(m: CardMemory) {
     drawer.append(el('h3', undefined, 'Variants'));
     for (const v of item.preview.variants) {
       const row = el('div', `entry link${v.inUse ? ' in-use' : ''}`);
-      row.append(el('div', 't', v.name), el('div', 'm', v.inUse ? `In use · ${v.path.split('/').pop()}` : (v.path.split('/').pop() ?? v.path)));
+      const use = v.inUseFor?.length ? `In use for ${v.inUseFor.join(', ')}` : v.inUse ? 'In use' : '';
+      row.append(el('div', 't', v.name), el('div', 'm', use ? `${use} · ${v.path.split('/').pop()}` : (v.path.split('/').pop() ?? v.path)));
       row.dataset.tip = `Open ${v.path}`;
       row.addEventListener('click', () => vscode.postMessage({ type: 'open', path: v.path }));
       drawer.append(row);
@@ -398,12 +399,13 @@ function drawCard(c: PlacedCard): HTMLElement {
   if (item.preview) {
     // It can be shown in Preview: how many looks, how many states, which look is in use.
     const p = item.preview;
-    const inUse = p.variants.find((v) => v.inUse);
+    const inUse = p.variants.filter((v) => v.inUse);
     const fields = card.querySelector('.fields') ?? card.appendChild(el('div', 'fields'));
     const row = el('div', `field previewable${p.problems?.length ? ' problems' : ''}`);
-    row.append(el('span', 'n', `${p.variants.length} variant${p.variants.length === 1 ? '' : 's'} · ${p.states.length} state${p.states.length === 1 ? '' : 's'}`));
+    const situations = p.situations ? ` · ${p.situations.names.length} situation${p.situations.names.length === 1 ? '' : 's'}` : '';
+    row.append(el('span', 'n', `${p.variants.length} variant${p.variants.length === 1 ? '' : 's'}${situations} · ${p.states.length} state${p.states.length === 1 ? '' : 's'}`));
     if (p.problems?.length) row.append(el('span', 'v', `${p.problems.length} problem${p.problems.length === 1 ? '' : 's'}`));
-    else if (inUse) row.append(el('span', 'v', `${inUse.name} in use`));
+    else if (inUse.length) row.append(el('span', 'v', `${inUse.map((v) => v.name).join(', ')} in use`));
     fields.append(row);
   }
   card.title = [item.label, n ? `Used by ${n} card${n === 1 ? '' : 's'}` : linked.has(item.id) ? '' : 'No lines to other cards', item.source ? 'Double-click to open its code' : ''].filter(Boolean).join('\n');
@@ -443,7 +445,7 @@ focus.addTools(nbPreview, nbPlayground, nbZoom, nbOut, nbIn, nbFit, nbOnMap);
 /** The Webview: the running app, over everything (from the map's top bar, or its command), to try whole pages. */
 const webview = new Webview({ post: (m) => vscode.postMessage(m), store: layoutStore });
 /** Preview: one variant of a card on its own, in one fixed-data state, at a screen size (for cards that have variants). */
-const useVariant = (item: Item, variant: string) => vscode.postMessage({ type: 'useVariant', id: item.id, variant });
+const useVariant = (item: Item, variant: string, situation?: string) => vscode.postMessage({ type: 'useVariant', id: item.id, variant, situation });
 const updateHelper = (item: Item) => vscode.postMessage({ type: 'updateHelper', id: item.id });
 const preview = new PreviewWindow({ post: (m) => vscode.postMessage(m), store: layoutStore, useVariant, updateHelper });
 /** Playground: a card's every variant in every fixed-data state; a chosen tile opens in Preview. */

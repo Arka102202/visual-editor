@@ -210,7 +210,7 @@ export class MapPanel {
     } else if (m.type === 'addNote') {
       void this.addNote(m.id);
     } else if (m.type === 'useVariant') {
-      this.useVariant(m.id, m.variant);
+      this.useVariant(m.id, m.variant, m.situation);
     } else if (m.type === 'updateHelper') {
       this.updateHelper(m.id);
     } else if (m.type === 'window') {
@@ -239,12 +239,12 @@ export class MapPanel {
   }
 
   /** "Use this design": the card's plugin works out the change, and it goes to Review as a proposal. */
-  private useVariant(id: string, variant: string) {
+  private useVariant(id: string, variant: string, situation?: string) {
     const state = this.current.get();
     const item = state?.items.find((i) => i.id === id);
     const plugin = item && state?.detected.find(({ plugin: p }) => item.id.startsWith(`${p.id}:`))?.plugin;
     if (!state || !item) return;
-    const choice = plugin?.useVariant?.(item, variant, state.project);
+    const choice = plugin?.useVariant?.(item, variant, state.project, situation);
     if (!choice) return void vscode.window.showInformationMessage(`${plugin?.name ?? 'Its plugin'} can't change which variant ${item.label} uses.`);
     this.proposeChange(state.project.root, choice, item.id);
   }
@@ -255,6 +255,8 @@ export class MapPanel {
     const item = state?.items.find((i) => i.id === id);
     const plugin = item && state?.detected.find(({ plugin: p }) => item.id.startsWith(`${p.id}:`))?.plugin;
     if (!state || !item) return;
+    // Plugins that keep their files in place do it straight away (as on opening the project); others propose.
+    if (plugin?.setup) return void vscode.commands.executeCommand('visualEditor.setUpProject', state.project.root);
     const change = plugin?.updateHelper?.(state.project);
     if (!change) return void vscode.window.showInformationMessage(`${plugin?.name ?? 'Its plugin'} has nothing to add for Preview.`);
     this.proposeChange(state.project.root, change, item.id);

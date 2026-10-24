@@ -8,7 +8,7 @@ import type { FromMap } from '../mapMessages';
 import { el } from '../ui/dom';
 import { iconButton, tray, type Icon } from '../ui/buttons';
 import { Frame, type LayoutStore } from '../ui/frame';
-import { makeToast, pageNote } from './playground';
+import { inUseFor, makeToast, pageNote, situationOf, useTip, useWords } from './playground';
 
 export const PREVIEW_CSS = `
   .vq-stage.fill .vp-device { margin: 0; }
@@ -26,8 +26,8 @@ const DEVICES: { id: string; icon: Icon; name: string; width: number; height: nu
 interface Deps {
   post(m: FromMap): void;
   store: LayoutStore;
-  /** "Use this design": proposes making this variant the one in use. */
-  useVariant(item: Item, variant: string): void;
+  /** "Use this design": proposes making this variant the one in use (for a situation, when there are situations). */
+  useVariant(item: Item, variant: string, situation?: string): void;
   /** "Update the helper": proposes what Preview needs from the card's plugin. */
   updateHelper(item: Item): void;
 }
@@ -87,7 +87,8 @@ export class PreviewWindow {
     });
     this.useButton.addEventListener('click', () => {
       const v = this.item?.preview?.variants.find((x) => x.id === this.variant);
-      if (this.item && v && !v.inUse) deps.useVariant(this.item, v.id);
+      const situation = situationOf(this.item, this.state);
+      if (this.item && useTip(this.item, v, situation).can) deps.useVariant(this.item, v!.id, situation);
     });
     const reset = iconButton('undo', 'Reset: back to the starting data (what you clicked or typed is undone)');
     reset.addEventListener('click', () => this.iframe?.contentWindow?.postMessage({ source: 've-preview', type: 'reset' }, '*'));
@@ -184,11 +185,12 @@ export class PreviewWindow {
   /** The title bar's hint, and Use this design (for a variant that isn't in use). */
   private showHint() {
     const v = this.item?.preview?.variants.find((x) => x.id === this.variant);
-    this.frame.hint.textContent = `${v?.name ?? this.variant}${v?.inUse ? ' (in use)' : ''} · ${this.state} · fixed data, no network`;
-    const tip = !v ? 'Use this design' : v.inUse ? `Use this design: ${v.name} is already the one in use` : `Use this design: make ${v.name} the one ${this.item?.label ?? 'it'} uses (a proposal you review first, with before and after)`;
-    this.useButton.classList.toggle('dim', !v || v.inUse);
-    this.useButton.dataset.tip = tip;
-    this.useButton.setAttribute('aria-label', tip);
+    const situation = situationOf(this.item, this.state);
+    this.frame.hint.textContent = `${v?.name ?? this.variant}${v && inUseFor(v, situation) ? ' (in use)' : ''} · ${this.state}${situation && situation !== this.state ? ` (${situation})` : ''} · fixed data, no network`;
+    const use = useTip(this.item, v, situation);
+    this.useButton.classList.toggle('dim', !use.can);
+    this.useButton.dataset.tip = use.tip;
+    this.useButton.setAttribute('aria-label', use.tip);
   }
 
   private setSize(size: PreviewWindow['size']) {
@@ -229,11 +231,11 @@ export class PreviewWindow {
     const open = (path: string) => () => this.deps.post({ type: 'open', path });
     const file = (path: string) => path.split('/').pop() ?? path;
     const out: HTMLElement[] = [el('h4', undefined, 'Variants')];
-    for (const v of p.variants) out.push(row(v.name, v.inUse ? 'in use' : undefined, v.id === this.variant, () => this.switchTo(v.id, this.state)));
+    for (const v of p.variants) out.push(row(v.name, p.situations ? useWords(v, true) : v.inUse ? 'in use' : undefined, v.id === this.variant, () => this.switchTo(v.id, this.state)));
     const shown = p.variants.find((v) => v.id === this.variant);
     if (shown) out.push(row(file(shown.path), 'open', false, open(shown.path), 'file'));
     out.push(el('h4', undefined, 'States'));
-    for (const s of p.states) out.push(row(s, undefined, s === this.state, () => this.switchTo(this.variant, s)));
+    for (const s of p.states) out.push(row(s, p.situations?.ofState[s] && p.situations.ofState[s] !== s ? p.situations.ofState[s] : undefined, s === this.state, () => this.switchTo(this.variant, s)));
     out.push(el('h4', undefined, `Fixed data · ${this.state}`));
     if (this.data) {
       out.push(row(file(this.data.file), 'open', false, open(this.data.file), 'file'));
@@ -267,7 +269,7 @@ export class PreviewWindow {
       const item = this.item;
       const update = iconButton('add', 'Update the helper: a proposal you review first');
       update.addEventListener('click', () => this.deps.updateHelper(item));
-      this.say(`This project’s helper (src/visual-editor.tsx) is version ${String(data.version ?? 1)}. Version 2 gives each tile its own prototype, Reset, and links that stay on the page.`, update);
+      this.say(`This project’s helper (src/visual-editor.tsx) is version ${String(data.version ?? 1)}; the newest is version ${String(data.latest ?? '')}. Update it to get every Preview and Playground feature (folders made for the newest need it).`, update);
     }
   }
 
