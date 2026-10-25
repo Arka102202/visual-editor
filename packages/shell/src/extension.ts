@@ -22,7 +22,7 @@ import { DRAFTS_DIR, DraftStore } from './drafts';
 import { JobStore, finished } from './jobs';
 import { cardsTouched, draftItems } from './draftItems';
 import { DraftApps } from './proxy/draftApps';
-import { takePicture } from './pictures';
+import { comparePictures, takePicture } from './pictures';
 import { ClaudeAgents } from './hub/claudeAgents';
 import { AssistantsView, chooseAssistant } from './hub/assistantsView';
 import { AgentsView } from './hub/agentsView';
@@ -279,6 +279,28 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
       if (!state) return [];
       const { items } = await draftItems(state, draft, (path) => vscodeFiles(root, changes).read(path));
       return cardsTouched(items, draft.changes.map((c) => c.path)).map((i) => i.id);
+    },
+    // A page of the app from the real files and from the draft's own app, pictured and compared.
+    compareApp: async (root, draft, path) => {
+      const real = await proxies.open(root);
+      const state = index.snapshot().find((s) => s.project.root === root);
+      const { project, items } = state ? await draftItems(state, draft, (p) => vscodeFiles(root, changes).read(p)) : { project: undefined, items: [] };
+      const plugin = state?.detected[0]?.plugin;
+      const drafted = await draftApps.open(root, draft, (id) => {
+        const it = items.find((i) => i.id === id);
+        return it && project && plugin?.previewPage?.(it, project);
+      });
+      const dir = join(root, DRAFTS_DIR, draft.id);
+      const name = `app${path.replace(/[^\w]+/g, '-').replace(/-+$/, '') || '-home'}-v${draft.revision}`;
+      const before = join(dir, `${name}-before.png`);
+      const after = join(dir, `${name}-after.png`);
+      const diff = join(dir, `${name}-difference.png`);
+      const a = await takePicture(`${real}${path}`, before, { width: 1280, settleMs: 1500 });
+      const b = await takePicture(`${drafted}${path}`, after, { width: 1280, settleMs: 1500 });
+      draftApps.touch();
+      const d = await comparePictures(before, after, diff);
+      // (Errors the page already has without the draft aren't the draft's.)
+      return { before, after, diff, ...d, problems: [...new Set(b.problems.filter((p) => !a.problems.includes(p)))] };
     },
     // A draft in the Playground: its cards read with the draft on top, drawn by the draft's own app, and pictured.
     pictures: async (root, draft, card) => {

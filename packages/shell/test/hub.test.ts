@@ -411,3 +411,26 @@ test('hub: propose_change is checked first: a failing check keeps it out of Revi
     await hub.close();
   }
 });
+
+test('hub: compare_app keeps "looks the same" as proof: passed when the pictures match, not when they differ', async () => {
+  const { host, drafts } = fakeHost();
+  let differing = 0;
+  host.compareApp = async (root, d, path) => ({ before: `${root}/b.png`, after: `${root}/a.png`, diff: `${root}/.visual-editor/drafts/${d.id}/app-home-v1-difference.png`, differing, total: 1000000, problems: path === '/broken' ? ['The page threw: boom'] : [] });
+  const hub = await connect(host);
+  try {
+    await hub.call('save_draft', { title: 't', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'x' }] });
+    const id = drafts[0].id;
+    const same = await hub.call('compare_app', { draft: id, path: '/' });
+    assert.match(same.text, /^The page \/ looks the same with the draft \(0 of 1,000,000 pixels differ\)\.[\s\S]*PASSED$/);
+    assert.deepEqual(drafts[0].evidence.map((e) => [e.title, e.passed, e.image]), [['Looks the same in the app: /', true, `.visual-editor/drafts/${id}/app-home-v1-difference.png`]]);
+    differing = 1080;
+    const changed = await hub.call('compare_app', { draft: id, path: '/' });
+    assert.match(changed.text, /looks different with the draft: 1,080 of 1,000,000 pixels differ \(0\.1%\)[\s\S]*PROBLEMS$/, 'a few words changed is a difference');
+    assert.equal(drafts[0].evidence.length, 1, 'the same page replaced');
+    assert.equal(drafts[0].evidence[0].passed, false);
+    differing = 0;
+    assert.match((await hub.call('compare_app', { draft: id, path: 'broken' })).text, /Problem on the page: The page threw: boom\n[\s\S]*PROBLEMS$/);
+  } finally {
+    await hub.close();
+  }
+});

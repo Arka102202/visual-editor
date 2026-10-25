@@ -43,6 +43,21 @@ export interface HubHost {
   pictures?(root: string, draft: Draft, card: string): Promise<DraftPicture | string>;
   /** The cards that can be previewed which a draft changes (their ids), as it would leave the project. */
   cardsTouched?(root: string, draft: Draft): Promise<string[]>;
+  /**
+   * A page of the app (`path`, e.g. "/") pictured from the real files and from the draft's own app, and compared: the
+   * pictures (absolute paths; `diff` has what differs in red) and how much differs. A string says why it can't.
+   */
+  compareApp?(root: string, draft: Draft, path: string): Promise<AppComparison | string>;
+}
+
+export interface AppComparison {
+  before: string;
+  after: string;
+  diff: string;
+  differing: number;
+  total: number;
+  sizes?: { before: [number, number]; after: [number, number] };
+  problems: string[];
 }
 
 export interface DraftPicture {
@@ -570,6 +585,47 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       const p = await picture(root, d, card);
       if (typeof p === 'string') return fail(p);
       return reply(`Picture of ${p.card}'s Playground in draft ${d.id} (version ${d.revision}): ${p.image}\nOpen it with your Read tool to look at it. ${p.text}\nIt is kept with the draft as proof.`);
+    },
+  );
+
+  server.registerTool(
+    'compare_app',
+    {
+      title: 'Does the app look the same with a draft?',
+      description:
+        'Pictures a page of the running app twice, from the real files and with the draft on top (its own copy of the app; nothing changes in the project), and compares them pixel by pixel. For changes that must not change how the app looks (making a component previewable, tidying code). The result is kept with the draft as proof: passed when they match. Open the pictures with Read (the difference picture marks what changed in red). Vite projects only.',
+      inputSchema: {
+        draft: z.string().describe('The draft id'),
+        path: z.string().describe('The page\'s address in the app, e.g. "/" or "/settings" (a page that shows what the draft changes)'),
+        project: projectArg,
+      },
+    },
+    async ({ draft, path, project }) => {
+      const s = await pick(project);
+      if (typeof s === 'string') return fail(s);
+      const root = s.project.root;
+      const d = host.drafts(root).find((x) => x.id === draft);
+      if (!d) return fail(`No draft "${draft}" in ${s.project.name}.`);
+      if (d.status === 'submitted') return fail(`Draft ${d.id} is already in Review.`);
+      if (!host.compareApp) return fail('The app can’t be compared here.');
+      const page = path.startsWith('/') ? path : `/${path}`;
+      let c: AppComparison | string;
+      try {
+        c = await host.compareApp(root, d, page);
+      } catch (e) {
+        return fail(`The app couldn't be compared: ${e instanceof Error ? e.message : e}`);
+      }
+      if (typeof c === 'string') return fail(c);
+      const share = c.total ? c.differing / c.total : 0;
+      // The same: at most a few stray pixels apart (changing a word changes about a thousand), and the same size.
+      const same = c.differing <= 25 && !c.sizes;
+      const words = same
+        ? `The page ${page} looks the same with the draft (${c.differing.toLocaleString('en')} of ${c.total.toLocaleString('en')} pixels differ).`
+        : `The page ${page} looks different with the draft: ${c.differing.toLocaleString('en')} of ${c.total.toLocaleString('en')} pixels differ (${(share * 100).toFixed(1)}%)${c.sizes ? `, and its size changed from ${c.sizes.before.join('×')} to ${c.sizes.after.join('×')}` : ''}. What differs is marked in red in the difference picture.`;
+      const text = [words, ...c.problems.map((p) => `Problem on the page: ${p}`)].join('\n');
+      const title = `Looks the same in the app: ${page}`;
+      addProof(root, d, { kind: 'check', title, text, passed: same && !c.problems.length, by: 'Visual Editor', at: new Date().toISOString(), revision: d.revision, image: relative(root, c.diff).split(sep).join('/') }, (x) => x.title === title);
+      return reply(`${text}\nBefore: ${c.before}\nAfter: ${c.after}\nDifference: ${c.diff}\n${same && !c.problems.length ? 'PASSED' : 'PROBLEMS'}`);
     },
   );
 
