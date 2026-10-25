@@ -15,6 +15,8 @@ export interface ReviewItem {
   id: string;
   title: string;
   why?: string;
+  /** What the developer asked for, in their words (the logic check held the change to it). */
+  asked?: string[];
   by: Proposal['by'];
   createdAt: string;
   status: Proposal['status'];
@@ -28,6 +30,8 @@ export interface ReviewItem {
   evidence?: (Evidence & { src?: string })[];
   /** Cards that can be shown in the Playground whose files it changes (each can be tried live). */
   cards?: { id: string; label: string }[];
+  /** The developer's own cases being checked now (or why they couldn't be). */
+  checking?: { progress?: string; error?: string };
   /** Its pictures shown live (the Playground running, by card id): starting, running at `url`, or why not. */
   live?: Record<string, { url?: string; progress?: string; error?: string }>;
 }
@@ -59,4 +63,6 @@ export type FromReview =
   | { type: 'app' }
   /** Show a picture in its proof live (the card's Playground, running), or the picture again. */
   | { type: 'live'; id: string; card: string }
-  | { type: 'unlive'; id: string; card: string };
+  | { type: 'unlive'; id: string; card: string }
+  /** The developer's own cases, for the logic check to try on this change. */
+  | { type: 'cases'; id: string; cases: string[] };

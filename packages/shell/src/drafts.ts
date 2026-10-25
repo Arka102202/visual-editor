@@ -24,6 +24,10 @@ export interface Draft {
   /** Cards it is about. */
   items?: string[];
   proposal?: string;
+  /** What the developer asked for, in their words, oldest first (the logic check's spec). */
+  asked?: string[];
+  /** Cases the developer added for the logic check to try. */
+  cases?: string[];
   /** Its version: one more each time its files change (proof is about one version). */
   revision: number;
   /** Proof: checks run on it and the assistant's notes, each about one version. */
@@ -60,6 +64,8 @@ export function parseDraft(text: string, fallbackId: string): Draft | string {
     changes,
     ...(Array.isArray(raw.items) ? { items: (raw.items as unknown[]).filter((i): i is string => typeof i === 'string') } : {}),
     ...(typeof raw.proposal === 'string' ? { proposal: raw.proposal } : {}),
+    ...(Array.isArray(raw.asked) ? { asked: (raw.asked as unknown[]).filter((a): a is string => typeof a === 'string') } : {}),
+    ...(Array.isArray(raw.cases) ? { cases: (raw.cases as unknown[]).filter((a): a is string => typeof a === 'string') } : {}),
     revision: typeof raw.revision === 'number' ? raw.revision : 1,
     evidence: Array.isArray(raw.evidence) ? parseEvidence(raw.evidence) : [],
   };

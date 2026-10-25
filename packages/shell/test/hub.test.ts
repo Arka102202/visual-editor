@@ -45,6 +45,8 @@ function fakeHost() {
     jobs: () => jobs,
     saveJob: (_root, j) => void jobs.splice(0, jobs.length, j, ...jobs.filter((x) => x.id !== j.id)),
     agents: () => [],
+    // The logic check passes unless a test says otherwise.
+    logicCheck: async () => ({ passed: true, looksOnly: false, means: ['It does what was asked.'], cases: [{ case: 'The normal case', expected: 'works', found: 'works', ok: true, by: 'checker' as const, how: 'traced' as const }], fixes: [] }),
     saveDraft: (_root, d) => void drafts.splice(0, drafts.length, d, ...drafts.filter((x) => x.id !== d.id)),
   };
   return { host, proposals, memory, drafts, files, jobs };
@@ -89,6 +91,7 @@ test('hub: changes only arrive as proposals, signed by the assistant, with the c
   const hub = await connect(host);
   try {
     const ok = await hub.call('propose_change', {
+      asked: 'Give Card a title',
       title: 'Add a subtitle to Card',
       why: 'Cards need a second line',
       changes: [
@@ -104,8 +107,8 @@ test('hub: changes only arrive as proposals, signed by the assistant, with the c
     assert.deepEqual(p.changes.map((c) => [c.path, c.before]), [['src/Card.tsx', 'export const Card = () => null;\n'], ['src/new.ts', null]]);
     assert.deepEqual(p.items, ['react:Card']);
 
-    assert.match((await hub.call('propose_change', { title: 't', why: 'w', changes: [{ path: '../etc/passwd', content: 'x' }] })).text, /isn't a place in the project/);
-    assert.match((await hub.call('propose_change', { title: 't', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'export const Card = () => null;\n' }] })).text, /would stay the same/);
+    assert.match((await hub.call('propose_change', { asked: 'Do what the test asks', title: 't', why: 'w', changes: [{ path: '../etc/passwd', content: 'x' }] })).text, /isn't a place in the project/);
+    assert.match((await hub.call('propose_change', { asked: 'Do what the test asks', title: 't', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'export const Card = () => null;\n' }] })).text, /would stay the same/);
     assert.equal(proposals.length, 1);
 
     // The developer sends it back with a note; the assistant reads it.
@@ -202,6 +205,7 @@ test('hub: a draft keeps files apart, plugin tools see the project as it would l
   const hub = await connect(host);
   try {
     const saved = await hub.call('save_draft', {
+      asked: 'Give Card a title',
       title: 'Card gets a title',
       why: 'To show it',
       cards: ['react:Card'],
@@ -215,7 +219,7 @@ test('hub: a draft keeps files apart, plugin tools see the project as it would l
     const id = drafts[0].id;
     assert.match(saved.text, new RegExp(`Draft ${id} saved \\(version 1\\): 3 files \\(1 new, 1 changed, 1 removed\\)\\. Nothing in the project changed\\.`));
     assert.equal(files['src/Card.tsx'], 'export const Card = () => null;\n', 'the project is untouched');
-    assert.equal(proposals.length, 0);
+    assert.equal(proposals.filter((p) => p.status === 'proposed').length, 0);
 
     // Plugin tools: with the draft, the project as it would be; without, as it is.
     assert.equal((await hub.call('look', { draft: id })).text, `${id} | src/Card.tsx,src/New.tsx | export const New = 1;\n | export const Card = ({ title }) => title;\n`);
@@ -223,10 +227,10 @@ test('hub: a draft keeps files apart, plugin tools see the project as it would l
     assert.match((await hub.call('look', { draft: 'nope' })).text, /No draft "nope"/);
 
     // Changing it: a file put back as it was leaves the draft; the others stay.
-    const again = await hub.call('save_draft', { draft: id, title: 'Card gets a title', why: 'To show it', changes: [{ path: 'src/New.tsx', content: 'export const New = 2;\n' }, { path: 'src/Card.tsx', content: 'export const Card = () => null;\n' }] });
+    const again = await hub.call('save_draft', { asked: 'Do what the test asks', draft: id, title: 'Card gets a title', why: 'To show it', changes: [{ path: 'src/New.tsx', content: 'export const New = 2;\n' }, { path: 'src/Card.tsx', content: 'export const Card = () => null;\n' }] });
     assert.match(again.text, /2 files \(1 new, 1 removed\)/);
     assert.equal(drafts.length, 1, 'the same draft');
-    await hub.call('save_draft', { draft: id, title: 'Card gets a title', why: 'To show it', changes: [{ path: 'src/Card.tsx', content: 'export const Card = ({ title }) => title;\n' }] });
+    await hub.call('save_draft', { asked: 'Do what the test asks', draft: id, title: 'Card gets a title', why: 'To show it', changes: [{ path: 'src/Card.tsx', content: 'export const Card = ({ title }) => title;\n' }] });
 
     const list = await hub.call('read_draft');
     assert.match(list.text, new RegExp(`^${id} · draft · Card gets a title · 3 files`));
@@ -250,7 +254,7 @@ test('hub: a draft keeps files apart, plugin tools see the project as it would l
     assert.match((await hub.call('add_evidence', { draft: id, title: 'Read it through', text: 'Looks right.' })).text, /Added to the proof/);
     assert.match((await hub.call('read_draft', { id })).text, /Proof for this version: ✓ Judge it; • Read it through/);
     // A new version: the old proof no longer counts.
-    const v2 = await hub.call('save_draft', { draft: id, title: 'Card gets a title', why: 'To show it', changes: [{ path: 'src/New.tsx', content: 'export const New = 3;\n' }] });
+    const v2 = await hub.call('save_draft', { asked: 'Do what the test asks', draft: id, title: 'Card gets a title', why: 'To show it', changes: [{ path: 'src/New.tsx', content: 'export const New = 3;\n' }] });
     assert.match(v2.text, new RegExp(`version ${version + 1}\\)[\\s\\S]*earlier proof was for the previous version: check it again`));
     assert.match((await hub.call('read_draft', { id })).text, /No proof for this version yet/);
     await hub.call('judge', { draft: id, strict: true });
@@ -262,21 +266,21 @@ test('hub: a draft keeps files apart, plugin tools see the project as it would l
     const refused = await hub.call('submit_draft', { id });
     assert.equal(refused.error, true);
     assert.match(refused.text, /^Not sent to Review: Judge it \(strict: true\) did not pass\.[\s\S]*Fix it \(save_draft with the draft id, then submit_draft again; it is draft/);
-    assert.equal(proposals.length, 0);
-    await hub.call('save_draft', { draft: id, title: 'Card gets a title', why: 'To show it', changes: [{ path: 'src/New.tsx', content: 'export const New = 4;\n' }] });
+    assert.equal(proposals.filter((p) => p.status === 'proposed').length, 0);
+    await hub.call('save_draft', { asked: 'Do what the test asks', draft: id, title: 'Card gets a title', why: 'To show it', changes: [{ path: 'src/New.tsx', content: 'export const New = 4;\n' }] });
     const sent = await hub.call('submit_draft', { id });
     assert.equal(sent.error, false, sent.text);
-    assert.match(sent.text, /waiting in Review for the developer, with its proof: ✓ Judge it\./);
-    assert.deepEqual(proposals[0].evidence?.map((e) => [e.title, e.passed]), [['Judge it', true]], 'only this version’s proof, run by Visual Editor before sending');
+    assert.match(sent.text, /waiting in Review for the developer, with its proof: ✓ Judge it; ✓ Logic check: does exactly what was asked\./);
+    assert.deepEqual(proposals[0].evidence?.map((e) => [e.title, e.passed]), [['Judge it', true], ['Logic check: does exactly what was asked', true]], 'only this version’s proof, run by Visual Editor before sending');
     assert.match((await hub.call('add_evidence', { draft: id, title: 't', text: 'x' })).text, /already in Review/);
-    assert.equal(proposals.length, 1);
+    assert.equal(proposals.filter((p) => p.status === 'proposed').length, 1);
     assert.deepEqual(proposals[0].changes.map((c) => c.path), ['src/Card.tsx', 'src/List.tsx', 'src/New.tsx']);
     assert.deepEqual(proposals[0].items, ['react:Card']);
     assert.equal(drafts[0].status, 'submitted');
     assert.equal(drafts[0].proposal, proposals[0].id);
     assert.match((await hub.call('submit_draft', { id })).text, /already in Review/);
-    assert.match((await hub.call('save_draft', { draft: id, title: 't', why: 'w', changes: [{ path: 'a.ts', content: 'x' }] })).text, /already sent to Review/);
-    assert.match((await hub.call('save_draft', { title: 't', why: 'w', changes: [{ path: '.visual-editor/x.json', content: 'x' }] })).text, /isn't a place in the project/);
+    assert.match((await hub.call('save_draft', { asked: 'Do what the test asks', draft: id, title: 't', why: 'w', changes: [{ path: 'a.ts', content: 'x' }] })).text, /already sent to Review/);
+    assert.match((await hub.call('save_draft', { asked: 'Do what the test asks', title: 't', why: 'w', changes: [{ path: '.visual-editor/x.json', content: 'x' }] })).text, /isn't a place in the project/);
   } finally {
     await hub.close();
   }
@@ -292,7 +296,7 @@ test('hub: a picture of a draft in the Playground is kept as proof, problems mar
   };
   const hub = await connect(host);
   try {
-    await hub.call('save_draft', { title: 'Tiny', why: 'Smaller', changes: [{ path: 'src/Tiny.tsx', content: 'x' }] });
+    await hub.call('save_draft', { asked: 'Do what the test asks', title: 'Tiny', why: 'Smaller', changes: [{ path: 'src/Tiny.tsx', content: 'x' }] });
     const id = drafts[0].id;
     const pic = await hub.call('draft_pictures', { draft: id, card: 'Card' });
     assert.equal(pic.error, false, pic.text);
@@ -332,7 +336,7 @@ test('hub: an agent job: worker hands in, checker needs proof to pass, sends bac
     assert.match((await hub.call('job_verdict', { job: id, passed: true })).text, /isn't waiting for the checker \(it's working\)\. Run the worker \(round 1 of 2\)/);
 
     // Round 1: a draft with a planted mistake.
-    await hub.call('save_draft', { title: 'Tiny', why: 'Small', changes: [{ path: 'src/Tiny.tsx', content: 'fetch("/api")' }] });
+    await hub.call('save_draft', { asked: 'Do what the test asks', title: 'Tiny', why: 'Small', changes: [{ path: 'src/Tiny.tsx', content: 'fetch("/api")' }] });
     const draft = drafts[0].id;
     assert.match((await hub.call('job_hand_in', { job: id, draft, note: 'made it' })).text, /Handed in/);
     assert.equal(jobs[0].status, 'checking');
@@ -346,21 +350,21 @@ test('hub: an agent job: worker hands in, checker needs proof to pass, sends bac
     assert.match(status.text, /Next: Run the worker again \(round 2 of 2\) with the checker's reasons: It calls the API; designs show looks only\./);
 
     // Round 2: fixed, checked, passed: it goes to Review with its proof.
-    await hub.call('save_draft', { draft, title: 'Tiny', why: 'Small', changes: [{ path: 'src/Tiny.tsx', content: 'export const Tiny = 1' }] });
+    await hub.call('save_draft', { asked: 'Do what the test asks', draft, title: 'Tiny', why: 'Small', changes: [{ path: 'src/Tiny.tsx', content: 'export const Tiny = 1' }] });
     await hub.call('job_hand_in', { job: id, draft });
     await hub.call('judge', { draft });
     const passed = await hub.call('job_verdict', { job: id, passed: true, reasons: 'The check passes.' });
-    assert.match(passed.text, /Passed: it is in Review as proposal \S+, with its proof \(1\)/);
+    assert.match(passed.text, /Passed: it is in Review as proposal \S+, with its proof \(2\)/);
     assert.equal(jobs[0].status, 'passed');
     assert.equal(proposals[0].id, jobs[0].proposal);
-    assert.deepEqual(proposals[0].evidence?.map((e) => [e.title, e.passed]), [['Judge it', true]], 'only the proof of the version that passed');
+    assert.deepEqual(proposals[0].evidence?.map((e) => [e.title, e.passed]), [['Judge it', true], ['Logic check: does exactly what was asked', true]], 'only the proof of the version that passed');
     assert.match((await hub.call('job_status', { id })).text, /Next: Done: it passed and is waiting in Review/);
 
     // Out of rounds: a job allowed 1 round fails when sent back.
     host.agents = () => [{ plugin, agent: { ...agent, rounds: 1 } }];
     await hub.call('job_start', { agent: 'new-variant', request: 'Another' });
     const one = jobs[0].id;
-    await hub.call('save_draft', { title: 'T2', why: 'w', changes: [{ path: 'src/T2.tsx', content: 'x' }] });
+    await hub.call('save_draft', { asked: 'Do what the test asks', title: 'T2', why: 'w', changes: [{ path: 'src/T2.tsx', content: 'x' }] });
     await hub.call('job_hand_in', { job: one, draft: drafts[0].id });
     assert.match((await hub.call('job_verdict', { job: one, passed: false, reasons: 'Wrong.' })).text, /that was the last round: the job failed/);
     assert.equal(jobs[0].status, 'failed');
@@ -391,21 +395,21 @@ test('hub: propose_change is checked first: a failing check keeps it out of Revi
   };
   const hub = await connect(host);
   try {
-    const bad = await hub.call('propose_change', { title: 'Card loads stats', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'fetch("/api")' }] });
+    const bad = await hub.call('propose_change', { asked: 'Do what the test asks', title: 'Card loads stats', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'fetch("/api")' }] });
     assert.equal(bad.error, true);
     assert.match(bad.text, /^Not sent to Review: Judge it did not pass\.\n--- Judge it\nCalls the API\nPROBLEMS\nFix it \(call propose_change again with the corrected files; it is draft/);
-    assert.equal(proposals.length, 0, 'nothing reached Review');
+    assert.equal(proposals.filter((p) => p.status === 'proposed').length, 0, 'nothing reached Review for approval');
 
-    const good = await hub.call('propose_change', { title: 'Card says hi', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'export const Card = () => "hi";\n' }] });
+    const good = await hub.call('propose_change', { asked: 'Do what the test asks', title: 'Card says hi', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'export const Card = () => "hi";\n' }] });
     assert.equal(good.error, false, good.text);
-    assert.match(good.text, /waiting in Review for the developer, with its proof: ✓ Judge it; ▣ Playground: Card\./);
-    assert.deepEqual(proposals[0].evidence?.map((e) => [e.kind, e.title, e.passed]), [['check', 'Judge it', true], ['picture', 'Playground: Card', undefined]]);
+    assert.match(good.text, /waiting in Review for the developer, with its proof: ✓ Judge it; ▣ Playground: Card; ✓ Logic check: does exactly what was asked\./);
+    assert.deepEqual(proposals[0].evidence?.map((e) => [e.kind, e.title, e.passed]), [['check', 'Judge it', true], ['picture', 'Playground: Card', undefined], ['check', 'Logic check: does exactly what was asked', true]]);
     assert.deepEqual(pictured, ['react:Card']);
     assert.equal(drafts.find((d) => d.proposal === proposals[0].id)?.status, 'submitted', 'it went through a draft');
 
     // Files no plugin checks: said plainly, not "nothing was checked".
     host.tools = () => [];
-    const readme = await hub.call('propose_change', { title: 'README', why: 'w', changes: [{ path: 'README.md', content: 'hi' }] });
+    const readme = await hub.call('propose_change', { asked: 'Do what the test asks', title: 'README', why: 'w', changes: [{ path: 'README.md', content: 'hi' }] });
     assert.match(readme.text, /with its proof: • No checks apply to these files/);
   } finally {
     await hub.close();
@@ -418,7 +422,7 @@ test('hub: compare_app keeps "looks the same" as proof: passed when the pictures
   host.compareApp = async (root, d, path) => ({ before: `${root}/b.png`, after: `${root}/a.png`, diff: `${root}/.visual-editor/drafts/${d.id}/app-home-v1-difference.png`, differing, total: 1000000, problems: path === '/broken' ? ['The page threw: boom'] : [] });
   const hub = await connect(host);
   try {
-    await hub.call('save_draft', { title: 't', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'x' }] });
+    await hub.call('save_draft', { asked: 'Do what the test asks', title: 't', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'x' }] });
     const id = drafts[0].id;
     const same = await hub.call('compare_app', { draft: id, path: '/' });
     assert.match(same.text, /^The page \/ looks the same with the draft \(0 of 1,000,000 pixels differ\)\.[\s\S]*PASSED$/);
@@ -430,6 +434,78 @@ test('hub: compare_app keeps "looks the same" as proof: passed when the pictures
     assert.equal(drafts[0].evidence[0].passed, false);
     differing = 0;
     assert.match((await hub.call('compare_app', { draft: id, path: 'broken' })).text, /Problem on the page: The page threw: boom\n[\s\S]*PROBLEMS$/);
+  } finally {
+    await hub.close();
+  }
+});
+
+test('hub: the logic check holds every change to what was asked: directly, in a draft, and in an agent\'s job', async () => {
+  const { host, proposals, drafts, jobs } = fakeHost();
+  const seen: { asked: string[]; paths: string[] }[] = [];
+  host.logicCheck = async (_root, d) => {
+    seen.push({ asked: d.asked ?? [], paths: d.changes.map((c) => c.path) });
+    const wrong = d.changes.some((c) => c.after?.includes('onOpen()'));
+    const tried = { case: 'Click Delete', promise: 1, expected: 'the project is deleted', found: wrong ? 'it opens the project' : 'the project is deleted', ok: !wrong, by: 'checker' as const, how: 'traced' as const };
+    return { passed: !wrong, looksOnly: false, means: ['Delete deletes the project'], cases: [tried], fixes: wrong ? ['src/Card.tsx: Delete calls onOpen() instead of onDelete(): call onDelete().'] : [] };
+  };
+  host.agents = () => [{ plugin, agent: { name: 'fixer', title: 'Fixer', description: 'd', worker: { prompt: 'w' }, checker: { prompt: 'c' } } }];
+  host.tools = () => [{ plugin, tool: { name: 'judge', title: 'Judge it', description: 'A check.', checks: true, run: async () => 'Fine\nPASSED' } }];
+  const hub = await connect(host);
+  const bad = 'export const Delete = () => <button onClick={() => onOpen()}>Delete</button>;\n';
+  const good = 'export const Delete = () => <button onClick={() => onDelete()}>Delete</button>;\n';
+  try {
+    // Directly: held back, with the reason; what was asked went to the checker.
+    const direct = await hub.call('propose_change', { asked: 'Make Delete delete the project', title: 'Delete', why: 'w', changes: [{ path: 'src/Card.tsx', content: bad }] });
+    assert.match(direct.text, /^Not sent to Review: Logic check: does exactly what was asked did not pass\.[\s\S]*Asked: Make Delete delete the project\nWhat it means:\n1\. Delete deletes the project\nCases tried:\n✗ Click Delete: expected the project is deleted, but it opens the project\nTo fix:\n- src\/Card\.tsx: Delete calls onOpen\(\) instead of onDelete\(\)/);
+    // Held back: kept for the developer to see, with nothing to approve.
+    const held = proposals.find((p) => p.status === 'held-back');
+    assert.ok(held, 'kept as held back');
+    assert.deepEqual(held.asked, ['Make Delete delete the project']);
+    assert.equal(held.evidence?.find((e) => e.logic)?.logic?.cases[0].ok, false);
+    assert.deepEqual(seen[0], { asked: ['Make Delete delete the project'], paths: ['src/Card.tsx'] });
+    assert.equal(proposals.filter((p) => p.status === 'proposed').length, 0, 'nothing waiting for approval');
+    // A draft: asked is needed to start one; held back too; fixed, it goes, carrying what was asked.
+    assert.match((await hub.call('save_draft', { title: 'Delete', why: 'w', changes: [{ path: 'src/Card.tsx', content: bad }] })).text, /Say what the developer asked for/);
+    await hub.call('save_draft', { asked: 'Make Delete delete the project', title: 'Delete', why: 'w', changes: [{ path: 'src/Card.tsx', content: bad }] });
+    const id = drafts[0].id;
+    assert.match((await hub.call('submit_draft', { id })).text, /^Not sent to Review: Logic check/);
+    await hub.call('save_draft', { draft: id, title: 'Delete', why: 'w', changes: [{ path: 'src/Card.tsx', content: good }] });
+    assert.equal((await hub.call('submit_draft', { id })).error, false);
+    assert.deepEqual(proposals.find((p) => p.status === 'proposed')?.asked, ['Make Delete delete the project']);
+    // An agent: the job's request is what was asked; a pass is refused while the logic check finds problems.
+    await hub.call('job_start', { agent: 'fixer', request: 'Delete should delete' });
+    await hub.call('save_draft', { asked: 'x', title: 'Delete again', why: 'w', changes: [{ path: 'src/Card.tsx', content: bad }] });
+    await hub.call('job_hand_in', { job: jobs[0].id, draft: drafts[0].id });
+    await hub.call('judge', { draft: drafts[0].id });
+    assert.match((await hub.call('job_verdict', { job: jobs[0].id, passed: true })).text, /Logic check: does exactly what was asked did not pass[\s\S]*send it back to the worker with these reasons/);
+    assert.equal(jobs[0].status, 'checking', 'not passed');
+    // No logic check for a change without code.
+    const before = seen.length;
+    await hub.call('propose_change', { asked: 'Say hi', title: 'README', why: 'w', changes: [{ path: 'README.md', content: 'hi' }] });
+    assert.equal(seen.length, before);
+  } finally {
+    await hub.close();
+  }
+});
+
+test('hub: the developer\'s own cases reach the assistant when sent back, and go with the next try to the logic check', async () => {
+  const { host, proposals } = fakeHost();
+  const tried: string[][] = [];
+  host.logicCheck = async (_root, d) => {
+    tried.push(d.cases ?? []);
+    return { passed: true, looksOnly: false, means: ['m'], cases: [{ case: 'c', expected: 'e', found: 'e', ok: true, by: 'checker' as const, how: 'traced' as const }], fixes: [] };
+  };
+  const hub = await connect(host);
+  try {
+    await hub.call('propose_change', { asked: 'Ask before deleting', title: 'Delete', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'v1' }] });
+    // The developer added cases and sent it back with a note.
+    const p = proposals.find((x) => x.status === 'proposed')!;
+    proposals.splice(proposals.indexOf(p), 1, { ...p, status: 'sent-back', cases: ['Enter right away'], evidence: [{ kind: 'check', title: 'Logic check: does exactly what was asked', text: 't', passed: false, by: 'Visual Editor (logic checker)', at: '', revision: 1, logic: { means: ['m'], looksOnly: false, cases: [{ case: 'Enter right away', expected: 'no delete', found: 'deletes', ok: false, by: 'developer', how: 'traced' }], fixes: [] } }], history: [...p.history, { at: '', status: 'sent-back', note: 'Enter must not delete' }] });
+    const status = await hub.call('proposal_status', { id: p.id });
+    assert.match(status.text, /The developer's note: "Enter must not delete"\nThe developer's own cases \(pass them as cases when you propose again[^\n]*\n- Enter right away\nCases that broke:\n- Enter right away: expected no delete, but deletes\nRevise it/);
+    await hub.call('propose_change', { asked: 'Ask before deleting', cases: ['Enter right away'], title: 'Delete', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'v2' }] });
+    assert.deepEqual(tried, [[], ['Enter right away']], 'the next try is checked with the developer\'s case');
+    assert.deepEqual(proposals.find((x) => x.status === 'proposed')?.cases, ['Enter right away']);
   } finally {
     await hub.close();
   }

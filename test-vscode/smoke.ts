@@ -165,7 +165,7 @@ export async function run() {
     if (!overview.includes('Plugins: Hello') || !overview.includes('Use the theme colours')) throw new Error(`overview: ${overview}`);
     const before = t.review.proposals(root).length;
     const now = readFileSync(readme, 'utf8');
-    await text('propose_change', { title: 'Say hello in the README', why: 'A friendly start', changes: [{ path: 'README.md', content: now + '\nHello from the hub.\n' }], cards: ['hello:card'] });
+    await text('propose_change', { asked: 'Say hello in the README', title: 'Say hello in the README', why: 'A friendly start', changes: [{ path: 'README.md', content: now + '\nHello from the hub.\n' }], cards: ['hello:card'] });
     await client.close();
     const p = t.review.proposals(root)[0];
     if (t.review.proposals(root).length !== before + 1 || p.by.name !== 'Claude Code' || p.changes[0].before !== now) throw new Error(`proposal: ${JSON.stringify(p)}`);

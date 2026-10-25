@@ -9,7 +9,7 @@ import type { Evidence, Proposal } from '../proposals';
 
 /** How many of an agent's finished jobs the section shows. */
 const RECENT = 3;
-const IN_REVIEW: Record<Proposal['status'], string> = { proposed: 'waiting for you in Review', applied: 'approved', rejected: 'rejected', 'sent-back': 'sent back', undone: 'approved, then undone' };
+const IN_REVIEW: Record<Proposal['status'], string> = { proposed: 'waiting for you in Review', applied: 'approved', rejected: 'rejected', 'sent-back': 'sent back', undone: 'approved, then undone', 'held-back': 'held back by a check' };
 import type { PluginRegistry } from '../registry';
 import { webviewPage } from '../webviewPage';
 import type { Hub } from './hub';

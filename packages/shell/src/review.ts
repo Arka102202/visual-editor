@@ -9,12 +9,13 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cardsTouched } from './draftItems';
 import { importersOf, touch } from './importers';
+import { logicText, type LogicVerdict } from './hub/logicCheck';
 import type { Disposable, Item } from '@visual-editor/contract';
 import type { OutsideChanges } from './changes';
 import type { CurrentProject } from './currentProject';
 import type { ProjectMemory } from './memoryView';
 import { counts, hunks } from './diff';
-import { apply, conflicts, newId, ProposalStore, undo, undoConflicts, type Files, type Proposal } from './proposals';
+import { apply, conflicts, newId, ProposalStore, undo, undoConflicts, type Evidence, type Files, type Proposal } from './proposals';
 import type { ProjectIndex } from './projectIndex';
 import type { FromReview, ReviewItem, ToReview } from './reviewMessages';
 
@@ -47,6 +48,15 @@ export class Review implements vscode.Disposable {
       index.onChange(() => this.loadNewProjects()),
       current.onChange(() => void this.send()),
     );
+  }
+
+  /** The developer's own cases being checked, by proposal: how it's going, or why it couldn't. */
+  private readonly checking = new Map<string, { progress?: string; error?: string }>();
+  /** Runs the logic check on a change with the developer's cases (set by the extension). */
+  private logic: ((root: string, p: Proposal, cases: string[], means?: string[]) => Promise<LogicVerdict | string>) | undefined;
+
+  setLogic(logic: (root: string, p: Proposal, cases: string[], means?: string[]) => Promise<LogicVerdict | string>) {
+    this.logic = logic;
   }
 
   /** How pictures in a proposal's proof are shown live (set once the draft apps exist). */
@@ -157,6 +167,38 @@ export class Review implements vscode.Disposable {
     const importers = importersOf(moved, files).map((f) => join(root, f));
     for (const f of importers) this.changes.expectWrite(f);
     touch(importers);
+  }
+
+  /**
+   * The developer's own cases: the logic checker tries each against what the change means, and the results join the
+   * change's proof. The cases stay with the change (when it's sent back, the assistant must make them pass).
+   */
+  private async checkCases(root: string, id: string, cases: string[]) {
+    const store = this.store(root);
+    const p = store.get(id);
+    if (!p || !this.logic) return;
+    const at = p.evidence?.findIndex((e) => e.logic) ?? -1;
+    const old = at >= 0 ? p.evidence![at] : undefined;
+    this.checking.set(id, { progress: `Checking ${cases.length} case${cases.length === 1 ? '' : 's'} with the logic checker…` });
+    void this.send();
+    const verdict = await this.logic(root, p, cases, old?.logic ? old.logic.means : undefined);
+    if (typeof verdict === 'string') {
+      this.checking.set(id, { error: verdict });
+      return void this.send();
+    }
+    this.checking.delete(id);
+    // Your cases replace earlier results for the same case; the rest of the report stays.
+    const mine = verdict.cases.map((c) => ({ ...c, by: 'developer' as const }));
+    const kept = (old?.logic?.cases ?? []).filter((c) => !mine.some((m) => m.case === c.case) && !(c.by === 'developer' && cases.includes(c.case)));
+    const logic = { means: old?.logic?.means.length ? old.logic.means : verdict.means, looksOnly: old?.logic?.looksOnly ?? verdict.looksOnly, cases: [...kept, ...mine], fixes: [...(old?.logic?.fixes ?? []), ...verdict.fixes] };
+    const passed = logic.cases.every((c) => c.ok);
+    const asked = p.asked ?? [p.title];
+    const evidence: Evidence = { kind: 'check', title: old?.title ?? 'Logic check: does exactly what was asked', text: logicText(asked, logic), passed, by: 'Visual Editor (logic checker)', at: new Date().toISOString(), revision: old?.revision ?? 1, logic };
+    const next: Proposal = { ...p, cases: [...new Set([...(p.cases ?? []), ...cases])], evidence: at >= 0 ? p.evidence!.map((e, i) => (i === at ? evidence : e)) : [...(p.evidence ?? []), evidence] };
+    store.save(next);
+    this.reload(root, false);
+    const broke = mine.filter((c) => !c.ok);
+    void vscode.window.showInformationMessage(broke.length ? `${broke.length} of your ${mine.length} case${mine.length === 1 ? '' : 's'} broke: see them in the proof. Send it back to have them fixed.` : `All ${mine.length} of your case${mine.length === 1 ? '' : 's'} held.`);
   }
 
   /** A proposal from the assistant hub: saved, shown in Review, and announced. */
@@ -279,6 +321,7 @@ export class Review implements vscode.Disposable {
     this.selected = m.id;
     if (m.type === 'select') return this.send();
     if (m.type === 'live' || m.type === 'unlive') return this.showLive(root, m.id, m.card, m.type === 'live');
+    if (m.type === 'cases') return this.checkCases(root, m.id, m.cases);
     const store = this.store(root);
     const p = store.get(m.id);
     if (!p) return;
@@ -347,6 +390,7 @@ export class Review implements vscode.Disposable {
         id: p.id,
         title: p.title,
         why: p.why,
+        ...(p.asked?.length ? { asked: p.asked } : {}),
         by: p.by,
         createdAt: p.createdAt,
         status: p.status,
@@ -361,6 +405,7 @@ export class Review implements vscode.Disposable {
         ...(p.look ? { look: p.look } : {}),
         ...(p.evidence ? { evidence: p.evidence.map((e) => (e.image && root && this.panel ? { ...e, src: this.panel.webview.asWebviewUri(vscode.Uri.file(join(root, e.image))).toString() } : e)) } : {}),
         ...this.liveParts(p, state?.items ?? []),
+        ...(this.checking.has(p.id) ? { checking: this.checking.get(p.id) } : {}),
       });
     }
     if (!this.selected || !items.some((i) => i.id === this.selected)) this.selected = (items.find((i) => i.status === 'proposed') ?? items[0])?.id;

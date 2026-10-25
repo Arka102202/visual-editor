@@ -11,6 +11,7 @@ import type { ProjectState } from '../projectIndex';
 import { newId, parseProposal, safePath, type Evidence, type FileChange, type Proposal } from '../proposals';
 import { draftView, type Draft } from '../drafts';
 import { current, JOB_MINUTES, newJob, nextStep, type Job } from '../jobs';
+import { logicText, type LogicVerdict } from './logicCheck';
 
 export const SERVER_NAME = 'visual-editor';
 
@@ -48,6 +49,8 @@ export interface HubHost {
    * pictures (absolute paths; `diff` has what differs in red) and how much differs. A string says why it can't.
    */
   compareApp?(root: string, draft: Draft, path: string): Promise<AppComparison | string>;
+  /** The logic check (logicCheck.ts): does the draft do exactly what was asked, soundly. A string says why it couldn't run. */
+  logicCheck?(root: string, draft: Draft): Promise<LogicVerdict | string>;
 }
 
 export interface AppComparison {
@@ -85,8 +88,9 @@ between them), its rules and decisions, and the history of reviewed changes.
 - NEVER edit files directly. Every change goes through propose_change: the developer sees it in Review and approves,
   sends it back with a note, or rejects it. Then call proposal_status; if it was sent back, read the note and propose
   again.
-- Nothing reaches Review unless Visual Editor's checks pass on it (propose_change and submit_draft run them first; if
-  one fails you get the problems to fix instead).
+- Nothing reaches Review unless Visual Editor's checks and its logic check pass on it: a separate Claude holds the
+  change to what the developer asked for (give it, in their words, as asked). If one fails you get the problems to fix
+  instead.
 - For bigger jobs, work in a draft: save_draft keeps the files apart (nothing changes), plugin tools given its id
   (draft) look at the project as it would leave it, read_draft shows it, and submit_draft sends it to Review.
 - Visual Editor's agents (a worker, then a checker) run as jobs: job_start, then follow job_status's next step.
@@ -95,7 +99,7 @@ Card ids look like "react:component:src/Card.tsx#Card". Several projects may be 
 matters; otherwise the one on the map is used.`;
 
 const READY_WAIT_MS = 5000;
-const STATUS_WORDS: Record<Proposal['status'], string> = { proposed: 'waiting for review', applied: 'approved and applied', rejected: 'rejected', 'sent-back': 'sent back', undone: 'applied, then undone' };
+const STATUS_WORDS: Record<Proposal['status'], string> = { proposed: 'waiting for review', applied: 'approved and applied', rejected: 'rejected', 'sent-back': 'sent back', undone: 'applied, then undone', 'held-back': 'held back by a check (it never reached the developer)' };
 
 export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assistant'): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version }, { instructions: INSTRUCTIONS });
@@ -240,10 +244,12 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
           .array(z.object({ path: z.string().describe('Relative to the project folder'), content: z.string().nullable().describe('The whole new file, or null to remove it') }))
           .min(1),
         cards: z.array(z.string()).optional().describe('Card ids this is about, so the map marks them'),
+        asked: z.string().describe('What the developer asked for, in their own words (the logic check holds the change to it)'),
+        cases: z.array(z.string()).optional().describe('Cases the developer added for the logic check (from proposal_status, when they sent it back): keep them'),
         project: projectArg,
       },
     },
-    async ({ title, why, changes, cards, project }) => {
+    async ({ title, why, changes, cards, asked, cases, project }) => {
       const s = await pick(project);
       if (typeof s === 'string') return fail(s);
       const root = s.project.root;
@@ -258,7 +264,7 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       }
       // Checked before it reaches Review, as a draft would be: the plugins' checks and pictures, kept as its proof.
       const now = new Date().toISOString();
-      const d: Draft = { id: newId(), title, why, by: { kind: 'assistant', name: client }, createdAt: now, updatedAt: now, status: 'draft', changes: files, ...(cards?.length ? { items: cards } : {}), revision: 1, evidence: [] };
+      const d: Draft = { id: newId(), title, why, by: { kind: 'assistant', name: client }, createdAt: now, updatedAt: now, status: 'draft', changes: files, ...(cards?.length ? { items: cards } : {}), asked: [asked.trim()], ...(cases?.length ? { cases } : {}), revision: 1, evidence: [] };
       host.saveDraft(root, d);
       const blocked = await provenOrWhy(s, d, 'call propose_change again with the corrected files');
       if (blocked) return fail(blocked);
@@ -285,7 +291,15 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       const p = all.find((x) => x.id === id);
       if (!p) return fail(`No proposal "${id}" in ${s.project.name}.`);
       const note = [...p.history].reverse().find((h) => h.note)?.note;
-      return reply(`${p.title}: ${STATUS_WORDS[p.status]}.${note ? `\nThe developer's note: "${note}"` : ''}${p.status === 'sent-back' ? '\nRevise it and call propose_change again.' : ''}`);
+      // The developer's own cases, and how they (and any other case) did: kept when it's proposed again.
+      const logic = p.evidence?.find((e) => e.logic)?.logic;
+      const broke = logic?.cases.filter((c) => !c.ok) ?? [];
+      const out = [`${p.title}: ${STATUS_WORDS[p.status]}.`];
+      if (note) out.push(`The developer's note: "${note}"`);
+      if (p.cases?.length) out.push(`The developer's own cases (pass them as cases when you propose again; they must all pass):\n${p.cases.map((c) => `- ${c}`).join('\n')}`);
+      if (broke.length) out.push(`Cases that broke:\n${broke.map((c) => `- ${c.case}: expected ${c.expected}, but ${c.found}`).join('\n')}`);
+      if (p.status === 'sent-back') out.push('Revise it and call propose_change again.');
+      return reply(out.join('\n'));
     },
   );
 
@@ -355,23 +369,59 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
    */
   const provenOrWhy = async (s: ProjectState, d: Draft, again = 'save_draft with the draft id, then submit_draft again'): Promise<string | undefined> => {
     const proof = await proveDraft(s, d, true);
+    // Held back: the developer can see it (and why) in Review, though it never reached them for approval.
+    const blocked = (failed: Evidence[]) => {
+      holdBack(s.project.root, host.drafts(s.project.root).find((x) => x.id === d.id) ?? d);
+      return [`Not sent to Review: ${failed.map((e) => e.title).join(', ')} did not pass.`, ...failed.map((e) => `--- ${e.title}\n${e.text}`), `Fix it (${again}; it is draft ${d.id}).`].join('\n');
+    };
     const failed = proof.filter((e) => e.passed === false);
-    if (failed.length) return [`Not sent to Review: ${failed.map((e) => e.title).join(', ')} did not pass.`, ...failed.map((e) => `--- ${e.title}\n${e.text}`), `Fix it (${again}; it is draft ${d.id}).`].join('\n');
-    if (!proof.length) addProof(s.project.root, d, { kind: 'note', title: 'No checks apply to these files', text: 'None of Visual Editor\'s plugins check files like these.', by: 'Visual Editor', at: new Date().toISOString(), revision: d.revision });
+    if (failed.length) return blocked(failed);
+    // Then the logic check, on any change to code (once per version).
+    const code = d.changes.some((c) => /\.(m?[jt]sx?|vue|svelte|css|scss|html)$/.test(c.path));
+    if (code && !proof.some((e) => e.title === LOGIC && e.passed === true)) {
+      const asked = d.asked?.length ? d.asked : [d.title];
+      const verdict = host.logicCheck ? await host.logicCheck(s.project.root, { ...d, asked }) : 'The logic check isn\'t available here.';
+      if (typeof verdict === 'string') return `Not sent to Review: ${verdict} Every change needs the logic check: try again in a moment.`;
+      const { passed, cost: _cost, ...logic } = verdict;
+      const e: Evidence = { kind: 'check', title: LOGIC, text: logicText(asked, logic), passed, by: 'Visual Editor (logic checker)', at: new Date().toISOString(), revision: d.revision, logic };
+      addProof(s.project.root, d, e, (x) => x.title === LOGIC);
+      if (!passed) return blocked([e]);
+    }
+    if (!proof.length && !code) addProof(s.project.root, d, { kind: 'note', title: 'No checks apply to these files', text: 'None of Visual Editor\'s checks apply to files like these.', by: 'Visual Editor', at: new Date().toISOString(), revision: d.revision });
     return undefined;
+  };
+
+  /**
+   * A draft a check stopped, kept as a held-back proposal (one per draft: the latest try), so the developer sees what
+   * was stopped and why. There's nothing to approve.
+   */
+  const holdBack = (root: string, d: Draft) => {
+    const now = new Date().toISOString();
+    const evidence = d.evidence.filter((e) => e.revision === d.revision);
+    const held = parseProposal(
+      JSON.stringify({ id: `held-${d.id}`, title: d.title, why: d.why, asked: d.asked, cases: d.cases, by: d.by, createdAt: now, status: 'held-back', changes: d.changes, items: d.items, history: [{ at: now, status: 'held-back' }], evidence }),
+      `held-${d.id}`,
+    );
+    if (typeof held !== 'string') host.propose(root, held);
+  };
+
+  /** Files of a draft that changed in the project since it was saved, in words; undefined when none did. */
+  const stale = async (root: string, d: Draft): Promise<string | undefined> => {
+    const moved: string[] = [];
+    for (const c of d.changes) if (((await host.readFile(root, c.path)) ?? null) !== c.before) moved.push(c.path);
+    return moved.length ? `These files changed in the project since the draft was saved: ${moved.join(', ')}. Read them again, save the draft again with save_draft (draft: "${d.id}"), check it, then submit it.` : undefined;
   };
 
   /** A draft to Review as a proposal, with its proof for its current version; a string says why not. */
   const submit = async (root: string, d: Draft): Promise<{ proposal: Proposal; evidence: Evidence[] } | string> => {
     if (d.status === 'submitted') return `Draft ${d.id} is already in Review as proposal ${d.proposal}.`;
-    const moved: string[] = [];
-    for (const c of d.changes) if (((await host.readFile(root, c.path)) ?? null) !== c.before) moved.push(c.path);
-    if (moved.length) return `These files changed in the project since the draft was saved: ${moved.join(', ')}. Read them again, save the draft again with save_draft (draft: "${d.id}"), check it, then submit it.`;
+    const moved = await stale(root, d);
+    if (moved) return moved;
     const now = new Date().toISOString();
     // Its proof goes with it: what was checked on this version.
     const evidence = d.evidence.filter((e) => e.revision === d.revision);
     const checked = parseProposal(
-      JSON.stringify({ id: newId(), title: d.title, why: d.why, by: d.by, createdAt: now, status: 'proposed', changes: d.changes, items: d.items, history: [{ at: now, status: 'proposed' }], evidence }),
+      JSON.stringify({ id: newId(), title: d.title, why: d.why, asked: d.asked, cases: d.cases, by: d.by, createdAt: now, status: 'proposed', changes: d.changes, items: d.items, history: [{ at: now, status: 'proposed' }], evidence }),
       newId(),
     );
     if (typeof checked === 'string') return checked;
@@ -392,16 +442,18 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
         changes: z.array(z.object({ path: z.string().describe('Relative to the project folder'), content: z.string().nullable().describe('The whole new file, or null to remove it') })).min(1),
         cards: z.array(z.string()).optional().describe('Card ids it is about'),
         draft: z.string().optional().describe('A draft id to change, from an earlier save_draft'),
+        asked: z.string().optional().describe('What the developer asked for, in their own words: needed to start a draft; when changing one, only a new request (it is added to the list the logic check holds the change to)'),
         project: projectArg,
       },
     },
-    async ({ title, why, changes, cards, draft, project }) => {
+    async ({ title, why, changes, cards, draft, asked, project }) => {
       const s = await pick(project);
       if (typeof s === 'string') return fail(s);
       const root = s.project.root;
       const old = draft ? host.drafts(root).find((d) => d.id === draft) : undefined;
       if (draft && !old) return fail(`No draft "${draft}" in ${s.project.name}. Leave draft out to start a new one.`);
       if (old?.status === 'submitted') return fail(`Draft ${old.id} was already sent to Review (proposal ${old.proposal}). Save a new draft instead.`);
+      if (!old && !asked?.trim()) return fail('Say what the developer asked for (asked), in their own words: every change is checked against it.');
       const files = new Map((old?.changes ?? []).map((c) => [c.path, c]));
       for (const c of changes) {
         const path = c.path.replace(/\\/g, '/').replace(/^\.\//, '');
@@ -428,6 +480,7 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
         status: 'draft',
         changes: next,
         ...(cards?.length ? { items: cards } : old?.items ? { items: old.items } : {}),
+        asked: [...(old?.asked ?? []), ...(asked?.trim() && !old?.asked?.includes(asked.trim()) ? [asked.trim()] : [])],
         revision,
         evidence: old?.evidence ?? [],
       };
@@ -485,6 +538,9 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       const d = host.drafts(root).find((x) => x.id === id);
       if (!d) return fail(`No draft "${id}" in ${s.project.name}.`);
       if (d.status === 'submitted') return fail(`Draft ${d.id} is already in Review as proposal ${d.proposal}.`);
+      // (Files that moved on first: no checks, least of all the logic check, on a draft that can't be sent as it is.)
+      const moved = await stale(root, d);
+      if (moved) return fail(moved);
       const blocked = await provenOrWhy(s, d);
       if (blocked) return fail(blocked);
       const sent = await submit(root, host.drafts(root).find((x) => x.id === d.id) ?? d);
@@ -703,6 +759,8 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       const d = host.drafts(root).find((x) => x.id === draft);
       if (!d) return fail(`No draft "${draft}". Save your files with save_draft first.`);
       if (d.status === 'submitted') return fail(`Draft ${d.id} is already in Review. Save a new draft.`);
+      // The job's request is what was asked (the logic check holds the draft to it).
+      if (!d.asked?.length) host.saveDraft(root, { ...d, asked: [j.request] });
       const next: Job = { ...j, status: 'checking', draft: d.id, history: [...j.history, { at: new Date().toISOString(), who: 'worker', what: `Handed in draft ${d.id} (version ${d.revision})${note ? `: ${note.trim()}` : ''}` }] };
       host.saveJob(root, next);
       return reply(`Handed in. The checker takes it from here: end your answer now with what you did.`);
@@ -745,7 +803,10 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       const failedProof = proof.filter((e) => e.passed === false);
       if (failedProof.length) return fail(`It can't pass: on this version, ${failedProof.map((e) => e.title).join(', ')} did not pass. Send it back with what to fix.`);
       if (!proof.some((e) => e.passed === true)) return fail('A pass needs proof: run the checks on the draft (plugin check tools with draft, e.g. check_variant_files) until one passes on this version, then give the verdict again.');
-      const sent = await submit(root, d);
+      // The logic check too (it reads the job's request): if it finds problems, send it back with them.
+      const held = await provenOrWhy(s, host.drafts(root).find((x) => x.id === d.id) ?? d, 'send it back to the worker with these reasons');
+      if (held) return fail(held);
+      const sent = await submit(root, host.drafts(root).find((x) => x.id === d.id) ?? d);
       if (typeof sent === 'string') return fail(sent);
       const next: Job = { ...j, status: 'passed', proposal: sent.proposal.id, history: [...j.history, { at, who: 'checker', what: `Passed${reasons?.trim() ? `: ${reasons.trim()}` : ''}` }, { at, who: 'Visual Editor', what: `Sent to Review as proposal ${sent.proposal.id}` }] };
       host.saveJob(root, next);
@@ -777,6 +838,9 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
 
   return server;
 }
+
+/** The logic check's proof title. */
+const LOGIC = 'Logic check: does exactly what was asked';
 
 /** ✓ passed, ✗ didn't, • a note or a check that didn't say. */
 const mark = (e: Evidence) => (e.passed === true ? '✓' : e.passed === false ? '✗' : e.kind === 'picture' ? '▣' : '•');
