@@ -258,6 +258,7 @@ export const checkTypesTool: PluginTool = {
   description:
     'Runs the project\'s own TypeScript (its tsconfig, and the configs it refers to) on the project as a draft would leave it, and reports only the problems the draft adds (problems already in the project don\'t count against it). Ends with PASSED or PROBLEMS. Without a draft: how many problems the project has now.',
   checks: true,
+  always: true,
   run: async (_input, ctx) => {
     if (!ctx.project.files.some((f) => /(^|\/)tsconfig(\.[\w-]+)?\.json$/.test(f))) return 'This project has no tsconfig.json: no TypeScript to check.';
     // A draft without code (a README…): no verdict either way.

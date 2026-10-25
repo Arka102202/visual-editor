@@ -7,7 +7,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 /** The parts of the TypeScript compiler the check uses (the project's own TypeScript, 4 or 5, has them). */
 export interface Ts {
-  sys: { fileExists(f: string): boolean; readFile(f: string): string | undefined };
+  sys: { fileExists(f: string): boolean; readFile(f: string): string | undefined; directoryExists?(d: string): boolean };
   getParsedCommandLineOfConfigFile(file: string, options: object, host: object): Parsed | undefined;
   createProgram(o: { rootNames: string[]; options: object; host?: Host; projectReferences?: readonly unknown[]; oldProgram?: unknown }): unknown;
   getPreEmitDiagnostics(program: unknown): readonly Diagnostic[];
@@ -23,6 +23,7 @@ interface Parsed {
 }
 interface Host {
   fileExists(f: string): boolean;
+  directoryExists?(d: string): boolean;
   readFile(f: string): string | undefined;
   getSourceFile(f: string, lang: unknown, onError?: unknown, fresh?: boolean): unknown;
 }
@@ -53,6 +54,13 @@ export interface TypeCheck {
 /** `files`: the draft's files by path relative to the project (null: removed by it). */
 export function typeCheck(ts: Ts, root: string, files: Record<string, string | null>): TypeCheck {
   const draft = new Map(Object.entries(files).map(([path, text]) => [resolve(root, path), text]));
+  // The folders the draft's files are in (and those above them): a folder the draft adds exists for TypeScript too,
+  // which asks before it looks for files in it ("Cannot find module" otherwise).
+  const folders = new Set<string>();
+  for (const [file, text] of draft) {
+    if (text === null) continue;
+    for (let dir = dirname(file); !folders.has(dir) && dir !== dirname(dir); dir = dirname(dir)) folders.add(dir);
+  }
   const configs = projectConfigs(ts, root);
   const before: TypeProblem[] = [];
   const after: TypeProblem[] = [];
@@ -67,6 +75,8 @@ export function typeCheck(ts: Ts, root: string, files: Record<string, string | n
     const original = host.getSourceFile.bind(host);
     host.fileExists = (f: string) => (draft.has(resolve(f)) ? draft.get(resolve(f)) !== null : ts.sys.fileExists(f));
     host.readFile = (f: string) => (draft.has(resolve(f)) ? (draft.get(resolve(f)) ?? undefined) : ts.sys.readFile(f));
+    const onDisk = host.directoryExists?.bind(host) ?? ts.sys.directoryExists?.bind(ts.sys);
+    host.directoryExists = (d: string) => folders.has(resolve(d)) || (onDisk ? onDisk(d) : true);
     host.getSourceFile = (f: string, lang: unknown, onError?: unknown, fresh?: boolean) => {
       const text = draft.get(resolve(f));
       if (text === undefined) return original(f, lang, onError, fresh);

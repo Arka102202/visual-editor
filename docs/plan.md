@@ -239,34 +239,77 @@ Claude.
   - a change that fails doesn't reach Review: it's listed under **Held back**, with what was tried and why.
 - **Done when:** a planted logic mistake (the theme toggle working only in dark mode) is caught directly, in a draft and
   in an agent's job, and a case of your own is checked.
-- **Next for it:** cases run for real (step 2.11).
+- **Next for it:** cases run for real (step 2.11, done).
 
 ### 2.10 Instant draft preview ✅ done
 - **You get:** a draft's app stays running and swaps changed files in place: a change shows in about a second.
 - **Done when:** a saved draft version shows in the preview within ~2 seconds.
 
-### 2.11 Cases run for real
+### 2.11 Cases run for real ✅ done
 - **You get:** the logic check writes cases so they can be run, and Visual Editor runs them in the draft's own app in
   the hidden browser: clicks and typing, a chosen starting state, faked API answers (slow, error, empty) through the
   proxy; what the page really shows is the result. A case that can be run is marked **run**; others stay **traced**.
   Your own cases can be run too.
 - **Done when:** the theme toggle mistake is caught by a case that was run, not only traced.
+- **How it works:** before the check, Visual Editor opens the places the change can be tried (the Playgrounds of the
+  cards it touches, a few app pages) and tells the checker what each really shows (its buttons, links, boxes, the
+  page's own attributes). The checker adds steps to the cases a page can show; each runs in the draft's app with its own
+  faked answers. In Review a case says **ran in the app** or **read in the code**. Steps that name something that isn't
+  on the page keep the reading, with a note saying why.
 
-### 2.12 Design session tab
+### 2.12 Design session tab ✅ done
 - **You get:** a tab in the middle with the draft running live (the board, or one state with screen sizes), "What you
   asked", versions to go back to, and Done / Discard. Started from a button (Agents section, map, Playground). You talk
   to Claude in your own Claude Code chat; there's no chat of Visual Editor's own.
 - **Done when:** a session opens and follows its draft as it changes.
+- **How it works:** "Start a design session" (the Agents section's brush button, the Playground's, or the command)
+  makes an empty draft marked as a session and opens its tab. The tab runs the draft in its own app and follows the
+  draft's file: each saved version shows by itself. Every version's files are kept, so going back is a new version
+  (nothing is lost). Done sends the draft the one way (`draftFlow`'s `finish`, the same as submit_draft); Discard
+  throws the draft away.
 
-### 2.13 Sessions from the chat
+### 2.13 Sessions from the chat ✅ done
 - **You get:** a skill and tools so Claude knows a session is open: it works only in the session's draft, keeps "What
   you asked", and can open the session itself ("let's design a new look for ProjectCard").
 - **Done when:** three changes in a row from the chat show up live in the session.
+- **How it works:** while a session is open, Visual Editor notes it (`.visual-editor/drafts/.session`), and Claude
+  is told with each message to save into its draft; propose_change is turned away. Claude can open one
+  (start_session) or continue a waiting proposal in one (continue_proposal); "done" in the chat sends it like Done.
+  Checked with three changes in a row from a real chat (Haiku), then "done": in Review with its proof.
+- **Also done here:** checks run in the background (an assistant's tool gives up after a minute; it now gets "being
+  checked" and asks proposal_status); a case can look within one part of a page; when a run and the code reading
+  disagree, the checker looks again (the change, or the case?); the developer can overrule a case in Review or in a
+  session.
+- **Also (small):** when list_cards finds nothing, it names the closest cards ("No cards match EditorLayout. Closest:
+  Editor, EditorHeader…"), so Claude finds the right one instead of going back to searching files.
 
-### 2.14 Done: checks and the logic check
-- **You get:** Done (in the tab, or "done" in the chat) runs the automatic checks and the logic check; passing goes to
-  Review with all its proof; failing shows the reasons in the session, and Claude can read them.
-- **Done when:** a session with a planted logic mistake is held back with clear reasons, and passes once fixed.
+### 2.14 Check plans: you see the tests before they run ✅ done
+- **You get:** checks are planned only when a change is finished: Done in a session, Claude sending a change from the
+  chat, or an agent's checker passing its work. Then a **check planner** (one Claude run, reading only) gets what you
+  asked and the whole change, and writes a plan: which of Visual Editor's checks apply (each with why: TypeScript for
+  code, the preview setup only when preview files change, pictures of the components it touches, "looks the same" only
+  when the look must not change) and the scenarios that try to break it (what it means, each case and what it expects,
+  run in the app or read in the code). **Nothing runs until you press Run**: you see the plan (in the session, or in
+  Review under "Checks to approve"), untick checks or scenarios (with why), edit what a scenario expects, add your own
+  scenarios, or skip all checks (with why). Some checks are always planned (TypeScript on code): you can skip them, the
+  planner can't. Then the approved checks run; passing, it goes to Review; failing, the bypass window opens. Every
+  choice (skipped, added, bypassed) is in the proof. The same for every change: sessions, the chat, agent jobs.
+- **Done when:** a change from the chat and a session each wait with a plan; a scenario removed and one added by you
+  change what runs; a planted mistake is caught; a correct change passes.
+- **Checked:** with real Claude on the archFlow copy, a change from the chat waited in Review under "Checks to
+  approve" with its plan (TypeScript always; the preview setup and "looks the same" left out, each with why; four
+  scenarios); run, the planted theme-toggle mistake was held back. A correct change (a thicker accent bar) got
+  pictures in its plan and, run, reached Review with its proof. Unticking, adding and "no checks at all" are tested.
+- **The tester:** where the reading says a scenario works but the quick automatic run says it broke (or couldn't try
+  it), a tester (Claude, Haiku unless set otherwise) tries it like a person: it reads the page (its controls, hidden
+  labels and all), clicks and types, takes pictures and looks at them, and judges against what was asked. Matching text
+  can't see a label drawn with CSS or tell what a request meant; the tester can. About 20 seconds a scenario, only on
+  the disputed ones.
+- **Also:** the tester tries the same steps on the app without the change before calling it broken ("not caused by
+  this change" doesn't hold it back). A held-back change can run its test cases again (looked at and changed first) or
+  get new ones; while checks run, its buttons are off. Each draft has its own copy of the app (up to 3), never stopped
+  or swapped while checks use it. Failed checks can be bypassed with a reason, kept in the proof.
+- **Later:** your own checks as commands (npm test, lint); checks kept as project rules.
 
 ### 2.15 Kinds of session
 - **You get:** **New design** (a variant, for a situation if there are any), **New component**, **New page** (built in
