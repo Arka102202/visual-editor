@@ -223,20 +223,58 @@ A one-line proposal, with the before and after shown live in Review, and Undo.
   - the prototype works in the Playground.
 - **Done when:** a real archFlow component converts with no hand fixes.
 
-### 2.9 Agent: New variant
-- **You get:** a new design from your words, for a situation if there are any.
-- **The checker proves:** the rules pass, and the Playground pictures match what you asked for.
-- **Done when:** "a one-line row with the colour as a dot" gives that design.
+**A rule for every change, however it comes** (Claude directly, a draft, an agent, a design session): before it
+reaches Review it passes Visual Editor's automatic checks **and a logic check**: a separate Claude, which sees only what
+was asked, the old code and the new, says whether the new code is sound and does exactly what was asked (nothing missing,
+nothing extra, behaviour kept unless asked to change). A change that fails doesn't reach Review; the reasons go back to
+Claude.
 
-### 2.10 Agents: New component / New page, and Set up project
+### 2.9 The logic check, for every change ✅ done
 - **You get:**
-  - a component or page built **with both parts from the start**, from a description, so new projects grow in this
-    shape from day one;
-  - setup adds the helper and the providers file.
-- **Done when:** a new page made from a sentence works in the app and as a prototype.
+  - every change says what was asked, in your words (shown first in Review);
+  - the logic checker (a separate Claude, Sonnet by default, a setting for Opus) works in two steps: **what the change
+    means** for how things behave (its promises: API calls, states, impossible states that could crash the page, data
+    flow, side effects; or "looks only"), then **cases that try to break each promise**, every one listed with ✓ or ✗;
+  - **your own cases**: add them in Review and check them; they stay with the change and must pass when it comes back;
+  - a change that fails doesn't reach Review: it's listed under **Held back**, with what was tried and why.
+- **Done when:** a planted logic mistake (the theme toggle working only in dark mode) is caught directly, in a draft and
+  in an agent's job, and a case of your own is checked.
+- **Next for it:** cases **run** for real in the draft's app where possible (clicks, states, fake API answers), marked
+  "run" instead of "traced".
 
-### 2.11 Tested all three ways
-- **Done when:** each agent runs in chat, in the background and in a terminal on the archFlow copy.
+### 2.10 Instant draft preview
+- **You get:** a draft's app stays running and swaps changed files in place: a change shows in about a second.
+- **Done when:** a saved draft version shows in the preview within ~2 seconds.
+
+### 2.11 Design session tab
+- **You get:** a tab in the middle with the draft running live (the board, or one state with screen sizes), "What you
+  asked", versions to go back to, and Done / Discard. Started from a button (Agents section, map, Playground). You talk
+  to Claude in your own Claude Code chat; there's no chat of Visual Editor's own.
+- **Done when:** a session opens and follows its draft as it changes.
+
+### 2.12 Sessions from the chat
+- **You get:** a skill and tools so Claude knows a session is open: it works only in the session's draft, keeps "What
+  you asked", and can open the session itself ("let's design a new look for ProjectCard").
+- **Done when:** three changes in a row from the chat show up live in the session.
+
+### 2.13 Done: checks and the logic check
+- **You get:** Done (in the tab, or "done" in the chat) runs the automatic checks and the logic check; passing goes to
+  Review with all its proof; failing shows the reasons in the session, and Claude can read them.
+- **Done when:** a session with a planted logic mistake is held back with clear reasons, and passes once fixed.
+
+### 2.14 Kinds of session
+- **You get:** **New design** (a variant, for a situation if there are any), **New component**, **New page** (built in
+  the previewable shape from the start), **Change a design**. A **Design system builder** (theme colours, spacing,
+  fonts on a sample page) comes later as its own kind.
+- **Done when:** a new page made in a session works in the app and as a prototype.
+
+### 2.15 Agent: Set up project
+- **You get:** the helper and the providers file added to a project that has neither.
+- **Done when:** a fresh React project is ready for Preview.
+
+### 2.16 Tested
+- **Done when:** each kind of session and each agent works from a button and from the chat on the archFlow copy, with
+  small requests (to spare the plan's allowance).
 
 ---
 
