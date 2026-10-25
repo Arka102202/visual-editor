@@ -5,8 +5,10 @@
 import * as vscode from 'vscode';
 import { webviewPage } from './webviewPage';
 import { vscodeFiles } from './vscodeFiles';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cardsTouched } from './draftItems';
+import { importersOf, touch } from './importers';
 import type { Disposable, Item } from '@visual-editor/contract';
 import type { OutsideChanges } from './changes';
 import type { CurrentProject } from './currentProject';
@@ -134,6 +136,27 @@ export class Review implements vscode.Disposable {
       this.lives.set(key, { error: e instanceof Error ? e.message : String(e) });
     }
     void this.send();
+  }
+
+  /**
+   * Files added or removed: the files that import them are touched, so a running dev server reads them again (else it
+   * may keep importing what was removed, and the page goes blank).
+   */
+  private wakeImporters(root: string, p: Proposal) {
+    const moved = p.changes.filter((c) => c.before === null || c.after === null).map((c) => c.path);
+    if (!moved.length) return;
+    const state = this.index.snapshot().find((s) => s.project.root === root);
+    const code = (state?.project.files ?? []).filter((f) => /\.(m?[jt]sx?|vue|svelte)$/.test(f) && !moved.includes(f));
+    const files = code.flatMap((path) => {
+      try {
+        return [{ path, text: readFileSync(join(root, path), 'utf8') }];
+      } catch {
+        return [];
+      }
+    });
+    const importers = importersOf(moved, files).map((f) => join(root, f));
+    for (const f of importers) this.changes.expectWrite(f);
+    touch(importers);
   }
 
   /** A proposal from the assistant hub: saved, shown in Review, and announced. */
@@ -273,6 +296,7 @@ export class Review implements vscode.Disposable {
           }
         } else {
           await apply(p, files);
+          this.wakeImporters(root, p);
           store.mark(p, 'applied');
           this.memory.recordReview(root, p, 'applied');
           void vscode.window.showInformationMessage(`Applied: ${p.title}`, 'Undo').then((pick) => pick && this.receive({ type: 'undo', id: p.id }));
@@ -285,6 +309,7 @@ export class Review implements vscode.Disposable {
           void vscode.window.showWarningMessage(`Can't undo "${p.title}": the files changed after it was applied.`, { modal: true, detail: why.join('\n') });
         } else {
           await undo(latest, files);
+          this.wakeImporters(root, latest);
           store.mark(latest, 'undone');
           this.memory.recordReview(root, latest, 'undone');
         }
