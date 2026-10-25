@@ -17,12 +17,15 @@ addStyles(`
   .row:hover { background: var(--vscode-list-hoverBackground); }
   .row.on { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
   .row.waiting { border-left-color: #d9a400; }
+  .row.held { border-left-color: var(--vscode-errorForeground, #f48771); }
   .row .t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .row .s { font-size: 11px; opacity: .7; display: flex; gap: 6px; align-items: center; }
   .detail { flex: 1; overflow-y: auto; padding: 20px 28px 40px; min-width: 0; }
   h1 { font-size: 18px; margin: 0 0 4px; }
   .meta { font-size: 12px; opacity: .7; display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
   .why { margin: 0 0 16px; max-width: 760px; }
+  .asked { margin: 0 0 12px; max-width: 760px; }
+  .askline { padding: 2px 0 2px 10px; border-left: 2px solid var(--vscode-charts-blue, #3794ff); margin-bottom: 3px; }
   .actions { display: flex; gap: 8px; margin: 0 0 18px; position: sticky; top: -20px; padding: 10px 0; background: var(--vscode-editor-background); z-index: 1; }
   /* A light tint of the theme's warning colour, with the editor's own text colour: readable in any theme (the input
      warning colours can be solid, with no matching text colour). */
@@ -61,6 +64,26 @@ addStyles(`
   .proof .tryrow { padding-top: 8px; }
   .proof .tryrow + .tryrow { border-top: 1px solid var(--vscode-panel-border, #8884); }
   .proof .trytitle { margin: 0 12px 6px 28px; }
+  .logic { padding: 4px 12px 12px 28px; }
+  .logichead { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; opacity: .6; margin: 10px 0 4px; }
+  .logic .means { margin: 0; padding-left: 20px; }
+  .logic .means li { margin-bottom: 2px; }
+  .logic div.means { padding: 0; opacity: .9; }
+  .cases .case { padding: 4px 0; border-top: 1px solid var(--vscode-panel-border, #8883); }
+  .cases .case:first-child { border-top: 0; }
+  .casewhat { display: flex; gap: 8px; align-items: baseline; }
+  .casename { flex: 1; min-width: 0; }
+  .tags { display: flex; gap: 4px; flex: none; }
+  .tag { font-size: 10px; padding: 0 6px; border-radius: 8px; border: 1px solid var(--vscode-panel-border, #8885); opacity: .8; white-space: nowrap; }
+  .tag.yours { border-color: var(--vscode-charts-blue, #3794ff); color: var(--vscode-charts-blue, #3794ff); opacity: 1; }
+  .tag.run { border-color: var(--vscode-testing-iconPassed, #73c991); color: var(--vscode-testing-iconPassed, #73c991); opacity: 1; }
+  .casefound { padding-left: 22px; opacity: .8; font-size: 12px; }
+  .case.broke .casefound { opacity: 1; color: var(--vscode-errorForeground, #f48771); }
+  .fixes { margin: 0; padding-left: 20px; }
+  .casesadd { display: flex; gap: 6px; align-items: flex-start; }
+  .casesinput { flex: 1; min-width: 0; resize: vertical; font: inherit; color: inherit; background: var(--vscode-input-background, #3c3c3c); border: 1px solid var(--vscode-input-border, #8885); border-radius: 4px; padding: 6px 8px; }
+  .casesnote { margin-top: 6px; font-size: 12px; opacity: .8; }
+  .casesnote.bad { color: var(--vscode-errorForeground, #f48771); opacity: 1; }
   .proof .picturebar { display: flex; gap: 4px; margin: 0 12px 6px 28px; }
   .proof .livebox { position: relative; overflow: hidden; margin: 0 12px 12px 28px; border: 1px solid var(--vscode-panel-border, #8884); border-radius: 4px; background: #fff; }
   .proof .picture.fullview { position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column; padding: 10px 14px 14px; background: var(--vscode-editor-background, #1e1e1e); }
@@ -85,6 +108,7 @@ const STATUS_WORDS: Record<ReviewItem['status'], string> = {
   rejected: 'rejected',
   'sent-back': 'sent back',
   undone: 'undone',
+  'held-back': 'held back by a check',
 };
 
 const list = el('div', 'list');
@@ -109,8 +133,11 @@ function show(m: ToReview) {
   empty.hidden = has;
   list.replaceChildren();
   const waiting = m.items.filter((i) => i.status === 'proposed');
-  const done = m.items.filter((i) => i.status !== 'proposed');
+  const held = m.items.filter((i) => i.status === 'held-back');
+  const done = m.items.filter((i) => i.status !== 'proposed' && i.status !== 'held-back');
   if (waiting.length) list.append(el('div', 'group', `Waiting for you (${waiting.length})`), ...waiting.map(row));
+  // What a check stopped before it reached you: the checks at work, with why.
+  if (held.length) list.append(el('div', 'group', `Held back (${held.length})`), ...held.map(row));
   if (done.length) list.append(el('div', 'group', 'Done'), ...done.map(row));
   // Always at hand, not only when Review is empty.
   const more = iconButton('example', TRY_WORDS, { cls: 'try' });
@@ -127,9 +154,9 @@ function show(m: ToReview) {
 }
 
 function row(item: ReviewItem): HTMLElement {
-  const r = el('div', `row${item.status === 'proposed' ? ' waiting' : ''}${item.id === current?.selected ? ' on' : ''}`);
+  const r = el('div', `row${item.status === 'proposed' ? ' waiting' : item.status === 'held-back' ? ' held' : ''}${item.id === current?.selected ? ' on' : ''}`);
   const s = el('div', 's');
-  s.append(el('span', undefined, item.by.name), el('span', undefined, '·'), el('span', undefined, item.status === 'proposed' ? ago(item.createdAt) : STATUS_WORDS[item.status]));
+  s.append(el('span', undefined, item.by.name), el('span', undefined, '·'), el('span', undefined, item.status === 'proposed' || item.status === 'held-back' ? ago(item.createdAt) : STATUS_WORDS[item.status]));
   r.append(el('div', 't', item.title), s);
   r.addEventListener('click', () => vscode.postMessage({ type: 'select', id: item.id }));
   return r;
@@ -150,6 +177,18 @@ function drawDetail(item: ReviewItem) {
   const files = item.files.length;
   meta.append(status, el('span', undefined, `by ${item.by.name} · ${ago(item.createdAt)} · ${files} file${files === 1 ? '' : 's'}`));
   detail.append(meta);
+  if (item.status === 'held-back') {
+    const warn = el('div', 'warn');
+    warn.append(el('b', undefined, 'Held back by a check: it never reached you for approval.'), el('div', undefined, `${item.by.name} was told what to fix. What it tried, and why it was stopped, are below.`));
+    detail.append(warn);
+  }
+  // What was asked comes first: it's what the change is held to.
+  if (item.asked?.length) {
+    const asked = el('div', 'asked');
+    asked.append(el('div', 'lookhead', 'What was asked'));
+    for (const a of item.asked) asked.append(el('div', 'askline', `“${a}”`));
+    detail.append(asked);
+  }
   if (item.why) detail.append(el('p', 'why', item.why));
 
   if (item.conflicts.length) {
@@ -225,7 +264,8 @@ function drawProof(item: ReviewItem): HTMLElement[] {
       el('span', undefined, e.title),
       el('span', 'by', e.kind === 'note' ? `said by ${e.by}` : e.kind === 'picture' ? `drawn by ${e.by}` : `checked by ${e.by}`),
     );
-    entry.append(summary, el('pre', undefined, e.text));
+    entry.append(summary, e.logic ? drawLogic(item, e.logic) : el('pre', undefined, e.text));
+    if (e.logic) entry.open = true;
     // A picture is open from the start: it's the quickest proof to look at. It can also be tried live.
     if (e.src || e.card) entry.append(drawPicture(item, e));
     if (e.src) entry.open = true;
@@ -233,6 +273,69 @@ function drawProof(item: ReviewItem): HTMLElement[] {
   }
   out.push(box);
   return out;
+}
+
+/** Cases typed by the developer and not checked yet, per proposal (kept while Review redraws). */
+const typedCases = new Map<string, string>();
+
+/**
+ * The logic check's report: what the change means for how things behave (its promises), every case tried to break
+ * them (✓ held, ✗ broke), and the developer's own cases, which they can add and have checked.
+ */
+function drawLogic(item: ReviewItem, r: NonNullable<NonNullable<ReviewItem['evidence']>[number]['logic']>): HTMLElement {
+  const box = el('div', 'logic');
+  box.append(el('div', 'logichead', 'What this change means'));
+  if (r.looksOnly && !r.means.length) box.append(el('div', 'means', 'Looks only: nothing about how it behaves should change.'));
+  else {
+    const means = el('ol', 'means');
+    for (const m of r.means) means.append(el('li', undefined, m));
+    box.append(means);
+  }
+  const broke = r.cases.filter((c) => !c.ok).length;
+  box.append(el('div', 'logichead', `Cases tried to break it (${r.cases.length}${broke ? `, ${broke} broke` : ', none broke'})`));
+  const cases = el('div', 'cases');
+  for (const c of r.cases) {
+    const line = el('div', `case${c.ok ? '' : ' broke'}`);
+    const what = el('div', 'casewhat');
+    what.append(el('span', `mark ${c.ok ? 'ok' : 'bad'}`, c.ok ? '✓' : '✗'), el('span', 'casename', c.case));
+    const tags = el('span', 'tags');
+    if (c.promise) tags.append(el('span', 'tag', `promise ${c.promise}`));
+    if (c.by === 'developer') tags.append(el('span', 'tag yours', 'your case'));
+    tags.append(el('span', `tag ${c.how}`, c.how));
+    what.append(tags);
+    line.append(what, el('div', 'casefound', c.ok ? `→ ${c.found}` : `→ ${c.found}  (should: ${c.expected})`));
+    cases.append(line);
+  }
+  box.append(cases);
+  if (r.fixes.length) {
+    box.append(el('div', 'logichead', 'To fix'));
+    const fixes = el('ul', 'fixes');
+    for (const f of r.fixes) fixes.append(el('li', undefined, f));
+    box.append(fixes);
+  }
+  // Your own cases: one per line; the logic checker tries each against what the change means.
+  box.append(el('div', 'logichead', 'Your cases'));
+  const area = el('textarea', 'casesinput');
+  area.placeholder = 'One case per line, e.g. “Two quick clicks shouldn’t leave it in the wrong mode”';
+  area.value = typedCases.get(item.id) ?? '';
+  area.rows = 2;
+  area.addEventListener('input', () => typedCases.set(item.id, area.value));
+  const check = iconButton('play', 'Check these cases: the logic checker tries each one (uses your plan)');
+  const checking = item.checking;
+  check.disabled = !!checking?.progress;
+  check.addEventListener('click', () => {
+    const list = area.value.split('\n').map((l) => l.trim()).filter(Boolean);
+    if (!list.length) return area.focus();
+    typedCases.delete(item.id);
+    vscode.postMessage({ type: 'cases', id: item.id, cases: list });
+  });
+  const add = el('div', 'casesadd');
+  add.append(area, tray(el('div', 'buttons')));
+  add.lastElementChild!.append(check);
+  box.append(add);
+  if (checking?.progress) box.append(el('div', 'casesnote', checking.progress));
+  if (checking?.error) box.append(el('div', 'casesnote bad', checking.error));
+  return box;
 }
 
 /**

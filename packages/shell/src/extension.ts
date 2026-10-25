@@ -17,7 +17,8 @@ import { Review } from './review';
 import { ProjectSetups } from './projectSetup';
 import { askEntry, MemoryView, ProjectMemory } from './memoryView';
 import type { MemoryEntry } from './memory';
-import { Hub, run } from './hub/hub';
+import { claudeCommand, Hub, run } from './hub/hub';
+import { runLogicCheck } from './hub/logicCheck';
 import { DRAFTS_DIR, DraftStore } from './drafts';
 import { JobStore, finished } from './jobs';
 import { cardsTouched, draftItems } from './draftItems';
@@ -239,6 +240,11 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     proxyOptions: (root) => ({ fakes: () => proxies.fakesOf(root) }),
   });
   context.subscriptions.push(draftApps);
+  // Review: the developer's own cases, tried by the logic checker on a change (against what it means, when known).
+  review.setLogic((root, p, cases, means) => {
+    const model = vscode.workspace.getConfiguration('visualEditor.logicCheck').get<string>('model', 'sonnet');
+    return runLogicCheck(claudeCommand(), root, p.asked ?? [p.title], p.changes, model, cases, means ? { means } : undefined);
+  });
   // Review shows a picture in a proposal's proof live: the card's Playground with the proposal's changes on top while
   // it waits (as the files are now, once applied), in the draft's own app.
   review.setLive(async (root, p, card) => {
@@ -273,6 +279,14 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
       agentsView.refresh();
     },
     agents: () => registry.agents(),
+    // The logic check: a separate Claude (the developer's own login) reads what was asked and the change.
+    logicCheck: async (root, draft) => {
+      const model = vscode.workspace.getConfiguration('visualEditor.logicCheck').get<string>('model', 'sonnet');
+      log.appendLine(`Logic check (${model}) on “${draft.title}”…`);
+      const v = await runLogicCheck(claudeCommand(), root, draft.asked ?? [draft.title], draft.changes, model, draft.cases ?? []);
+      log.appendLine(typeof v === 'string' ? `Logic check couldn't run: ${v}` : `Logic check: ${v.passed ? 'passed' : 'problems'}${v.cost !== undefined ? ` (at pay-per-use prices $${v.cost.toFixed(2)})` : ''}.`);
+      return v;
+    },
     // The previewable cards a draft changes, as it leaves them (a new design is part of its card).
     cardsTouched: async (root, draft) => {
       const state = index.snapshot().find((s) => s.project.root === root);

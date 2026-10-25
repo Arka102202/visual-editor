@@ -4,11 +4,13 @@
 // No VS Code APIs here, so it can be tested on its own (file access is passed in).
 
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import type { LogicCase, LogicReport } from './hub/logicCheck';
 import { isAbsolute, join, normalize } from 'node:path';
 
 export const PROPOSALS_DIR = '.visual-editor/proposals';
 
-export type Status = 'proposed' | 'applied' | 'rejected' | 'sent-back' | 'undone';
+/** 'held-back': a check stopped it before it reached the developer (kept so they can see why; nothing to approve). */
+export type Status = 'proposed' | 'applied' | 'rejected' | 'sent-back' | 'undone' | 'held-back';
 
 export interface FileChange {
   /** Relative to the project's root, forward slashes. */
@@ -40,6 +42,8 @@ export interface Evidence {
   image?: string;
   /** The card a picture is of (its id), so Review can show it live. */
   card?: string;
+  /** The logic check's report: what the change means, and every case tried (logicCheck.ts). */
+  logic?: LogicReport;
 }
 
 export interface Proposal {
@@ -47,6 +51,10 @@ export interface Proposal {
   title: string;
   /** Why this change, in plain words. */
   why?: string;
+  /** What the developer asked for, in their words (the logic check's spec), oldest first. */
+  asked?: string[];
+  /** Cases the developer added for the logic check to try (kept when it's sent back and proposed again). */
+  cases?: string[];
   /** Who proposed it. */
   by: { kind: 'assistant' | 'agent' | 'plugin' | 'developer'; name: string };
   createdAt: string;
@@ -71,7 +79,7 @@ export interface Files {
 }
 
 const BY_KINDS = new Set(['assistant', 'agent', 'plugin', 'developer']);
-const STATUSES = new Set(['proposed', 'applied', 'rejected', 'sent-back', 'undone']);
+const STATUSES = new Set(['proposed', 'applied', 'rejected', 'sent-back', 'undone', 'held-back']);
 
 /** Is a proposed path a safe place inside the project? */
 export function safePath(path: string): boolean {
@@ -108,6 +116,8 @@ export function parseProposal(text: string, fallbackId: string): Proposal | stri
     id: typeof raw.id === 'string' && /^[\w-]+$/.test(raw.id) ? raw.id : fallbackId,
     title: raw.title.trim(),
     ...(typeof raw.why === 'string' ? { why: raw.why } : {}),
+    ...(Array.isArray(raw.asked) ? { asked: (raw.asked as unknown[]).filter((a): a is string => typeof a === 'string') } : {}),
+    ...(Array.isArray(raw.cases) ? { cases: (raw.cases as unknown[]).filter((a): a is string => typeof a === 'string') } : {}),
     by: { kind: BY_KINDS.has(by?.kind as string) ? (by!.kind as Proposal['by']['kind']) : 'assistant', name: typeof by?.name === 'string' ? by.name : 'Assistant' },
     createdAt,
     status,
@@ -136,6 +146,7 @@ export function parseEvidence(list: unknown[]): Evidence[] {
       // Only a picture in a draft's own folder.
       ...(typeof x.image === 'string' && /^\.visual-editor\/drafts\/[\w-]+\/[\w.-]+\.png$/.test(x.image) ? { image: x.image } : {}),
       ...(typeof x.card === 'string' ? { card: x.card } : {}),
+      ...(x.logic && typeof x.logic === 'object' ? { logic: parseLogic(x.logic as Record<string, unknown>) } : {}),
     }];
   });
 }
@@ -249,4 +260,15 @@ export class ProposalStore {
 /** A fresh id: time first, so names sort by when they were made. */
 export function newId(): string {
   return `${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+/** A logic report read from a file: only what makes sense is kept. */
+function parseLogic(x: Record<string, unknown>): LogicReport {
+  const strings = (v: unknown) => (Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string') : []);
+  const cases = (Array.isArray(x.cases) ? x.cases : []).flatMap((c: Record<string, unknown>): LogicCase[] =>
+    c && typeof c.case === 'string'
+      ? [{ case: c.case, ...(typeof c.promise === 'number' ? { promise: c.promise } : {}), expected: String(c.expected ?? ''), found: String(c.found ?? ''), ok: c.ok === true, by: c.by === 'developer' ? 'developer' : 'checker', how: c.how === 'run' ? 'run' : 'traced' }]
+      : [],
+  );
+  return { means: strings(x.means), looksOnly: x.looksOnly === true, cases, fixes: strings(x.fixes) };
 }

@@ -39,6 +39,19 @@
           "default": 0,
           "minimum": 0,
           "description": "Only if you pay Claude per use (an API key): the most an agent run in the background may spend, in US dollars, before it stops. 0: no limit. With a Claude subscription, runs use your plan's allowance like chat does; they're always limited to 3 rounds and 20 minutes, and you can stop them."
+        },
+        "visualEditor.logicCheck.model": {
+          "type": "string",
+          "enum": [
+            "sonnet",
+            "opus"
+          ],
+          "enumDescriptions": [
+            "Lighter on your plan's allowance; good for everyday changes.",
+            "The most thorough; uses more of your allowance."
+          ],
+          "default": "sonnet",
+          "description": "Which Claude model runs the logic check that every change passes before it reaches Review."
         }
       }
     },
