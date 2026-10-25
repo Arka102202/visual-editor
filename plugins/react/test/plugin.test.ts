@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { checkPlugin } from '../../../packages/shell/src/registry';
-import { parentRoute, reactPlugin, wantsFile } from '../src/plugin';
+import { parentRoute, reactPlugin, toMaps as reactPluginMaps, wantsFile } from '../src/plugin';
 
 const root = 'plugins/react/test/fixtures/web';
 const files: { path: string; text: string }[] = [];
@@ -54,4 +54,11 @@ test('react: a route sits inside the closest route its address starts with', () 
   assert.equal(parentRoute('/shop/:id/reviews', all), '/shop/:id');
   assert.equal(parentRoute('/shop', all), '/');
   assert.equal(parentRoute('/', all), undefined);
+});
+
+test('react: when an address is routed twice (a copy elsewhere), the card shows the page that can be found', () => {
+  const toMaps = (routes: { path: string; target?: string; label: string }[]) =>
+    reactPluginMaps({ components: [{ id: 'src/Home.tsx#Home', name: 'Home', path: 'src/Home.tsx', line: 0, kind: 'function', props: [], acceptsRest: false, renders: [], usedBy: [], hooks: [], data: [], states: { loading: false, error: false, empty: false }, routes: ['/'], isRoot: false, issues: [] }], routes: routes.map((r) => ({ ...r, file: 'src/routes.tsx', line: 0 })), apis: [], apiIssues: [], stats: { files: 1, parseErrors: [] } });
+  const { links } = toMaps([{ path: '/', label: 'shown' }, { path: '/', target: 'src/Home.tsx#Home', label: 'Home' }]);
+  assert.deepEqual((links ?? []).filter((l) => l.kind === 'shows').map((l) => `${l.from} → ${l.to}`), ['react:route:/ → react:component:src/Home.tsx#Home']);
 });

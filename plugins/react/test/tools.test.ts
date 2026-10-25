@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Item, ToolContext } from '@visual-editor/contract';
-import { checkVariantFilesTool, previewableText, rememberModel, variantBriefTool, variantRulesSkill } from '../src/tools';
+import { checkTypesTool, checkVariantFilesTool, previewableText, rememberModel, variantBriefTool, variantRulesSkill } from '../src/tools';
 import { reactPlugin } from '../src/plugin';
 import { readModel, toMaps } from '../src/cards';
 
@@ -55,9 +55,9 @@ test('previewable: search narrows it, and says when nothing matches', () => {
 });
 
 test('the React plugin hands the shell its tools and know-how', () => {
-  assert.deepEqual(reactPlugin.tools?.map((t) => t.name), ['previewable', 'variant_brief', 'check_variant_files']);
+  assert.deepEqual(reactPlugin.tools?.map((t) => t.name), ['previewable', 'variant_brief', 'check_variant_files', 'check_types']);
   assert.deepEqual(reactPlugin.skills?.map((s) => s.name), ['variant-rules']);
-  assert.deepEqual(reactPlugin.agents?.map((a) => a.name), ['new-variant']);
+  assert.deepEqual(reactPlugin.agents?.map((a) => a.name), ['make-previewable', 'new-variant']);
   assert.match(variantRulesSkill.text, /^# Variants: how a component or page is made previewable/, 'the rules doc, bundled as text');
 });
 
@@ -106,6 +106,7 @@ test('variant_brief: a previewable component: props, who uses it, its folder, de
   assert.match(text, /^# ProjectCard \(component\) · react:component:src\/pages\/ProjectList\/components\/ProjectCard\/index\.tsx#ProjectCard/);
   assert.match(text, /Props: project: Project; accentColor/);
   assert.match(text, /Used by: ProjectList \(src\/pages\/ProjectList\/ProjectList\.tsx\)/);
+  assert.match(text, /Seen in the app at: no page found that shows it\./, '(this small project has no routes)');
   assert.match(text, /Previewable \(version 2\)\. Folder: src\/pages\/ProjectList\/components\/ProjectCard/);
   assert.match(text, /Files: chooser index\.tsx, types ProjectCard\.types\.ts, dynamic ProjectCard\.data\.tsx, static ProjectCard\.static\.tsx, starting data ProjectCard\.mock\.ts, switcher ProjectCard\.switcher\.tsx/);
   assert.match(text, /- Default \(id default\) · ProjectCard\.variant\.tsx · in use\n- Compact \(id compact\) · ProjectCard\.compact\.variant\.tsx\n/);
@@ -150,4 +151,11 @@ export default function ProjectCardWide({ name }: ProjectCardView) {
   // A draft that changes no code: no verdict (it isn't proof either way); code but no folder: nothing broken.
   assert.equal(await run(checkVariantFilesTool, {}, context({ 'README.md': 'hi' })), 'Nothing for this check: the draft changes no code.');
   assert.equal(await run(checkVariantFilesTool, {}, context({ 'src/util.ts': 'export const x = 1\n' })), 'The draft changes no variant folder, and breaks no import.\nPASSED');
+});
+
+test('check_types: no verdict when there is nothing for TypeScript to check', async () => {
+  // (The check itself runs the project's own TypeScript in its own process: proven on a real project.)
+  assert.equal(await run(checkTypesTool, {}, context()), 'This project has no tsconfig.json: no TypeScript to check.');
+  const withConfig = (draft?: Record<string, string | null>) => ({ ...context(draft), project: { ...context(draft).project, files: [...context(draft).project.files, 'tsconfig.json'] } });
+  assert.equal(await run(checkTypesTool, {}, withConfig({ 'README.md': 'hi' })), 'Nothing for TypeScript to check: the draft changes no code.');
 });

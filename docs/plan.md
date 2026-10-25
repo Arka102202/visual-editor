@@ -214,7 +214,7 @@ A one-line proposal, with the before and after shown live in Review, and Undo.
 - **You get:** every agent with what it does, Run now, what's running, and the last results with their proof.
 - **Done when:** you can start, watch, stop and review any agent from one place.
 
-### 2.8 Agent: Make previewable
+### 2.8 Agent: Make previewable ✅ done
 - **You get:** an existing component or page split into the two parts.
 - **The checker proves:**
   - the rules pass;

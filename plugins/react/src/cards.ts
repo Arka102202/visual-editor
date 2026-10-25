@@ -115,7 +115,14 @@ export function toMaps(model: FeModel): ReadResult {
   }
 
   // Pages: one card per route, inside its closest parent route; each shows its component.
-  const routes = model.routes.filter((r, i, all) => all.findIndex((x) => x.path === r.path) === i);
+  // One card per address: the route whose page is known wins (a copy of the routes elsewhere, e.g. a tool's folder,
+  // may name a page that can't be found).
+  const byPath = new Map<string, (typeof model.routes)[number]>();
+  for (const r of model.routes) {
+    const had = byPath.get(r.path);
+    if (!had || (!had.target && r.target)) byPath.set(r.path, r);
+  }
+  const routes = [...byPath.values()];
   const paths = routes.map((r) => r.path);
   for (const r of routes) {
     const target = r.target ? byId.get(r.target) : undefined;

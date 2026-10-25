@@ -6,6 +6,10 @@ import { componentId, wantsFile } from './cards';
 import type { FeComponent, FeModel } from './read/model';
 import type { VariantFolder } from './read/variants';
 import { readingWorker } from './workerClient';
+import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import type { TypeCheck } from './types/typeCheck';
 import VARIANT_RULES from '../../../docs/variants.md';
 
 /** Components and pages Preview can show (docs/variants.md), with their designs; and the ones it can't yet. */
@@ -120,6 +124,8 @@ export function briefText(item: Item, c: FeComponent, model: FeModel, ctx: Pick<
   out.push(c.props.length ? `Props: ${c.props.map((p) => `${p.name}${p.optional ? '?' : ''}${p.type ? `: ${p.type}` : ''}${p.isCallback ? ' (callback)' : ''}`).join('; ')}${c.acceptsRest ? '; and more passed through ({...rest})' : ''}` : 'Props: none.');
   const users = ctx.links.filter((l) => l.to === item.id && (l.kind === 'renders' || l.kind === 'uses')).map((l) => label(l.from)).filter((i): i is Item => !!i);
   if (users.length) out.push(`Used by: ${users.map((u) => `${u.label} (${u.source?.path ?? u.id})`).join(', ')}`);
+  const seen = seenAt(item.id, ctx);
+  out.push(seen.length ? `Seen in the app at: ${seen.join(', ')} (compare_app on one of these shows whether a change keeps its look)` : 'Seen in the app at: no page found that shows it.');
   const draws = [...new Set(c.renders.map((r) => r.tag))];
   if (draws.length) out.push(`Draws: ${draws.join(', ')}`);
   if (c.data.length) out.push('Data it uses:', ...c.data.map((d) => `- ${DATA_WORDS[d.kind] ?? d.kind} ${d.label}${d.via ? ` (through ${d.via})` : ''}${d.trigger ? `, ${d.trigger === 'load' ? 'on load' : 'on a click'}` : ''} · ${d.path}:${d.line + 1}`));
@@ -130,6 +136,28 @@ export function briefText(item: Item, c: FeComponent, model: FeModel, ctx: Pick<
   else out.push('', ...plannedFolder(c, model));
   out.push('', 'The rules are in the visual-editor:variant-rules skill. Work in a draft (save_draft), then check it with check_variant_files (draft: its id).');
   return out.join('\n');
+}
+
+/** The app's addresses whose pages show a card: up the map's lines (who draws it) to the routes that show them. */
+function seenAt(id: string, ctx: Pick<ToolContext, 'items' | 'links'>): string[] {
+  const routes = new Set<string>();
+  const done = new Set<string>([id]);
+  let level = [id];
+  for (let depth = 0; depth < 10 && level.length; depth++) {
+    const next: string[] = [];
+    for (const at of level) {
+      for (const l of ctx.links) {
+        if (l.to !== at) continue;
+        if (l.kind === 'shows') routes.add(ctx.items.find((i) => i.id === l.from)?.label ?? l.from);
+        else if ((l.kind === 'renders' || l.kind === 'uses') && !done.has(l.from)) {
+          done.add(l.from);
+          next.push(l.from);
+        }
+      }
+    }
+    level = next;
+  }
+  return [...routes].sort((a, b) => a.length - b.length || a.localeCompare(b)).slice(0, 8);
 }
 
 function folderText(f: VariantFolder): string[] {
@@ -218,6 +246,59 @@ export const checkVariantFilesTool: PluginTool = {
     return out.join('\n');
   },
 };
+
+// ---------------------------------------------------------------------------
+// check_types
+// ---------------------------------------------------------------------------
+
+export const checkTypesTool: PluginTool = {
+  name: 'check_types',
+  title: 'Check TypeScript',
+  summary: 'Runs your project’s own TypeScript check on a change, with your settings, and reports only the problems the change would add.',
+  description:
+    'Runs the project\'s own TypeScript (its tsconfig, and the configs it refers to) on the project as a draft would leave it, and reports only the problems the draft adds (problems already in the project don\'t count against it). Ends with PASSED or PROBLEMS. Without a draft: how many problems the project has now.',
+  checks: true,
+  run: async (_input, ctx) => {
+    if (!ctx.project.files.some((f) => /(^|\/)tsconfig(\.[\w-]+)?\.json$/.test(f))) return 'This project has no tsconfig.json: no TypeScript to check.';
+    // A draft without code (a README…): no verdict either way.
+    if (ctx.draft && !ctx.draft.changes.some((c) => /\.(tsx?|mts|cts|jsx?)$/.test(c.path))) return 'Nothing for TypeScript to check: the draft changes no code.';
+    const files = Object.fromEntries((ctx.draft?.changes ?? []).map((c) => [c.path, c.after]));
+    const r = await runTypeCheck(ctx.project.root, files);
+    if (typeof r === 'string') return { problem: r };
+    const where = r.configs.join(', ') || 'tsconfig.json';
+    if (!ctx.draft) return `${r.before} TypeScript problem${r.before === 1 ? '' : 's'} in the project now (${where}).`;
+    if (!r.added.length) return `No new TypeScript problems (checked with ${where}${r.before ? `; the project already has ${r.before}, not from this draft` : ''}).\nPASSED`;
+    const shown = r.added.slice(0, 25).map((p) => `- ${p.file}${p.line ? `:${p.line}` : ''}: ${p.message} (TS${p.code})`);
+    return [`${r.added.length} new TypeScript problem${r.added.length === 1 ? '' : 's'} from the draft (${where}):`, ...shown, ...(r.added.length > 25 ? [`…and ${r.added.length - 25} more.`] : []), 'PROBLEMS'].join('\n');
+  },
+};
+
+/** The check in its own process (dist/typesCheck.js), with a memory limit and a time limit. */
+function runTypeCheck(root: string, files: Record<string, string | null>): Promise<TypeCheck | string> {
+  const script = [join(__dirname, 'typesCheck.js'), join(__dirname, '..', 'dist', 'typesCheck.js')].find((p) => existsSync(p));
+  if (!script) return Promise.resolve('The TypeScript check is missing from the React plugin (reinstall it).');
+  return new Promise((done) => {
+    const child = spawn(process.execPath, ['--max-old-space-size=2048', script], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: ['pipe', 'pipe', 'pipe'] });
+    let out = '';
+    let err = '';
+    const timer = setTimeout(() => {
+      child.kill();
+      done('The TypeScript check took more than 3 minutes and was stopped.');
+    }, 180_000);
+    child.stdout.on('data', (d: Buffer) => (out += d));
+    child.stderr.on('data', (d: Buffer) => (err += d));
+    child.on('close', () => {
+      clearTimeout(timer);
+      try {
+        const r = JSON.parse(out) as TypeCheck | { error: string };
+        done('error' in r ? r.error : r);
+      } catch {
+        done(`The TypeScript check stopped: ${(err || out).trim().slice(0, 300) || 'no answer'}`);
+      }
+    });
+    child.stdin.end(JSON.stringify({ root, files }));
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Know-how
