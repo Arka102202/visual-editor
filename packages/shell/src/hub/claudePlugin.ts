@@ -122,7 +122,7 @@ const CHECKER = `You are the checker of a Visual Editor job: you are given a job
 
 /** The tools each role always has, and the ones it never gets (so neither can skip the other). */
 const ROLE_TOOLS = { worker: ['save_draft', 'read_draft', 'job_status', 'job_hand_in'], checker: ['read_draft', 'add_evidence', 'job_status', 'job_verdict'] };
-const NEVER = { worker: ['job_verdict', 'submit_draft', 'propose_change'], checker: ['save_draft', 'job_hand_in', 'submit_draft', 'propose_change'] };
+const NEVER = { worker: ['job_verdict', 'submit_draft', 'propose_change', 'start_session', 'continue_proposal'], checker: ['save_draft', 'job_hand_in', 'submit_draft', 'propose_change', 'start_session', 'continue_proposal'] };
 
 /**
  * A part's tools in Claude Code's names: its own (the hub's reading tools when it says none), plus what its role always

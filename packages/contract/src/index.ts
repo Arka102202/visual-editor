@@ -216,6 +216,11 @@ export interface PluginTool {
    * An answer whose last line is PASSED or PROBLEMS is marked passed or not.
    */
   checks?: boolean;
+  /**
+   * A check always planned for a change (e.g. type errors on any code): the check planner can't leave it out, the
+   * developer can. Otherwise the planner decides whether it applies.
+   */
+  always?: boolean;
   run(input: Record<string, unknown>, context: ToolContext): ToolAnswer | Promise<ToolAnswer>;
 }
 

@@ -10,8 +10,11 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { Disposable } from '@visual-editor/contract';
 import type { AgentsState, ClaudeAgents } from './claudeAgents';
+import { GUARD_MARK, lock, locked, quote, unlock } from './claudeLock';
 import { startHttpHost, type HttpHost } from './http';
-import { createHubServer, friendlyClient, SERVER_NAME, type HubHost } from './tools';
+import { createHubServer, draftFlow, friendlyClient, SERVER_NAME, type HubHost } from './tools';
+import type { CheckPlan, PlanEdits } from './checkPlan';
+import type { Proposal } from '../proposals';
 
 const PORT_KEY = 'visualEditor.hub.port';
 /** Claude Code's own settings, where it keeps which MCP servers each folder uses. */
@@ -32,6 +35,8 @@ export interface Assistant {
   talking: boolean;
   /** Visual Editor's agents and know-how (its Claude Code plugin) are installed for this folder. */
   agents: AgentsState;
+  /** It changes the project's files only through Review (claudeLock.ts): locked in its settings for this folder. */
+  reviewOnly: boolean;
 }
 
 export class Hub implements vscode.Disposable {
@@ -48,7 +53,33 @@ export class Hub implements vscode.Disposable {
     private readonly agents?: ClaudeAgents,
   ) {
     // Connected or disconnected some other way (a terminal, Claude Code's /mcp): the list follows.
-    watchFile(claudeConfig(), { interval: 2000 }, () => this.fire());
+    watchFile(claudeConfig(), { interval: 2000 }, () => {
+      this.syncLock();
+      this.fire();
+    });
+  }
+
+  /** The "Review only" setting: Claude Code changes files only through Visual Editor (on unless turned off). */
+  get reviewOnly(): boolean {
+    return vscode.workspace.getConfiguration('visualEditor.claude').get<boolean>('reviewOnly', true);
+  }
+
+  /**
+   * Puts the Review-only lock on a connected folder (again, so its check runs from this version of Visual Editor), or
+   * takes it off when the setting is off or Claude Code isn't connected. `show`: the Assistants list follows.
+   */
+  syncLock(show = false) {
+    const folder = this.folder;
+    if (!folder) return;
+    try {
+      if (this.reviewOnly && this.claudeState() !== 'off') {
+        const guard = `VE=${GUARD_MARK} ELECTRON_RUN_AS_NODE=1 ${quote(process.execPath)} ${quote(this.context.asAbsolutePath('dist/claudeGuard.js'))}`;
+        lock(folder, guard);
+      } else if (locked(folder)) unlock(folder);
+    } catch (e) {
+      this.log.appendLine(`The Review-only lock couldn't be ${this.reviewOnly ? 'set' : 'taken off'}: ${e instanceof Error ? e.message : e}`);
+    }
+    if (show) this.fire();
   }
 
   /** The folder Claude Code is connected for (its "project"): the first one open. */
@@ -90,6 +121,7 @@ export class Hub implements vscode.Disposable {
       this.problem = `The assistant hub couldn't start: ${e instanceof Error ? e.message : e}`;
       this.log.appendLine(this.problem);
     }
+    this.syncLock();
     this.fire();
   }
 
@@ -113,7 +145,7 @@ export class Hub implements vscode.Disposable {
   /** Every assistant that can connect, with its state. */
   assistants(): Assistant[] {
     const folder = this.folder;
-    return [{ id: 'claude', name: 'Claude Code', state: this.claudeState(), talking: this.connected().includes('Claude Code'), agents: folder && this.agents ? this.agents.state(folder) : 'off' }];
+    return [{ id: 'claude', name: 'Claude Code', state: this.claudeState(), talking: this.connected().includes('Claude Code'), agents: folder && this.agents ? this.agents.state(folder) : 'off', reviewOnly: !!folder && locked(folder) }];
   }
 
   /** Assistants that talked to the hub since VS Code started, by name. */
@@ -140,9 +172,10 @@ export class Hub implements vscode.Disposable {
       this.problem = undefined;
       // Its agents and know-how come with it, for this folder too.
       const agentsProblem = await this.agents?.install(folder);
+      this.syncLock();
       this.fire();
       void vscode.window.showInformationMessage(
-        `Claude Code is connected to Visual Editor for this folder${agentsProblem ? '' : ', with Visual Editor’s agents'}. Start a new Claude Code session (or run /mcp), then ask in words, e.g. "give me an overview of this project". Its changes arrive in Review.`,
+        `Claude Code is connected to Visual Editor for this folder${agentsProblem ? '' : ', with Visual Editor’s agents'}. Start a new Claude Code session (or run /mcp), then ask in words, e.g. "give me an overview of this project". ${this.reviewOnly ? 'It changes files only through Review.' : 'Its proposals arrive in Review.'}`,
       );
       if (agentsProblem) void vscode.window.showWarningMessage(`Visual Editor’s agents weren’t added: ${agentsProblem}`);
       return;
@@ -169,9 +202,27 @@ export class Hub implements vscode.Disposable {
       return;
     }
     await this.agents?.uninstall(folder);
+    if (locked(folder)) unlock(folder);
     for (const name of [...this.clients]) if (friendlyClient(name) === 'Claude Code') this.clients.delete(name);
     this.fire();
     void vscode.window.showInformationMessage('Claude Code is disconnected from Visual Editor for this folder. Start a new Claude Code session for it to take effect.');
+  }
+
+  /** A finished draft (Done in a session): its test cases are written, in the background, for the developer to run. */
+  planDraft(root: string, id: string): Promise<CheckPlan | string> {
+    const s = this.host.projects().find((p) => p.project.root === root);
+    if (!s) return Promise.resolve('That project isn’t open.');
+    return draftFlow(this.host).requestChecks(s, id);
+  }
+
+  /**
+   * The developer ran a draft's test cases (as they left them): they run in the background, and it goes to Review or
+   * is held back. A string says why they can't run now; otherwise the promise of how it ends.
+   */
+  runChecks(root: string, id: string, edits: PlanEdits): string | { promise: Promise<{ proposal: Proposal } | string> } {
+    const s = this.host.projects().find((p) => p.project.root === root);
+    if (!s) return 'That project isn’t open.';
+    return draftFlow(this.host).runChecks(s, id, edits, 'ask Claude to fix it, then run the checks again');
   }
 
   /** Adds Visual Editor's agents and know-how to Claude Code for this folder (connected before they existed). */

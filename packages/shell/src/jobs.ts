@@ -73,6 +73,8 @@ export function nextStep(j: Job): string {
         ? `Run the worker (round 1 of ${j.rounds}) with the request.`
         : `Run the worker again (round ${j.round} of ${j.rounds}) with the checker's reasons: ${lastReasons(j) ?? '(see the history)'}`;
     case 'checking':
+      // (The checker passed it, and Visual Editor's checks are running on it before it goes to Review.)
+      if (j.history.at(-1)?.who === 'Visual Editor' && j.history.at(-1)?.what.startsWith('Checking the pass')) return 'Visual Editor is checking the checker\'s pass before it goes to Review (about a minute or two). Call job_status again in a minute.';
       return `Run the checker on draft ${j.draft} (round ${j.round} of ${j.rounds}).`;
     case 'passed':
       return `Done: it passed and is waiting in Review as proposal ${j.proposal}. Tell the developer.`;
@@ -86,7 +88,8 @@ export function nextStep(j: Job): string {
 }
 
 export function lastReasons(j: Job): string | undefined {
-  return [...j.history].reverse().find((h) => h.who === 'checker' && h.what.startsWith('Sent back'))?.what.replace(/^Sent back:\s*/, '');
+  // (The checker's, or Visual Editor's when its own checks stopped the checker's pass.)
+  return [...j.history].reverse().find((h) => (h.who === 'checker' || h.who === 'Visual Editor') && h.what.startsWith('Sent back'))?.what.replace(/^Sent back:\s*/, '');
 }
 
 /** Reads a job file's contents (it may have been edited by hand). */

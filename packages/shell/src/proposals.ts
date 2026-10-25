@@ -4,13 +4,13 @@
 // No VS Code APIs here, so it can be tested on its own (file access is passed in).
 
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import type { LogicCase, LogicReport } from './hub/logicCheck';
+import { overrule, readRun, type LogicCase, type LogicReport } from './hub/logicCheck';
 import { isAbsolute, join, normalize } from 'node:path';
 
 export const PROPOSALS_DIR = '.visual-editor/proposals';
 
 /** 'held-back': a check stopped it before it reached the developer (kept so they can see why; nothing to approve). */
-export type Status = 'proposed' | 'applied' | 'rejected' | 'sent-back' | 'undone' | 'held-back';
+export type Status = 'awaiting-checks' | 'proposed' | 'applied' | 'rejected' | 'sent-back' | 'undone' | 'held-back';
 
 export interface FileChange {
   /** Relative to the project's root, forward slashes. */
@@ -44,6 +44,8 @@ export interface Evidence {
   card?: string;
   /** The logic check's report: what the change means, and every case tried (logicCheck.ts). */
   logic?: LogicReport;
+  /** It failed, and the developer let the change go anyway (with why): shown wherever the proof is. */
+  bypassed?: { reason: string; at: string };
 }
 
 export interface Proposal {
@@ -68,6 +70,8 @@ export interface Proposal {
   history: { at: string; status: Status; note?: string }[];
   /** Proof for it (from its draft): what was checked, with what result. Undefined: it didn't come from a draft. */
   evidence?: Evidence[];
+  /** It's being changed in a design session now (that session's draft): it can't be approved until that's done. */
+  session?: string;
 }
 
 /** File access for applying: VS Code's in the editor (so open files update), plain fs in tests. */
@@ -79,7 +83,7 @@ export interface Files {
 }
 
 const BY_KINDS = new Set(['assistant', 'agent', 'plugin', 'developer']);
-const STATUSES = new Set(['proposed', 'applied', 'rejected', 'sent-back', 'undone', 'held-back']);
+const STATUSES = new Set(['awaiting-checks', 'proposed', 'applied', 'rejected', 'sent-back', 'undone', 'held-back']);
 
 /** Is a proposed path a safe place inside the project? */
 export function safePath(path: string): boolean {
@@ -127,7 +131,51 @@ export function parseProposal(text: string, fallbackId: string): Proposal | stri
     ...(typeof raw.look === 'string' && /^\/(?![/\\])/.test(raw.look) && raw.look.length < 2000 ? { look: raw.look } : {}),
     history: Array.isArray(raw.history) ? (raw.history as Proposal['history']) : [{ at: createdAt, status }],
     ...(Array.isArray(raw.evidence) ? { evidence: parseEvidence(raw.evidence) } : {}),
+    ...(typeof raw.session === 'string' && /^[\w-]+$/.test(raw.session) ? { session: raw.session } : {}),
   };
+}
+
+/** The title "does the app look the same" proof starts with (compare_app). */
+export const LOOKS_SAME = 'Looks the same in the app';
+
+/**
+ * Whether a proof that failed holds a change back. "Looks the same" only means something for a change that must leave
+ * the look alone (an agent's job that promises it, like making a component previewable); for any other change looking
+ * different is the point, so it is kept as information only.
+ */
+export function holdsBack(e: Evidence, lookMustStay: boolean): boolean {
+  return e.passed === false && !e.bypassed && (lookMustStay || !e.title.startsWith(LOOKS_SAME));
+}
+
+/** The checks that hold a version back (what the developer can bypass), newest kept per title. */
+export function failedChecks(list: Evidence[], revision: number, lookMustStay = false): Evidence[] {
+  return list.filter((e) => e.revision === revision && holdsBack(e, lookMustStay));
+}
+
+/** Why a check failed, in words for the developer: the logic check's broken cases, or the check's own text. */
+export function whyFailed(e: Evidence): string {
+  if (!e.logic) return e.text;
+  const broke = e.logic.cases.filter((c) => !c.ok && !c.overruled);
+  return broke.map((c) => `✗ ${c.case}: expected ${c.expected}, but ${c.found}`).join('\n') || e.text;
+}
+
+/** Proof with checks of one version (by title) bypassed by the developer, with why. */
+export function bypassProof(list: Evidence[], revision: number, titles: string[], reason: string, at = new Date().toISOString()): Evidence[] {
+  return list.map((e) => (e.revision === revision && titles.includes(e.title) && e.passed === false ? { ...e, bypassed: { reason, at } } : e));
+}
+
+/**
+ * Proof with the developer overruling broken logic-check cases on one version (`which`: their places in the report, or
+ * all that broke), with why. The logic check's proof then passes when nothing else in it broke.
+ */
+export function overruleProof(list: Evidence[], revision: number, which: number[] | 'all', note: string): Evidence[] {
+  return list.map((e) => {
+    if (!e.logic || e.revision !== revision) return e;
+    const pick = which === 'all' ? e.logic.cases.flatMap((c, i) => (c.ok ? [] : [i])) : which;
+    const r = overrule(e.logic, pick, note);
+    const { passed, ...logic } = r;
+    return { ...e, logic, passed, text: `${e.text}\nOverruled by the developer: ${pick.map((i) => e.logic!.cases[i]?.case).filter(Boolean).join('; ')}. Why: ${note}` };
+  });
 }
 
 /** Proof read from a file: entries that aren't proof are left out. */
@@ -147,6 +195,7 @@ export function parseEvidence(list: unknown[]): Evidence[] {
       ...(typeof x.image === 'string' && /^\.visual-editor\/drafts\/[\w-]+\/[\w.-]+\.png$/.test(x.image) ? { image: x.image } : {}),
       ...(typeof x.card === 'string' ? { card: x.card } : {}),
       ...(x.logic && typeof x.logic === 'object' ? { logic: parseLogic(x.logic as Record<string, unknown>) } : {}),
+      ...(x.bypassed && typeof (x.bypassed as Record<string, unknown>).reason === 'string' ? { bypassed: { reason: String((x.bypassed as Record<string, unknown>).reason), at: String((x.bypassed as Record<string, unknown>).at ?? '') } } : {}),
     }];
   });
 }
@@ -267,7 +316,7 @@ function parseLogic(x: Record<string, unknown>): LogicReport {
   const strings = (v: unknown) => (Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string') : []);
   const cases = (Array.isArray(x.cases) ? x.cases : []).flatMap((c: Record<string, unknown>): LogicCase[] =>
     c && typeof c.case === 'string'
-      ? [{ case: c.case, ...(typeof c.promise === 'number' ? { promise: c.promise } : {}), expected: String(c.expected ?? ''), found: String(c.found ?? ''), ok: c.ok === true, by: c.by === 'developer' ? 'developer' : 'checker', how: c.how === 'run' ? 'run' : 'traced' }]
+      ? [{ case: c.case, ...(typeof c.promise === 'number' ? { promise: c.promise } : {}), expected: String(c.expected ?? ''), found: String(c.found ?? ''), ok: c.ok === true, by: c.by === 'developer' ? 'developer' : 'checker', how: c.how === 'run' ? 'run' : 'traced', ...(readRun(c.run) ? { run: readRun(c.run) } : {}), ...(c.overruled && typeof (c.overruled as Record<string, unknown>).note === 'string' ? { overruled: c.overruled as { note: string; at: string } } : {}) }]
       : [],
   );
   return { means: strings(x.means), looksOnly: x.looksOnly === true, cases, fixes: strings(x.fixes) };

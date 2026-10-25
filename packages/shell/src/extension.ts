@@ -2,13 +2,14 @@
 // memory and the assistant hub. Plugins find it through its exported API (see @visual-editor/contract).
 
 import * as vscode from 'vscode';
-import { CONTRACT_VERSION, type Plugin, type ShellApi } from '@visual-editor/contract';
+import { CONTRACT_VERSION, type Item, type Plugin, type ShellApi } from '@visual-editor/contract';
 import { PluginRegistry } from './registry';
 import { PluginsView } from './pluginsView';
 import { ProjectIndex } from './projectIndex';
 import { ProjectsView } from './projectsView';
 import { findWorkspace, isIgnoredPath, isProjectFile } from './projects';
 import { basename, join, relative, sep } from 'node:path';
+import { mkdirSync } from 'node:fs';
 import { CurrentProject } from './currentProject';
 import { MapPanel } from './mapPanel';
 import { AppProxies } from './proxy/appProxies';
@@ -18,8 +19,13 @@ import { ProjectSetups } from './projectSetup';
 import { askEntry, MemoryView, ProjectMemory } from './memoryView';
 import type { MemoryEntry } from './memory';
 import { claudeCommand, Hub, run } from './hub/hub';
-import { runLogicCheck } from './hub/logicCheck';
-import { DRAFTS_DIR, DraftStore } from './drafts';
+import { askClaude, otherState, runCases, runLogicCheck, type LogicCase, type LogicVerdict, type RunPlaces } from './hub/logicCheck';
+import { runTester } from './hub/tester';
+import { planPrompt, readPlan } from './hub/checkPlan';
+import { glance, runCase, startUrl, type RunSpec } from './caseRunner';
+import { DRAFTS_DIR, DraftStore, type Draft } from './drafts';
+import { Sessions } from './session';
+import { failedChecks } from './proposals';
 import { JobStore, finished } from './jobs';
 import { cardsTouched, draftItems } from './draftItems';
 import { DraftApps } from './proxy/draftApps';
@@ -240,17 +246,147 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     proxyOptions: (root) => ({ fakes: () => proxies.fakesOf(root) }),
   });
   context.subscriptions.push(draftApps);
-  // Review: the developer's own cases, tried by the logic checker on a change (against what it means, when known).
-  review.setLogic((root, p, cases, means) => {
+  // A change as the logic check sees it: its cards read as it leaves them, and where its cases can be run for real (the
+  // Playgrounds of the cards it touches, and the app's pages).
+  // (What each place showed when the test cases were written, by draft version: the scenarios run against the same.)
+  const seenFor = new Map<string, NonNullable<Awaited<ReturnType<typeof changeSeen>>>>();
+  const changeSeen = async (root: string, shown: { id: string; revision: number; changes: Draft['changes'] }) => {
+    const state = index.snapshot().find((s) => s.project.root === root);
+    if (!state) return undefined;
+    const { project, items } = await draftItems(state, shown, (path) => vscodeFiles(root, changes).read(path));
+    const touched = cardsTouched(items, shown.changes.map((c) => c.path));
+    const places: RunPlaces = {
+      cards: touched.slice(0, 4).map((i) => ({ id: i.id, name: i.label, designs: i.preview!.variants.map((v) => ({ id: v.id, name: v.name, inUse: v.inUse })), states: i.preview!.states })),
+      pages: items.filter((i) => i.kind === 'route' && !/[:*]/.test(i.label)).map((i) => ({ path: i.label })).slice(0, 4),
+    };
+    const pageOf = (id: string) => {
+      const it = items.find((i) => i.id === id);
+      const plugin = it && state.detected.find(({ plugin: x }) => it.id.startsWith(`${x.id}:`))?.plugin;
+      return it && plugin?.previewPage?.(it, project);
+    };
+    // What each place really shows now, with the change: each card in each of its states (each has its own fixed data),
+    // and each page. So the checker names what's there, in the state it's there.
+    const texts = new Map<string, Record<string, string>>();
+    if (places.cards.length || places.pages.length) {
+      try {
+        const origin = await draftApps.open(root, shown, pageOf);
+        const looks = places.cards.flatMap((c) => c.states.slice(0, 8).map((state) => ({ c, state, url: startUrl(origin, { where: 'playground', card: c.id, design: c.designs.find((d) => d.inUse)?.id, state, steps: [], expect: [] }) })));
+        const pages = places.pages.map((x) => ({ x, url: startUrl(origin, { where: 'app', page: x.path, steps: [], expect: [] }) }));
+        const release = draftApps.hold(root, shown.id);
+        const shows = await glance([...looks.map((l) => l.url), ...pages.map((p) => p.url)]).finally(release);
+        looks.forEach(({ c, state }, n) => {
+          c.shows = { ...c.shows, [state]: shows[n].line };
+          texts.set(c.id, { ...texts.get(c.id), [state]: shows[n].text });
+        });
+        pages.forEach(({ x }, n) => (x.shows = shows[looks.length + n].line));
+        draftApps.touch();
+      } catch (e) {
+        log.appendLine(`The change's app couldn't be looked at before the logic check: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
+      }
+    }
+    return { items, places, pageOf, texts };
+  };
+  // The cases the checker gave steps for, run in the change's own app (each with its fake answers, if any).
+  // The scenarios run (and the tester) in the change's own app, which is held for them till they're done: nothing else
+  // stops it, or swaps it for another version, meanwhile.
+  const runInApp = async (root: string, asked: string[], shown: { id: string; revision: number; changes: Draft['changes'] }, seen: Parameters<typeof runInAppHeld>[3], v: LogicVerdict): Promise<LogicVerdict> => {
+    let release = () => {};
+    try {
+      return await runInAppHeld(root, asked, shown, seen, v, (r) => (release = r));
+    } finally {
+      release();
+    }
+  };
+  const runInAppHeld = async (root: string, asked: string[], shown: { id: string; revision: number; changes: Draft['changes'] }, seen: { items: Item[]; pageOf: (id: string) => string | undefined; texts: Map<string, Record<string, string>> }, v: LogicVerdict, held?: (release: () => void) => void): Promise<LogicVerdict> => {
+    const runnable = v.cases.filter((c) => c.run).length;
+    if (!runnable) return v;
+    let origin: string;
+    try {
+      origin = await draftApps.open(root, shown, seen.pageOf);
+      held?.(draftApps.hold(root, shown.id));
+    } catch (e) {
+      const why = e instanceof Error ? e.message.split('\n')[0] : String(e);
+      log.appendLine(`Cases couldn't be run in the app: ${why}`);
+      return { ...v, cases: v.cases.map((c) => (c.run ? { ...c, found: `${c.found} (couldn't be run: ${why})` } : c)) };
+    }
+    log.appendLine(`Running ${runnable} case(s) in the change's app…`);
+    // A state is shown in one design: the one in use, unless the case says.
+    const prepared = (spec: RunSpec): RunSpec => {
+      const inUse = seen.items.find((i) => i.id === spec.card)?.preview?.variants.find((x) => x.inUse)?.id;
+      return spec.where === 'playground' && !spec.design && inUse ? { ...spec, design: inUse } : spec;
+    };
+    // (What each run's page showed at the end, by its spec.)
+    const afters = new Map<RunSpec, string>();
+    const out = await runCases(v, async (spec) => {
+      const run = prepared(spec);
+      draftApps.fake(root, shown.id, run.api);
+      try {
+        const r = await runCase(startUrl(origin, run), run);
+        // Text a case expected in one state that is only in another state's fixed data: the case mixed up the states
+        // (the change shows it where its data has it), so it isn't counted against the change.
+        const other = !r.ok && r.missing && run.card && run.state ? otherState(r.missing, run.state, seen.texts.get(run.card) ?? {}) : undefined;
+        if (other) return { ok: false, ran: false, found: `it expected ${r.missing!.map((t) => `“${t}”`).join(', ')} in the “${run.state}” state, but that is in the “${other}” state's data, not this one's` };
+        if (r.after) afters.set(spec, r.after);
+        return r;
+      } finally {
+        draftApps.fake(root, shown.id, undefined);
+        draftApps.touch();
+      }
+    });
+    log.appendLine(`Run in the app: ${out.cases.filter((c) => c.how === 'run' && c.ok).length} worked, ${out.cases.filter((c) => c.how === 'run' && !c.ok).length} broke.`);
+    // Where the reading says it works and the quick run says it broke (or couldn't try it), the tester tries it like a
+    // person and judges it: pages are dynamic and requests can mean more than one thing, which matching text can't tell.
+    const disputed = out.cases.flatMap((c, i) => (v.cases[i].ok && v.cases[i].run && c.run && (!c.ok || /\(couldn't be run: /.test(c.found)) ? [i] : []));
+    if (!disputed.length) return out;
+    const model = vscode.workspace.getConfiguration('visualEditor.tester').get<string>('model', 'haiku');
+    log.appendLine(`The tester (${model}) tries ${disputed.length} scenario(s) the quick run and the reading disagree on…`);
+    const dir = join(root, DRAFTS_DIR, shown.id);
+    mkdirSync(dir, { recursive: true });
+    // The app without the change, to tell what the change caused from what was so already.
+    const real = await proxies.open(root).catch(() => undefined);
+    const cases = [...out.cases];
+    for (const i of disputed) {
+      const c = cases[i];
+      const run = prepared(c.run!);
+      draftApps.fake(root, shown.id, run.api);
+      try {
+        const t = await runTester(claudeCommand(), root, model, asked, { case: c.case, expected: c.expected, run, found: c.found, url: startUrl(origin, run), ...(real ? { baseline: startUrl(real, run) } : {}) }, dir);
+        if (typeof t === 'string') {
+          log.appendLine(`The tester couldn't try “${c.case}”: ${t}`);
+          continue;
+        }
+        // Wrong in the same way without the change: not the change's doing (it doesn't hold the change back).
+        cases[i] = t.already ? { ...c, ok: true, how: 'run', found: `tried by the tester: not caused by this change (the app does the same without it). ${t.found}` } : { ...c, ok: t.ok, how: 'run', found: `tried by the tester: ${t.found}` };
+        log.appendLine(`Tester: “${c.case}” ${t.ok ? 'works' : 'broke'}${t.cost !== undefined ? ` (at pay-per-use prices $${t.cost.toFixed(2)})` : ''}.`);
+      } finally {
+        draftApps.fake(root, shown.id, undefined);
+        draftApps.touch();
+      }
+    }
+    const cleared = disputed.filter((i) => cases[i].ok).map((i) => cases[i].case);
+    const broke = cases.filter((c) => !c.ok && !c.overruled);
+    const fixes = broke.length ? [...out.fixes.filter((f) => !cleared.some((name) => f.startsWith(`${name}: run in the app`))), ...disputed.filter((i) => !cases[i].ok && !out.fixes.some((f) => f.startsWith(`${cases[i].case}:`))).map((i) => `${cases[i].case}: ${cases[i].found}`)] : [];
+    return { ...out, cases, fixes, passed: !broke.length };
+  };
+  // Review: the developer's own cases, tried by the logic checker on a change (against what it means, when known), and
+  // run for real where they can be.
+  review.setLogic(async (root, p, cases, means) => {
     const model = vscode.workspace.getConfiguration('visualEditor.logicCheck').get<string>('model', 'sonnet');
-    return runLogicCheck(claudeCommand(), root, p.asked ?? [p.title], p.changes, model, cases, means ? { means } : undefined);
+    // (Not applied yet, whether waiting, held back or waiting for its checks: shown with its changes.)
+    const pending = p.status === 'proposed' || p.status === 'held-back' || p.status === 'awaiting-checks';
+    const shown = { id: p.id, revision: pending ? 1 : 0, changes: pending ? p.changes : [] };
+    const seen = await changeSeen(root, shown);
+    const v = await runLogicCheck(claudeCommand(), root, p.asked ?? [p.title], p.changes, model, cases, means ? { means } : undefined, seen?.places);
+    return typeof v === 'string' || !seen ? v : runInApp(root, p.asked ?? [p.title], shown, seen, v);
   });
   // Review shows a picture in a proposal's proof live: the card's Playground with the proposal's changes on top while
   // it waits (as the files are now, once applied), in the draft's own app.
   review.setLive(async (root, p, card) => {
     const state = index.snapshot().find((s) => s.project.root === root);
     if (!state) throw new Error('That project isn’t open.');
-    const shown = { id: p.id, revision: p.status === 'proposed' ? 1 : 0, changes: p.status === 'proposed' ? p.changes : [] };
+    // (Not applied yet, whether waiting, held back or waiting for its checks: shown with its changes.)
+    const pending = p.status === 'proposed' || p.status === 'held-back' || p.status === 'awaiting-checks';
+    const shown = { id: p.id, revision: pending ? 1 : 0, changes: pending ? p.changes : [] };
     const { project, items } = await draftItems(state, shown, (path) => vscodeFiles(root, changes).read(path));
     const item = items.find((i) => i.id === card);
     if (!item?.preview) throw new Error('This card can’t be shown in the Playground any more.');
@@ -279,13 +415,69 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
       agentsView.refresh();
     },
     agents: () => registry.agents(),
-    // The logic check: a separate Claude (the developer's own login) reads what was asked and the change.
-    logicCheck: async (root, draft) => {
+    // Design sessions, for Claude in the developer's chat: the open one, opening one, continuing a proposal in one.
+    session: (root) => sessions.current(root),
+    startSession: (root, card, asked) => {
+      const item = card ? index.snapshot().find((s) => s.project.root === root)?.items.find((i) => i.id === card) : undefined;
+      return { draft: sessions.start(root, item, asked).id };
+    },
+    continueProposal: (root, id) => {
+      const p = review.proposals(root).find((x) => x.id === id);
+      if (!p) return `No proposal "${id}".`;
+      if (!['proposed', 'sent-back', 'held-back'].includes(p.status)) return `Proposal ${id} is ${p.status}: only one that is waiting, sent back or held back can be changed.`;
+      sessions.continueProposal(root, p);
+      const draft = review.proposals(root).find((x) => x.id === id)?.session;
+      return draft ? { draft } : 'The session couldn’t be opened.';
+    },
+    // A change Claude sent from the chat was held back: the developer sees which checks failed, and can bypass them.
+    // (A session shows it in its tab; an agent's job sends it back to its worker by itself.)
+    checked: (root, draft, result) => {
+      if (typeof result !== 'string' || draft.session) return;
+      if (new JobStore(root).list().some((j) => j.draft === draft.id && (j.status === 'working' || j.status === 'checking'))) return;
+      const held = review.proposals(root).find((p) => p.id === `held-${draft.id}`);
+      if (!held) return;
+      const n = failedChecks(held.evidence ?? [], draft.revision).length;
+      void vscode.window.showWarningMessage(`“${draft.title}” wasn’t sent to Review: ${n} check${n === 1 ? '' : 's'} failed.`, 'See and decide').then((pick) => pick && review.askBypass(root, held.id));
+    },
+    // The check planner: a separate Claude (the developer's own login) reads what was asked and the change, seeing what
+    // each place really shows, and writes the test cases: which checks apply, and the scenarios.
+    planChecks: async (root, draft, available) => {
       const model = vscode.workspace.getConfiguration('visualEditor.logicCheck').get<string>('model', 'sonnet');
-      log.appendLine(`Logic check (${model}) on “${draft.title}”…`);
-      const v = await runLogicCheck(claudeCommand(), root, draft.asked ?? [draft.title], draft.changes, model, draft.cases ?? []);
-      log.appendLine(typeof v === 'string' ? `Logic check couldn't run: ${v}` : `Logic check: ${v.passed ? 'passed' : 'problems'}${v.cost !== undefined ? ` (at pay-per-use prices $${v.cost.toFixed(2)})` : ''}.`);
-      return v;
+      log.appendLine(`Writing the test cases (${model}) for “${draft.title}”…`);
+      const seen = await changeSeen(root, draft);
+      if (seen) seenFor.set(`${root}#${draft.id}#${draft.revision}`, seen);
+      const r = await askClaude(claudeCommand(), root, model, planPrompt(draft.asked ?? [draft.title], draft.changes, available, seen?.places, draft.cases ?? []), 300_000, 'The check planner');
+      if (typeof r === 'string') return r;
+      const plan = readPlan(r.result, available, draft.revision);
+      log.appendLine(typeof plan === 'string' ? `The test cases couldn't be written: ${plan}` : `Test cases for “${draft.title}”: ${plan.checks.filter((c) => c.use).length} checks, ${plan.cases.length} scenarios${r.cost !== undefined ? ` (at pay-per-use prices $${r.cost.toFixed(2)})` : ''}.`);
+      return plan;
+    },
+    // The scenarios the developer approved: their own read in the code (one short run), then every one that can be
+    // tried in the app is, with a second look where the run and the reading disagree.
+    runPlannedCases: async (root, draft, plan) => {
+      const model = vscode.workspace.getConfiguration('visualEditor.logicCheck').get<string>('model', 'sonnet');
+      const asked = draft.asked ?? [draft.title];
+      const seen = seenFor.get(`${root}#${draft.id}#${draft.revision}`) ?? (await changeSeen(root, draft));
+      const used = plan.cases.filter((c) => c.use);
+      const theirs = used.filter((c) => c.added);
+      let read: LogicCase[] = [];
+      let fixes = plan.fixes;
+      if (theirs.length) {
+        log.appendLine(`Reading ${theirs.length} scenario(s) of yours in the code…`);
+        const v = await runLogicCheck(claudeCommand(), root, asked, draft.changes, model, theirs.map((c) => (c.expected ? `${c.case} (it should: ${c.expected})` : c.case)), { means: plan.means }, seen?.places);
+        if (typeof v === 'string') return v;
+        read = v.cases.map((c) => ({ ...c, by: 'developer' as const }));
+        fixes = [...fixes, ...v.fixes];
+      }
+      const cases: LogicCase[] = [...used.filter((c) => !c.added).map(({ use: _u, skipped: _s, added: _a, ...c }) => c), ...read];
+      const broke = cases.filter((c) => !c.ok);
+      const v: LogicVerdict = { passed: !broke.length, looksOnly: plan.looksOnly, means: plan.means, cases, fixes: broke.length ? fixes : [] };
+      return seen ? runInApp(root, asked, draft, seen, v) : v;
+    },
+    // A finished change's test cases are ready: the developer looks at them and runs them (a session shows them itself).
+    planned: (root, draft) => {
+      if (draft.session) return;
+      void vscode.window.showInformationMessage(`The test cases for “${draft.title}” are ready: look at them, change them if you like, and run them.`, 'Look and run').then((pick) => pick && review.askPlan(root, `held-${draft.id}`));
     },
     // The previewable cards a draft changes, as it leaves them (a new design is part of its card).
     cardsTouched: async (root, draft) => {
@@ -335,6 +527,35 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     },
   }, log, new ClaudeAgents(context, () => ({ tools: registry.tools(), skills: registry.skills(), agents: registry.agents() }), run, log));
   void hub.start();
+  // Design sessions: a tab that follows one draft live while Claude works on it in the developer's chat (session.ts).
+  const sessions = new Sessions(context.extensionUri, {
+    project: (root) => index.snapshot().find((s) => s.project.root === root),
+    read: (root, path) => vscodeFiles(root, changes).read(path),
+    openApp: (root, draft, page) => draftApps.open(root, draft, page),
+    plan: (root, id) => void hub.planDraft(root, id),
+    run: (root, id, edits) => {
+      const r = hub.runChecks(root, id, edits);
+      return typeof r === 'string' ? r : undefined;
+    },
+    openReview: (id) => review.show(id),
+    markProposal: (root, id, draft) => review.setSessionOf(root, id, draft),
+  });
+  // Review: a proposal continued in a design session (its changes come back into it when the session is done).
+  review.setSessions((root, p) => sessions.continueProposal(root, p));
+  // Review: a change's test cases, run as the developer left them.
+  // Review: new test cases for a change (the planner reads it again).
+  review.setReplan((root, draft) => void hub.planDraft(root, draft));
+  review.setChecks((root, draft, choice) => {
+    const r = hub.runChecks(root, draft, choice);
+    return typeof r === 'string' ? r : undefined;
+  });
+  const draftWatcher = vscode.workspace.createFileSystemWatcher('**/.visual-editor/drafts/*.json');
+  const onDraft = (uri: vscode.Uri) => {
+    const root = uri.fsPath.slice(0, uri.fsPath.lastIndexOf(`${sep}.visual-editor${sep}`));
+    sessions.draftsChanged(root);
+    review.draftsChanged(root);
+  };
+  context.subscriptions.push(sessions, draftWatcher, draftWatcher.onDidCreate(onDraft), draftWatcher.onDidChange(onDraft));
   // Plugins arrive one by one as their extensions start: once they've settled, the agents follow what they give.
   let agentsTimer: ReturnType<typeof setTimeout> | undefined;
   const refreshAgents = () => {
@@ -382,7 +603,42 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     }),
     vscode.commands.registerCommand('visualEditor.connectClaudeCode', () => hub.connectClaudeCode()),
     vscode.commands.registerCommand('visualEditor.addAgents', () => hub.addAgents()),
+    // Review only, on or off (for every folder): the lock follows the setting.
+    vscode.commands.registerCommand('visualEditor.reviewOnlyOn', () => vscode.workspace.getConfiguration('visualEditor.claude').update('reviewOnly', true, vscode.ConfigurationTarget.Global)),
+    vscode.commands.registerCommand('visualEditor.reviewOnlyOff', async () => {
+      const pick = await vscode.window.showWarningMessage('Let Claude Code edit this project’s files directly? Its changes then skip Review and its checks.', { modal: true }, 'Let it edit directly');
+      if (pick) await vscode.workspace.getConfiguration('visualEditor.claude').update('reviewOnly', false, vscode.ConfigurationTarget.Global);
+    }),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (!e.affectsConfiguration('visualEditor.claude.reviewOnly')) return;
+      hub.syncLock(true);
+      void vscode.window.showInformationMessage(hub.reviewOnly ? 'Claude Code now changes files only through Review. Start a new Claude Code session for it to take effect.' : 'Claude Code can now edit files directly. Start a new Claude Code session for it to take effect.');
+    }),
     vscode.commands.registerCommand('visualEditor.openAgents', () => agentsView.openPanel()),
+    // A design session, about a component (from the Playground, or chosen here) or the whole app.
+    vscode.commands.registerCommand('visualEditor.startSession', async (arg?: { card?: string }) => {
+      const state = current.get();
+      if (!state) return void vscode.window.showInformationMessage('Open a project on the map first.');
+      let card = arg?.card ? state.items.find((i) => i.id === arg.card) : undefined;
+      if (!arg?.card) {
+        const pick = await vscode.window.showQuickPick(
+          [{ label: '$(globe) The whole app', description: 'no one component', item: undefined }, ...state.items.filter((i) => i.preview).map((i) => ({ label: i.label, description: i.source?.path, item: i }))],
+          { title: 'Start a design session', placeHolder: 'Which component is it about?' },
+        );
+        if (!pick) return;
+        card = pick.item;
+      }
+      const draft = sessions.start(state.project.root, card);
+      void vscode.window.showInformationMessage(`Design session started (draft ${draft.id}). Tell Claude in your Claude Code chat what you want; each change shows in the session by itself.`);
+    }),
+    vscode.commands.registerCommand('visualEditor.openSession', async () => {
+      const root = current.get()?.project.root;
+      if (!root) return;
+      const open = new DraftStore(root).list().filter((d) => d.session && d.status === 'draft');
+      if (!open.length) return void vscode.window.showInformationMessage('No design session is open in this project. Start one with “Start a design session”.');
+      const pick = await vscode.window.showQuickPick(open.map((d) => ({ label: d.title, description: `version ${d.revision}`, id: d.id })), { title: 'Open a design session' });
+      if (pick) sessions.open(root, pick.id);
+    }),
     // Stop an agent's job: its next step is to stop (the worker and checker are told so by every job tool).
     vscode.commands.registerCommand('visualEditor.stopJob', async (node?: { job?: { id: string } }) => {
       const root = current.get()?.project.root;
@@ -453,7 +709,7 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     },
   };
   // The VS Code test (npm run test:vscode) reaches inside; never switched on otherwise.
-  if (process.env.VISUAL_EDITOR_TEST === '1') return Object.assign(api, { _test: { index, current, review, memory, changes, map, hub, agentsView } });
+  if (process.env.VISUAL_EDITOR_TEST === '1') return Object.assign(api, { _test: { index, current, review, memory, changes, map, hub, agentsView, sessions } });
   return api;
 }
 

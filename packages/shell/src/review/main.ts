@@ -5,6 +5,8 @@
 import type { FromReview, ReviewFile, ReviewItem, ToReview } from '../reviewMessages';
 import { addStyles, ago, el } from '../ui/dom';
 import { iconButton, installTips, tray, type Icon } from '../ui/buttons';
+import { openBypass } from '../ui/bypass';
+import { openPlan } from '../ui/planWindow';
 
 declare function acquireVsCodeApi(): { postMessage(message: FromReview): void };
 const vscode = acquireVsCodeApi();
@@ -103,6 +105,7 @@ addStyles(`
 `);
 
 const STATUS_WORDS: Record<ReviewItem['status'], string> = {
+  'awaiting-checks': 'checks to approve',
   proposed: 'waiting for you',
   applied: 'applied',
   rejected: 'rejected',
@@ -125,6 +128,16 @@ let current: ToReview | undefined;
 /** How a proposal looks: kept between redraws, so it doesn't load again each time Review refreshes. */
 const looks = new Map<string, HTMLElement>();
 
+/** The window with a change's test cases, to run them. */
+function askPlan(item: ReviewItem) {
+  if (item.plan?.view) openPlan(item.title, item.plan.view, (choice) => vscode.postMessage({ type: 'runPlan', id: item.id, choice }));
+}
+
+/** The window to bypass a held-back change's failed checks. */
+function askBypass(item: ReviewItem) {
+  if (item.failed?.length) openBypass(item.failed, (titles, reason) => vscode.postMessage({ type: 'bypass', id: item.id, titles, reason }), `“${item.title}”`);
+}
+
 function show(m: ToReview) {
   current = m;
   const has = m.items.length > 0;
@@ -132,9 +145,12 @@ function show(m: ToReview) {
   detail.hidden = !has;
   empty.hidden = has;
   list.replaceChildren();
+  const checks = m.items.filter((i) => i.status === 'awaiting-checks');
   const waiting = m.items.filter((i) => i.status === 'proposed');
   const held = m.items.filter((i) => i.status === 'held-back');
-  const done = m.items.filter((i) => i.status !== 'proposed' && i.status !== 'held-back');
+  const done = m.items.filter((i) => i.status !== 'proposed' && i.status !== 'held-back' && i.status !== 'awaiting-checks');
+  // Finished changes whose test cases wait for you: nothing has run on them yet.
+  if (checks.length) list.append(el('div', 'group', `Checks to approve (${checks.length})`), ...checks.map(row));
   if (waiting.length) list.append(el('div', 'group', `Waiting for you (${waiting.length})`), ...waiting.map(row));
   // What a check stopped before it reached you: the checks at work, with why.
   if (held.length) list.append(el('div', 'group', `Held back (${held.length})`), ...held.map(row));
@@ -177,7 +193,25 @@ function drawDetail(item: ReviewItem) {
   const files = item.files.length;
   meta.append(status, el('span', undefined, `by ${item.by.name} · ${ago(item.createdAt)} · ${files} file${files === 1 ? '' : 's'}`));
   detail.append(meta);
-  if (item.status === 'held-back') {
+  if (item.status === 'awaiting-checks' && item.plan) {
+    const box = el('div', 'warn');
+    const p = item.plan;
+    if (p.state === 'writing') box.append(el('b', undefined, 'Its test cases are being written.'), el('div', undefined, 'The check planner is reading the change and what was asked (a minute or so). Nothing has run yet.'));
+    else if (p.state === 'running') box.append(el('b', undefined, 'Its checks are running.'), el('div', undefined, `Now: ${p.step ?? '…'}. It reaches Review when they pass; if not, you see what failed.`));
+    else if (p.view) {
+      const v = p.view;
+      box.append(el('b', undefined, 'Its test cases are ready: nothing has run yet.'), el('div', undefined, `${v.checks.filter((c) => c.use).length} checks and ${v.cases.length} scenarios. Look at them, change them if you like, and run them.`));
+      const look = iconButton('play', 'Look at the test cases and run them', { cls: 'primary' });
+      look.addEventListener('click', () => askPlan(item));
+      box.append(look);
+    }
+    detail.append(box);
+  }
+  if (item.status === 'held-back' && item.rerun?.running) {
+    const box = el('div', 'warn');
+    box.append(el('b', undefined, 'Running its checks again.'), el('div', undefined, `Now: ${item.rerun.running}. It goes to Review if they pass; if not, you see what failed.`));
+    detail.append(box);
+  } else if (item.status === 'held-back') {
     const warn = el('div', 'warn');
     warn.append(el('b', undefined, 'Held back by a check: it never reached you for approval.'), el('div', undefined, `${item.by.name} was told what to fix. What it tried, and why it was stopped, are below.`));
     detail.append(warn);
@@ -198,15 +232,46 @@ function drawDetail(item: ReviewItem) {
     detail.append(warn);
   }
 
+  if (item.inSession) {
+    const note = el('div', 'warn');
+    note.append(el('b', undefined, 'Being changed in a design session.'), el('div', undefined, 'Press Done in the session to bring its changes back here (checked again), or Discard to keep this as it is. Until then nothing can be decided on it.'));
+    detail.append(note);
+  }
   const actions = tray(el('div', 'actions'));
-  if (item.status === 'proposed') {
+  if (item.inSession) {
+    actions.append(button('brush', 'Open the design session changing it', 'primary', { type: 'session', id: item.id }));
+  } else if (item.status === 'proposed') {
     const approve = button('choose', 'Approve and apply: make all of these changes now (they can be undone)', 'primary', { type: 'approve', id: item.id });
     approve.disabled = item.conflicts.length > 0;
     actions.append(
       approve,
       button('sendBack', `Send back: ask ${item.by.name} to change it, with a note`, undefined, { type: 'sendBack', id: item.id }),
       button('reject', 'Reject: drop it; nothing changes', undefined, { type: 'reject', id: item.id }),
+      button('brush', 'Continue in a design session: keep changing it with Claude, live; when you’re done, the changes come back into this proposal', undefined, { type: 'session', id: item.id }),
     );
+  } else if (item.status === 'sent-back' || item.status === 'held-back') {
+    // Its checks again, as they are (e.g. after a check that was wrong has been fixed): no new test cases written.
+    // While its checks run, nothing else can be done to it (for safety): the buttons say so.
+    const running = item.rerun?.running;
+    const busy = running ? `Its checks are running (now ${running}): wait for them to finish` : undefined;
+    if (item.rerun) {
+      // Its test cases, to look at, change or add to, and run again.
+      const again = iconButton('play', busy ?? 'Look at its test cases (change them, add your own) and run them again');
+      again.disabled = !item.rerun.can || !item.rerun.view;
+      again.addEventListener('click', () => item.rerun?.view && openPlan(item.title, item.rerun.view, (choice) => vscode.postMessage({ type: 'runPlan', id: item.id, choice })));
+      const fresh = button('reload', busy ?? 'Write new test cases (the check planner reads the change again), then look at them and run them', undefined, { type: 'replan', id: item.id });
+      fresh.disabled = !!running;
+      actions.append(again, fresh);
+    }
+    if (item.failed?.length) {
+      const bypass = iconButton('overrule', busy ?? 'Bypass failed checks: if a check is wrong or means nothing for this change, let it go to Review anyway (say why)');
+      bypass.disabled = !!running;
+      bypass.addEventListener('click', () => askBypass(item));
+      actions.append(bypass);
+    }
+    const session = button('brush', busy ?? 'Continue in a design session: change it with Claude, live; when you’re done, it comes back here to approve', undefined, { type: 'session', id: item.id });
+    session.disabled = !!running;
+    actions.append(session);
   } else if (item.status === 'applied') {
     const undo = button('undo', 'Undo: put the files back as they were', undefined, { type: 'undo', id: item.id });
     undo.disabled = item.conflicts.length > 0;
@@ -246,7 +311,15 @@ function drawDetail(item: ReviewItem) {
 function drawProof(item: ReviewItem): HTMLElement[] {
   const proof = item.evidence ?? [];
   const out: HTMLElement[] = [];
-  const failed = proof.filter((e) => e.passed === false);
+  const failed = proof.filter((e) => e.passed === false && !e.bypassed);
+  // Sent with checks that failed, by the developer's choice: always in plain sight.
+  const bypassed = proof.filter((e) => e.bypassed);
+  if (bypassed.length) {
+    const warn = el('div', 'warn');
+    warn.append(el('b', undefined, `Sent with ${bypassed.length === 1 ? 'a check' : `${bypassed.length} checks`} bypassed by you:`));
+    for (const e of bypassed) warn.append(el('div', undefined, `✗ ${e.title}. Why: ${e.bypassed!.reason}`));
+    out.push(warn);
+  }
   if (!proof.length || failed.length) {
     const warn = el('div', 'warn');
     warn.append(el('b', undefined, proof.length ? 'Not every check passed:' : 'Nothing was checked:'));
@@ -262,6 +335,7 @@ function drawProof(item: ReviewItem): HTMLElement[] {
     summary.append(
       el('span', `mark${e.passed === true ? ' ok' : e.passed === false ? ' bad' : ''}`, e.passed === true ? '✓' : e.passed === false ? '✗' : e.kind === 'picture' ? '▣' : '•'),
       el('span', undefined, e.title),
+      ...(e.bypassed ? [el('span', 'tag yours', 'bypassed by you')] : []),
       el('span', 'by', e.kind === 'note' ? `said by ${e.by}` : e.kind === 'picture' ? `drawn by ${e.by}` : `checked by ${e.by}`),
     );
     entry.append(summary, e.logic ? drawLogic(item, e.logic) : el('pre', undefined, e.text));
@@ -301,9 +375,18 @@ function drawLogic(item: ReviewItem, r: NonNullable<NonNullable<ReviewItem['evid
     const tags = el('span', 'tags');
     if (c.promise) tags.append(el('span', 'tag', `promise ${c.promise}`));
     if (c.by === 'developer') tags.append(el('span', 'tag yours', 'your case'));
-    tags.append(el('span', `tag ${c.how}`, c.how));
+    if (c.overruled) tags.append(el('span', 'tag yours', 'overruled by you'));
+    const how = el('span', `tag ${c.how}`, c.how === 'run' ? 'ran in the app' : 'read in the code');
+    if (c.how === 'run' && c.run) how.dataset.tip = `Ran in the change's own app (${c.run.where === 'playground' ? `Playground${c.run.state ? `, state “${c.run.state}”` : ''}` : `page ${c.run.page ?? '/'}`}${c.run.api?.length ? `, with ${c.run.api.length} faked API answer${c.run.api.length > 1 ? 's' : ''}` : ''})`;
+    tags.append(how);
     what.append(tags);
     line.append(what, el('div', 'casefound', c.ok ? `→ ${c.found}` : `→ ${c.found}  (should: ${c.expected})`));
+    if (c.overruled) line.append(el('div', 'casefound', `Overruled: ${c.overruled.note}`));
+    // A case that expected the wrong thing: the developer can overrule it (a held-back change then reaches Review).
+    if (!c.ok && !c.overruled && (item.status === 'held-back' || item.status === 'proposed')) {
+      const index = r.cases.indexOf(c);
+      what.append(button('overrule', 'This case is wrong: overrule it (say why). With nothing else broken, the change goes to Review.', undefined, { type: 'overrule', id: item.id, index }));
+    }
     cases.append(line);
   }
   box.append(cases);
@@ -376,9 +459,19 @@ function drawPicture(item: ReviewItem, e: NonNullable<ReviewItem['evidence']>[nu
       iframe.title = `${e.title}, live`;
       frame.append(iframe);
       liveFrames.set(live.url, frame);
-      // The page is as big as the picture was; fitted, it's shrunk to the box's width (clicks still land right).
+      // The page is as big as its board (the Playground says, once drawn; till then, a usual screen); fitted, it's
+      // shrunk to the box's width (clicks still land right).
       const size = { w: 1400, h: 900 };
       const url = live.url;
+      let told = false;
+      window.addEventListener('message', (m: MessageEvent<{ source?: string; type?: string; w?: number; h?: number }>) => {
+        if (m.source !== iframe.contentWindow || m.data?.source !== 've-preview-page' || m.data.type !== 'size' || told) return;
+        // (Only its first size: a page as tall as its window would grow with the frame without end.)
+        told = true;
+        size.w = Math.max(480, Math.min(4000, m.data.w ?? size.w));
+        size.h = Math.max(240, Math.min(3000, m.data.h ?? size.h));
+        liveFits.get(url)?.();
+      });
       const fit = () => {
         const actual = liveActual.has(url);
         const full = liveFull.has(url);
@@ -495,6 +588,12 @@ function drawFile(f: ReviewFile): HTMLElement {
 }
 
 window.addEventListener('message', (e: MessageEvent<ToReview>) => {
-  if (e.data?.type === 'show') show(e.data);
+  if (e.data?.type !== 'show') return;
+  show(e.data);
+  // Its checks just ended with failures: the window opens by itself.
+  const ask = e.data.askBypass ? e.data.items.find((i) => i.id === e.data.askBypass) : undefined;
+  if (ask) askBypass(ask);
+  const plan = e.data.askPlan ? e.data.items.find((i) => i.id === e.data.askPlan) : undefined;
+  if (plan) askPlan(plan);
 });
 vscode.postMessage({ type: 'ready' });

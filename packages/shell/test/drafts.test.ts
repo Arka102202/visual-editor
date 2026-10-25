@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DraftStore, parseDraft, type Draft } from '../src/drafts';
@@ -33,4 +33,23 @@ test('drafts: a file is checked like a proposal', () => {
   const d = parseDraft('{"title":"T","changes":[{"path":"src/a.ts","after":"y"}],"status":"submitted","proposal":"p1"}', 'f');
   assert.ok(typeof d !== 'string');
   assert.deepEqual([d.id, d.status, d.proposal, d.changes[0].before], ['f', 'submitted', 'p1', null]);
+});
+
+test('drafts: each version is kept (a design session goes back to one); discarding removes it all; a session is kept', () => {
+  const root = mkdtempSync(join(tmpdir(), 've-drafts-'));
+  const store = new DraftStore(root);
+  const at = '2026-10-25T10:00:00.000Z';
+  const d: Draft = { id: 'd1', title: 'Design session: Card', why: '', by: { kind: 'assistant', name: 'Design session' }, createdAt: at, updatedAt: at, status: 'draft', changes: [], revision: 1, evidence: [], session: { card: 'react:component:src/Card.tsx#Card', openedAt: at } };
+  store.save(d);
+  assert.deepEqual(store.versions('d1'), [], 'nothing changed yet: no version kept');
+  store.save({ ...d, changes: [{ path: 'src/Card.tsx', before: 'a', after: 'b' }], revision: 2 });
+  store.save({ ...d, changes: [{ path: 'src/Card.tsx', before: 'a', after: 'c' }], revision: 3 });
+  // Saved again with the same version (proof added): the kept version stays as it was first saved.
+  store.save({ ...d, changes: [{ path: 'src/Card.tsx', before: 'a', after: 'changed?' }], revision: 3 });
+  assert.deepEqual(store.versions('d1').map((v) => [v.revision, v.changes[0].after]), [[3, 'c'], [2, 'b']]);
+  assert.deepEqual(store.list()[0].session, { card: 'react:component:src/Card.tsx#Card', openedAt: at });
+  store.remove('d1');
+  assert.deepEqual([store.list(), existsSync(join(store.dir, 'd1'))], [[], false]);
+  store.remove('../escape');
+  rmSync(root, { recursive: true, force: true });
 });

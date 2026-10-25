@@ -40,6 +40,21 @@
           "minimum": 0,
           "description": "Only if you pay Claude per use (an API key): the most an agent run in the background may spend, in US dollars, before it stops. 0: no limit. With a Claude subscription, runs use your plan's allowance like chat does; they're always limited to 3 rounds and 20 minutes, and you can stop them."
         },
+        "visualEditor.claude.reviewOnly": {
+          "type": "boolean",
+          "default": true,
+          "description": "Claude Code changes a connected project's files only through Visual Editor, so every change reaches Review with its checks. Its own file tools and shell commands that write into the project are stopped (set in the folder's .claude/settings.local.json). Turn off to let it edit files directly."
+        },
+        "visualEditor.tester.model": {
+          "type": "string",
+          "enum": [
+            "haiku",
+            "sonnet",
+            "opus"
+          ],
+          "default": "haiku",
+          "description": "The model of the tester: the Claude that tries a scenario in the app like a person, when the quick automatic run and the reading of the code disagree. Each one it tries is a few turns with pictures, on your plan."
+        },
         "visualEditor.logicCheck.model": {
           "type": "string",
           "enum": [
@@ -184,6 +199,18 @@
         "icon": "$(debug-disconnect)"
       },
       {
+        "command": "visualEditor.reviewOnlyOff",
+        "title": "Changes only through Review (on): let Claude edit files directly",
+        "category": "Visual Editor",
+        "icon": "$(lock)"
+      },
+      {
+        "command": "visualEditor.reviewOnlyOn",
+        "title": "Claude edits files directly: make it change files only through Review",
+        "category": "Visual Editor",
+        "icon": "$(unlock)"
+      },
+      {
         "command": "visualEditor.openAgents",
         "title": "Open the Agents as a tab",
         "category": "Visual Editor",
@@ -206,6 +233,18 @@
         "title": "Add Visual Editor's agents to Claude Code",
         "category": "Visual Editor",
         "icon": "$(hubot)"
+      },
+      {
+        "command": "visualEditor.startSession",
+        "title": "Start a design session",
+        "category": "Visual Editor",
+        "icon": "$(paintcan)"
+      },
+      {
+        "command": "visualEditor.openSession",
+        "title": "Open a design session",
+        "category": "Visual Editor",
+        "icon": "$(window)"
       }
     ],
     "menus": {
@@ -239,6 +278,11 @@
           "command": "visualEditor.openAgents",
           "when": "view == visualEditor.agents",
           "group": "navigation"
+        },
+        {
+          "command": "visualEditor.startSession",
+          "when": "view == visualEditor.agents",
+          "group": "navigation@0"
         }
       ],
       "view/item/context": [
@@ -269,8 +313,18 @@
         },
         {
           "command": "visualEditor.addAgents",
-          "when": "view == visualEditor.assistants && viewItem == assistant-on-noagents",
+          "when": "view == visualEditor.assistants && viewItem =~ /^assistant-on-noagents/",
           "group": "inline@1"
+        },
+        {
+          "command": "visualEditor.reviewOnlyOff",
+          "when": "view == visualEditor.assistants && viewItem =~ /-locked$/",
+          "group": "inline@0"
+        },
+        {
+          "command": "visualEditor.reviewOnlyOn",
+          "when": "view == visualEditor.assistants && viewItem =~ /-open$/",
+          "group": "inline@0"
         },
         {
           "command": "visualEditor.disconnectAssistant",
@@ -293,6 +347,14 @@
         },
         {
           "command": "visualEditor.disconnectAssistant",
+          "when": "false"
+        },
+        {
+          "command": "visualEditor.reviewOnlyOff",
+          "when": "false"
+        },
+        {
+          "command": "visualEditor.reviewOnlyOn",
           "when": "false"
         }
       ]

@@ -27,14 +27,16 @@ export class AssistantsView implements vscode.TreeDataProvider<Assistant>, vscod
   getTreeItem(a: Assistant): vscode.TreeItem {
     const item = new vscode.TreeItem(a.name);
     // Talking to the hub right now means connected, however it was set up.
-    item.description = `${a.talking ? 'connected · working now' : STATE_WORDS[a.state]}${a.state === 'on' && a.agents === 'off' ? ' · agents not added' : ''}`;
+    item.description = `${a.talking ? 'connected · working now' : STATE_WORDS[a.state]}${a.state === 'on' && a.agents === 'off' ? ' · agents not added' : ''}${a.state !== 'off' && !a.reviewOnly ? ' · edits files directly' : ''}`;
     item.iconPath = new vscode.ThemeIcon(a.state === 'on' || a.talking ? 'pass-filled' : a.state === 'old' ? 'warning' : 'circle-large-outline');
     item.tooltip =
       a.state !== 'on' ? `Connect ${a.name} so it can read the map, rules and memory, use Visual Editor’s agents, and propose changes into Review.`
       : a.agents === 'off' ? `${a.name} can read the map, rules and memory, and propose changes into Review. Visual Editor’s agents aren’t added to it yet.`
       : `${a.name} can read the map, rules and memory, use Visual Editor’s agents, and propose changes into Review.`;
+    if (a.state !== 'off') item.tooltip += a.reviewOnly ? ' It changes the project’s files only through Review.' : ' Review only is off: it can also change files directly, without Review.';
     // The row's buttons (connect or disconnect, add agents) come from the menus, by this value.
-    item.contextValue = a.state === 'on' ? (a.agents === 'off' ? 'assistant-on-noagents' : 'assistant-on') : 'assistant-off';
+    // (…-locked: changes only through Review; …-open: it can edit files directly.)
+    item.contextValue = a.state === 'on' ? `${a.agents === 'off' ? 'assistant-on-noagents' : 'assistant-on'}-${a.reviewOnly ? 'locked' : 'open'}` : 'assistant-off';
     item.command = { command: a.state === 'on' ? 'visualEditor.disconnectAssistant' : 'visualEditor.connectAssistant', title: '', arguments: [a] };
     return item;
   }

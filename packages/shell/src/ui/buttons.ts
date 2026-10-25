@@ -72,6 +72,8 @@ export const ICONS = {
   float: '<rect x="3" y="4" width="18" height="16" rx="2"/><rect x="11" y="8" width="7" height="9" rx="1"/>',
   hide: '<path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.2M6.6 6.6A17 17 0 0 0 2 12s3.5 7 10 7a10 10 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
   maximize: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
+  overrule: '<path d="M5 21V4"/><path d="M5 4h11l-2 4 2 4H5"/>',
+  brush: '<path d="M18.4 2.6a2 2 0 0 1 2.9 2.9L11.5 15.3l-2.8-2.8z"/><path d="M8 13.5c-2 0-3.5 1.5-3.5 3.5 0 1.4-.8 2.4-2.5 2.7 1.1 1.4 2.6 2.3 4.5 2.3a4 4 0 0 0 4-4c0-.6-.1-1.1-.3-1.6"/>',
   restore: '<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>',
 } as const;
 
