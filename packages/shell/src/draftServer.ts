@@ -1,8 +1,9 @@
 // A draft's own app server (dist/draftServer.js, run as a separate Node process with a memory limit): the project's
 // own Vite, with its own config, plus one plugin that serves the draft's files in place of the real ones (new files,
 // changed files; a removed file can't be loaded). Nothing is copied and nothing on disk changes; Vite only builds the
-// files a page asks for, so the project's size barely matters. No file watching and no live reload: a new version of
-// the draft gets a new server.
+// files a page asks for, so the project's size barely matters. A new version of the draft comes in on stdin as one
+// line of JSON ({ revision, files }): its files take the old ones' place, Vite forgets what it built from them, and
+// open pages reload; it answers "UPDATED <revision>". (No file watching: the real files don't drive it.)
 //   node draftServer.js <project root> <draft files .json> <port> <cache folder>
 // Prints "READY <address>" when it answers, or "ERROR <why>".
 
@@ -17,8 +18,8 @@ const [root, filesJson, port, cacheDir] = process.argv.slice(2);
 const ENDINGS = ['', '.tsx', '.ts', '.jsx', '.js', '.mjs', '/index.tsx', '/index.ts', '/index.jsx', '/index.js'];
 
 async function main() {
-  const files: Record<string, string | null> = JSON.parse(readFileSync(filesJson, 'utf8'));
-  const draft = new Map(Object.entries(files).map(([path, text]) => [join(root, path), text]));
+  const read = (files: Record<string, string | null>) => new Map(Object.entries(files).map(([path, text]) => [join(root, path), text]));
+  let draft = read(JSON.parse(readFileSync(filesJson, 'utf8')));
   const find = (base: string) => ENDINGS.map((e) => base + e).find((p) => draft.has(p) && draft.get(p) !== null);
 
   const require = createRequire(join(root, 'package.json'));
@@ -30,14 +31,22 @@ async function main() {
   }
   const entry = [join(viteDir, 'dist/node/index.js'), join(viteDir, 'index.cjs')].find((p) => existsSync(p));
   if (!entry) throw new Error(`Couldn't find Vite's code in ${viteDir}.`);
-  const vite = (await import(pathToFileURL(entry).href)) as { createServer(config: object): Promise<{ listen(): Promise<unknown> }> };
+  type Module = object;
+  const vite = (await import(pathToFileURL(entry).href)) as {
+    createServer(config: object): Promise<{
+      listen(): Promise<unknown>;
+      moduleGraph: { getModulesByFile(file: string): Set<Module> | undefined; invalidateModule(m: Module): void };
+      ws: { send(payload: object): void };
+    }>;
+  };
 
   const server = await vite.createServer({
     root,
     cacheDir,
     clearScreen: false,
     logLevel: 'warn',
-    server: { port: Number(port), strictPort: true, host: '127.0.0.1', hmr: false, watch: null },
+    // (Live reload on, so open pages follow a new version; no watching of the real files.)
+    server: { port: Number(port), strictPort: true, host: '127.0.0.1', watch: null },
     plugins: [
       {
         name: 'visual-editor-draft',
@@ -65,6 +74,32 @@ async function main() {
   });
   await server.listen();
   console.log(`READY http://127.0.0.1:${port}`);
+
+  // A new version: its files in place of the old ones; what Vite built from any changed file is forgotten; pages reload.
+  const update = (files: Record<string, string | null>, revision: number) => {
+    const next = read(files);
+    const changed = [...new Set([...draft.keys(), ...next.keys()])].filter((f) => draft.get(f) !== next.get(f));
+    draft = next;
+    for (const file of changed) for (const m of server.moduleGraph.getModulesByFile(file) ?? []) server.moduleGraph.invalidateModule(m);
+    server.ws.send({ type: 'full-reload', path: '*' });
+    console.log(`UPDATED ${revision}`);
+  };
+  let pending = '';
+  process.stdin.on('data', (d: Buffer) => {
+    pending += d.toString('utf8');
+    let end: number;
+    while ((end = pending.indexOf('\n')) >= 0) {
+      const line = pending.slice(0, end).trim();
+      pending = pending.slice(end + 1);
+      if (!line) continue;
+      try {
+        const m = JSON.parse(line) as { revision: number; files: Record<string, string | null> };
+        update(m.files, m.revision);
+      } catch (e) {
+        console.log(`UPDATE-ERROR ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+  });
 }
 
 // It never outlives VS Code: when VS Code goes (even if it crashes), the pipe it gave closes, and this stops.

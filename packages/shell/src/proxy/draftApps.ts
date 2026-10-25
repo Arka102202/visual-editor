@@ -28,6 +28,10 @@ export interface DraftAppsOptions {
 
 interface Running {
   key: string;
+  /** The draft version it serves now. */
+  revision: number;
+  /** Waiting for the server to say it has a version in place. */
+  updated: Map<number, () => void>;
   child: ChildProcess;
   proxy: AppProxy;
   origin: string;
@@ -46,11 +50,14 @@ export class DraftApps {
    * Throws, in words, when it can't be started (not a Vite project, Vite missing, it stopped…).
    */
   async open(root: string, draft: Pick<Draft, 'id' | 'revision' | 'changes'>, previewPage: (itemId: string) => string | undefined): Promise<string> {
-    const key = `${root}#${draft.id}@${draft.revision}`;
+    // One server per draft: a newer version of the same draft is swapped in place (about a second), not restarted.
+    const key = `${root}#${draft.id}`;
     if (this.current?.key === key) {
-      this.current.previewPage = previewPage;
+      const running = this.current;
+      running.previewPage = previewPage;
       this.touch();
-      return this.current.origin;
+      if (running.revision !== draft.revision) await this.update(running, draft);
+      return running.origin;
     }
     await this.starting?.catch(() => undefined);
     if (this.current?.key === key) return this.open(root, draft, previewPage);
@@ -96,7 +103,13 @@ export class DraftApps {
       child.kill();
       throw e;
     });
-    const running: Running = { key, child, proxy: undefined as unknown as AppProxy, origin: '', previewPage };
+    const running: Running = { key, revision: draft.revision, updated: new Map(), child, proxy: undefined as unknown as AppProxy, origin: '', previewPage };
+    child.stdout?.on('data', (d: Buffer) => {
+      for (const m of String(d).matchAll(/UPDATED (\d+)/g)) {
+        running.updated.get(Number(m[1]))?.();
+        running.updated.delete(Number(m[1]));
+      }
+    });
     running.proxy = new AppProxy(async () => app, { ...this.options.proxyOptions?.(root), previewPage: (id) => running.previewPage(id) });
     running.origin = await running.proxy.start(5700);
     child.on('exit', (code) => {
@@ -109,6 +122,24 @@ export class DraftApps {
     this.options.log(`Draft ${draft.id} (version ${draft.revision}) is running at ${running.origin} (its own Vite, the draft's files on top).`);
     this.touch();
     return running.origin;
+  }
+
+  /** Swaps a newer version of the draft into the running server, and waits until it's in place (10 seconds at most). */
+  private update(running: Running, draft: Pick<Draft, 'revision' | 'changes'>): Promise<void> {
+    running.revision = draft.revision;
+    const files = Object.fromEntries(draft.changes.map((c) => [c.path, c.after]));
+    return new Promise((done) => {
+      const timer = setTimeout(() => {
+        running.updated.delete(draft.revision);
+        this.options.log(`The draft's app didn't confirm version ${draft.revision} in time.`);
+        done();
+      }, 10_000);
+      running.updated.set(draft.revision, () => {
+        clearTimeout(timer);
+        done();
+      });
+      running.child.stdin?.write(JSON.stringify({ revision: draft.revision, files }) + '\n');
+    });
   }
 
   /** Keeps it running a while longer. */
