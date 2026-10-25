@@ -36,7 +36,7 @@ const TALLEST = 12_000;
 const WIDEST = 4_000;
 
 /** A hidden browser, driven through a private pipe: its messages, and errors its pages throw. */
-function openChrome() {
+export function openChrome() {
   const chrome = findChrome();
   if (!chrome) throw new Error('No Chrome, Edge, Brave or Chromium was found to take pictures with (set VISUAL_EDITOR_CHROME to one).');
   const profile = mkdtempSync(join(tmpdir(), 've-picture-'));

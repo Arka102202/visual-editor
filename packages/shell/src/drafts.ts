@@ -4,8 +4,9 @@
 // project changes before that. Each draft is a JSON file in the project's .visual-editor/drafts/ folder (kept out of git).
 // No VS Code APIs here, so it can be tested on its own.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { CheckPlan } from './hub/checkPlan';
 import { parseEvidence, safePath, type Evidence, type FileChange } from './proposals';
 
 export const DRAFTS_DIR = '.visual-editor/drafts';
@@ -32,6 +33,25 @@ export interface Draft {
   revision: number;
   /** Proof: checks run on it and the assistant's notes, each about one version. */
   evidence: Evidence[];
+  /**
+   * A design session works in this draft (a tab shows it live while it changes): the card it's about, if one, and the
+   * proposal it continues, if one (Done puts the result back into that proposal instead of making a new one).
+   */
+  session?: { card?: string; proposal?: string; openedAt: string };
+  /**
+   * Its check on the way to Review (it runs in the background: the logic check takes a minute or two): which version,
+   * the step it's on, and how it ended: sent (the proposal) or held (why).
+   */
+  check?: { at: string; revision: number; step: string; sent?: string; held?: string };
+  /** Its check plan (written when it was finished; what the developer approved, once they ran it). */
+  plan?: CheckPlan;
+}
+
+/** One version of a draft, kept so a session can go back to it. */
+export interface DraftVersion {
+  revision: number;
+  at: string;
+  changes: FileChange[];
 }
 
 /** Reads a draft file's contents; checked like a proposal's (it may have been edited by hand). */
@@ -68,6 +88,19 @@ export function parseDraft(text: string, fallbackId: string): Draft | string {
     ...(Array.isArray(raw.cases) ? { cases: (raw.cases as unknown[]).filter((a): a is string => typeof a === 'string') } : {}),
     revision: typeof raw.revision === 'number' ? raw.revision : 1,
     evidence: Array.isArray(raw.evidence) ? parseEvidence(raw.evidence) : [],
+    ...(raw.session && typeof raw.session === 'object'
+      ? {
+          session: {
+            ...(typeof (raw.session as Record<string, unknown>).card === 'string' ? { card: (raw.session as Record<string, string>).card } : {}),
+            ...(typeof (raw.session as Record<string, unknown>).proposal === 'string' ? { proposal: (raw.session as Record<string, string>).proposal } : {}),
+            openedAt: String((raw.session as Record<string, unknown>).openedAt ?? now),
+          },
+        }
+      : {}),
+    ...(raw.check && typeof raw.check === 'object' && typeof (raw.check as Record<string, unknown>).step === 'string'
+      ? { check: raw.check as Draft['check'] }
+      : {}),
+    ...(raw.plan && typeof raw.plan === 'object' && Array.isArray((raw.plan as Record<string, unknown>).checks) ? { plan: raw.plan as CheckPlan } : {}),
   };
 }
 
@@ -104,6 +137,40 @@ export class DraftStore {
     // Drafts are work in progress, not shared: the folder keeps itself out of git (the project's .gitignore is left alone).
     if (!existsSync(join(this.dir, '.gitignore'))) writeFileSync(join(this.dir, '.gitignore'), "# Visual Editor's drafts: work in progress, kept out of git.\n*\n");
     writeFileSync(join(this.dir, `${d.id}.json`), JSON.stringify(d, null, 2) + '\n');
+    // Each version's files are kept too, the first time it's saved (a session can go back to one).
+    const version = join(this.dir, d.id, 'versions', `v${d.revision}.json`);
+    if (d.changes.length && !existsSync(version)) {
+      mkdirSync(join(this.dir, d.id, 'versions'), { recursive: true });
+      writeFileSync(version, JSON.stringify({ revision: d.revision, at: d.updatedAt, changes: d.changes } satisfies DraftVersion) + '\n');
+    }
+  }
+
+  /** A draft's kept versions, newest first. */
+  versions(id: string): DraftVersion[] {
+    const dir = join(this.dir, id, 'versions');
+    let names: string[] = [];
+    try {
+      names = readdirSync(dir).filter((n) => /^v\d+\.json$/.test(n));
+    } catch {
+      return [];
+    }
+    return names
+      .flatMap((n) => {
+        try {
+          const v = JSON.parse(readFileSync(join(dir, n), 'utf8')) as DraftVersion;
+          return typeof v.revision === 'number' && Array.isArray(v.changes) ? [v] : [];
+        } catch {
+          return [];
+        }
+      })
+      .sort((a, b) => b.revision - a.revision);
+  }
+
+  /** Throws a draft away, with everything kept for it (pictures, versions). */
+  remove(id: string) {
+    if (!/^[\w-]+$/.test(id)) return;
+    rmSync(join(this.dir, `${id}.json`), { force: true });
+    rmSync(join(this.dir, id), { recursive: true, force: true });
   }
 }
 

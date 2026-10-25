@@ -136,6 +136,8 @@ export type FromMap =
   | { type: 'updateHelper'; id: string }
   /** Something a preview needs (React: "router"): the card's plugin proposes it. */
   | { type: 'previewFix'; id: string; need: string }
+  /** Start a design session about this card. */
+  | { type: 'session'; id: string }
   /** Open the developer's own file for a place in the code the browser runs (a console message's). */
   | { type: 'openSource'; url: string; line: number; column: number }
   /** Open the stylesheet a CSS rule comes from, at that rule. */

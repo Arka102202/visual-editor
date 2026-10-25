@@ -221,7 +221,10 @@ export class Playground {
       const path = this.item && deps.pageOf?.(this.item);
       if (path) deps.openWebview?.(path);
     });
-    this.frame.addTools(this.webviewButton, reload);
+    // A design session about this component: a tab that follows the work live while Claude does it in the chat.
+    const session = iconButton('brush', 'Start a design session for this component (tell Claude in your chat what you want; it shows live)');
+    session.addEventListener('click', () => this.item && this.deps.post({ type: 'session', id: this.item.id }));
+    this.frame.addTools(session, this.webviewButton, reload);
 
     const bar = el('div', 'vp-bar');
     const zoomOut = iconButton('zoomOut', 'Zoom out');

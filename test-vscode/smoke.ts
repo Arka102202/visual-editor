@@ -6,6 +6,8 @@ import * as vscode from 'vscode';
 import { appendFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { DraftStore } from '../packages/shell/src/drafts';
+import { asItIs } from '../packages/shell/src/hub/checkPlan';
 import { JobStore } from '../packages/shell/src/jobs';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -197,6 +199,25 @@ export async function run() {
     if (t.hub.assistants()[0].agents !== 'on') throw new Error(`agents: ${t.hub.assistants()[0].agents}`);
     if (local().enabledPlugins?.[agents.ref] !== true) throw new Error(`settings.local.json: ${JSON.stringify(local())}`);
     if (!readFileSync(join(agents.dir, 'visual-editor', 'agents', 'hello-note-worker.md'), 'utf8').includes('hello_files')) throw new Error('the worker isn’t in the plugin');
+    // Review only: Claude's file tools are denied in the folder, and the check before each tool is Visual Editor's own,
+    // which stops a shell command writing into the project (exit code 2, with what to do instead).
+    if (!t.hub.assistants()[0].reviewOnly || !local().permissions?.deny?.some((d: string) => d.startsWith('Edit(//')) ) throw new Error(`not locked to Review: ${JSON.stringify(local())}`);
+    const guard: string = local().hooks.PreToolUse.find((e: any) => e.hooks[0].command.includes('visual-editor-guard')).hooks[0].command;
+    const ran = require('node:child_process').spawnSync('/bin/sh', ['-c', guard], { input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'echo x > src/a.ts' }, cwd: root }), encoding: 'utf8' });
+    if (ran.status !== 2 || !/save_draft[\s\S]*Stopped: writes to src\/a\.ts/.test(ran.stderr)) throw new Error(`the check: ${ran.status} ${ran.stderr}`);
+    // With each message, a reminder; reading the project waits until Visual Editor is asked, then is free.
+    const hook = (call: object) => require('node:child_process').spawnSync('/bin/sh', ['-c', guard], { input: JSON.stringify({ session_id: `smoke-${Date.now()}`, cwd: root, ...call }), encoding: 'utf8' });
+    const session = `smoke-${Date.now()}`;
+    const said = hook({ session_id: session, hook_event_name: 'UserPromptSubmit', prompt: 'hi' });
+    const held = hook({ session_id: session, hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: join(root, 'README.md') } });
+    hook({ session_id: session, hook_event_name: 'PreToolUse', tool_name: 'mcp__visual-editor__overview', tool_input: {} });
+    const free = hook({ session_id: session, hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: join(root, 'README.md') } });
+    if (said.status !== 0 || !/ask it first/.test(said.stdout) || held.status !== 2 || !/ask the map first/.test(held.stderr) || free.status !== 0) throw new Error(`map first: ${JSON.stringify([said.stdout, held.status, held.stderr, free.status, free.stderr])}`);
+    // Off, then on again.
+    await vscode.workspace.getConfiguration('visualEditor.claude').update('reviewOnly', false, vscode.ConfigurationTarget.Global);
+    await until(() => !t.hub.assistants()[0].reviewOnly && !JSON.stringify(local()).includes('visual-editor-guard'), 'the lock to come off', 5000);
+    await vscode.workspace.getConfiguration('visualEditor.claude').update('reviewOnly', undefined, vscode.ConfigurationTarget.Global);
+    await until(() => t.hub.assistants()[0].reviewOnly, 'the lock to go on again', 5000);
     // A plugin that brings another agent: a new version, which Claude Code updates to for this folder by itself.
     const extra = api.register({ id: 'extra', name: 'Extra', version: '0', contract: api.contract, detect: () => undefined, agents: [{ name: 'extra-job', title: 'Extra job', description: 'A test agent.', worker: { prompt: 'Work.' }, checker: { prompt: 'Check.' } }] });
     const cache = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'plugins', 'cache', agents.marketplace, 'visual-editor');
@@ -224,9 +245,127 @@ export async function run() {
     await t.hub.disconnectClaudeCode();
     await until(() => t.hub.claudeState() === 'off', 'the hub to be gone from Claude Code settings', 15_000);
     if (t.hub.assistants()[0].agents !== 'off' || local().enabledPlugins?.[agents.ref]) throw new Error('the agents are still installed');
+    if (t.hub.assistants()[0].reviewOnly || JSON.stringify(local()).includes('visual-editor-guard')) throw new Error(`still locked after disconnect: ${JSON.stringify(local())}`);
     if (shown().status?.action !== 'connect' || shown().groups.map((g) => g.name).join() !== 'Visual Editor,Hello') throw new Error(`agents section after disconnect: ${JSON.stringify(shown())}`);
     // The test's own marketplace points at this throwaway VS Code's storage: take it out of Claude Code again.
     await new Promise((done) => require('node:child_process').exec(`claude plugin marketplace remove ${agents.marketplace}`, { cwd: root, env: { ...process.env, PATH: `${join(homedir(), '.local/bin')}:${process.env.PATH}` } }, done));
+  });
+
+  await step('a design session opens in its own tab and follows its draft as it changes', async () => {
+    const draft = t.sessions.start(root);
+    const seen = listen(t.sessions.panel(root, draft.id));
+    const last = () => [...seen].reverse().find((m) => m.type === 'show')?.session;
+    await until(() => last()?.status?.kind === 'open' && (last()?.error || last()?.app), 'the session to show (or say why its app can’t run)', 20_000);
+    if (last().title !== 'Design session' || last().asked.length || last().versions.length) throw new Error(`a new session: ${JSON.stringify(last())}`);
+    // Claude (or anyone) saves new versions of its draft: the tab follows by itself, versions and all.
+    const store = new DraftStore(root);
+    const readme = readFileSync(join(root, 'README.md'), 'utf8');
+    const now = () => new Date().toISOString();
+    store.save({ ...draft, asked: ['Say hello in the README'], changes: [{ path: 'README.md', before: readme, after: `${readme}\nHello!\n` }], revision: 2, updatedAt: now() });
+    await until(() => last()?.revision === 2 && last()?.versions.length === 1, 'the session to follow version 2', 10_000);
+    store.save({ ...store.list().find((d) => d.id === draft.id)!, changes: [{ path: 'README.md', before: readme, after: `${readme}\nHello again!\n` }], revision: 3, updatedAt: now() });
+    await until(() => last()?.revision === 3 && last()?.versions.map((v: { revision: number }) => v.revision).join() === '3,2', 'the session to follow version 3', 10_000);
+    if (last().asked.join() !== 'Say hello in the README') throw new Error(`what was asked: ${JSON.stringify(last().asked)}`);
+    await wait(1500);
+    await shot('13-design-session');
+    t.sessions.panel(root, draft.id)?.dispose();
+    store.remove(draft.id);
+  });
+
+  await step('a proposal continues in a design session; Done puts the result back into the same proposal', async () => {
+    const readme = readFileSync(join(root, 'README.md'), 'utf8');
+    const at = new Date().toISOString();
+    const id = `${Date.now()}-cont1`;
+    t.review.receiveProposal(root, { id, title: 'Say hello', why: 'w', asked: ['Say hello in the README'], by: { kind: 'assistant', name: 'Claude Code' }, createdAt: at, status: 'proposed', changes: [{ path: 'README.md', before: readme, after: `${readme}\nHello!\n` }], history: [{ at, status: 'proposed' }] });
+    const proposal = () => t.review.proposals(root).find((p: { id: string }) => p.id === id);
+    t.sessions.continueProposal(root, proposal());
+    await until(() => !!proposal()?.session, 'the proposal to be marked as in a session', 5000);
+    const store = new DraftStore(root);
+    const draft = store.list().find((d) => d.id === proposal().session)!;
+    if (draft.changes[0]?.after !== `${readme}\nHello!\n` || draft.session?.proposal !== id || draft.asked?.join() !== 'Say hello in the README') throw new Error(`the session's draft: ${JSON.stringify(draft)}`);
+    // Locked while in the session: approving it does nothing.
+    await vscode.commands.executeCommand('visualEditor.openReview');
+    await wait(800);
+    await shot('14-proposal-in-session');
+    // More changes in the session, then Done: the same proposal, waiting again, with the new changes.
+    store.save({ ...draft, asked: [...(draft.asked ?? []), 'And say goodbye'], changes: [{ path: 'README.md', before: readme, after: `${readme}\nHello!\nGoodbye!\n` }], revision: 2, updatedAt: new Date().toISOString() });
+    // Done: its test cases are written (a README change: no planner needed), shown, then run as they are.
+    const plan = await t.hub.planDraft(root, draft.id);
+    if (typeof plan === 'string') throw new Error(`test cases: ${plan}`);
+    const run = t.hub.runChecks(root, draft.id, asItIs(plan));
+    if (typeof run === 'string') throw new Error(`Run: ${run}`);
+    const sent = await run.promise;
+    if (typeof sent === 'string') throw new Error(`Done: ${sent}`);
+    await until(() => proposal()?.changes[0].after.endsWith('Goodbye!\n') && !proposal()?.session, 'the proposal to be updated', 5000);
+    const p = proposal();
+    if (p.status !== 'proposed' || p.asked.join(' | ') !== 'Say hello in the README | And say goodbye' || p.history.at(-1).note !== 'Changed in a design session' || t.review.proposals(root).filter((x: { title: string }) => x.title === 'Say hello').length !== 1) throw new Error(`the updated proposal: ${JSON.stringify(p)}`);
+    t.sessions.panel(root, draft.id)?.dispose();
+    store.remove(draft.id);
+    require('node:fs').rmSync(join(root, '.visual-editor', 'proposals', `${id}.json`), { force: true });
+  });
+
+  await step('a held-back change: its failed checks can be bypassed (with why), and it goes to Review marked so', async () => {
+    const readme = readFileSync(join(root, 'README.md'), 'utf8');
+    const at = new Date().toISOString();
+    const id = `held-${Date.now()}-byp1`;
+    t.review.receiveProposal(root, { id, title: 'Say hi', why: 'w', asked: ['Say hi'], by: { kind: 'assistant', name: 'Claude Code' }, createdAt: at, status: 'held-back', changes: [{ path: 'README.md', before: readme, after: `${readme}\nHi\n` }], history: [{ at, status: 'held-back' }], evidence: [{ kind: 'check', title: 'Check TypeScript', text: '1 new error: src/x.ts(1,1)', passed: false, by: 'Visual Editor', at, revision: 1 }] });
+    await vscode.commands.executeCommand('visualEditor.openReview');
+    const seen = listen(t.review.panel);
+    t.review.askBypass(root, id);
+    await until(() => seen.some((m) => m.askBypass === id && m.items.find((i: { id: string }) => i.id === id)?.failed?.length === 1), 'Review to open the bypass window', 5000);
+    await wait(800);
+    await shot('15-bypass-window');
+    await (t.review as any).receive({ type: 'bypass', id, titles: ['Check TypeScript'], reason: 'That error is from a file this change does not touch' });
+    const p = t.review.proposals(root).find((x: { id: string }) => x.id === id);
+    if (p.status !== 'proposed' || p.evidence[0].bypassed?.reason !== 'That error is from a file this change does not touch' || !/bypassed: Check TypeScript\. Why: That error is from a file this change does not touch/.test(p.history.at(-1).note)) throw new Error(`after bypass: ${JSON.stringify(p)}`);
+    require('node:fs').rmSync(join(root, '.visual-editor', 'proposals', `${id}.json`), { force: true });
+  });
+
+  await step('a change from the chat waits in Review with its test cases; nothing runs until the developer runs them', async () => {
+    const readme = readFileSync(join(root, 'README.md'), 'utf8');
+    const at = new Date().toISOString();
+    const store = new DraftStore(root);
+    const id = `${Date.now()}-plan1`;
+    store.save({ id, title: 'Say hello again', why: 'w', by: { kind: 'assistant', name: 'Claude Code' }, createdAt: at, updatedAt: at, status: 'draft', changes: [{ path: 'README.md', before: readme, after: `${readme}\nHello again\n` }], asked: ['Say hello again'], revision: 1, evidence: [] });
+    await t.hub.planDraft(root, id);
+    const entry = () => t.review.proposals(root).find((p: { id: string }) => p.id === `held-${id}`);
+    await until(() => entry()?.status === 'awaiting-checks', 'it to wait in Review with its test cases', 5000);
+    await vscode.commands.executeCommand('visualEditor.openReview');
+    const seen = listen(t.review.panel);
+    t.review.askPlan(root, `held-${id}`);
+    await until(() => seen.some((m) => m.askPlan === `held-${id}` && m.items.find((i: { id: string }) => i.id === `held-${id}`)?.plan?.state === 'ready'), 'Review to open its test cases', 5000);
+    await wait(800);
+    await shot('16-test-cases');
+    if (new DraftStore(root).list().find((d) => d.id === id)?.evidence.length) throw new Error('something ran before Run');
+    await (t.review as any).receive({ type: 'runPlan', id: `held-${id}`, choice: { checks: {}, cases: [], added: [], skipAll: true, reason: 'Only words' } });
+    await until(() => entry()?.status === 'proposed', 'it to reach Review once run', 10_000);
+    if (!/Sent without any checks, by the developer\. Why: Only words/.test(entry().evidence.map((e: { text: string }) => e.text).join('\n'))) throw new Error(`its proof: ${JSON.stringify(entry().evidence)}`);
+    store.remove(id);
+    require('node:fs').rmSync(join(root, '.visual-editor', 'proposals', `held-${id}.json`), { force: true });
+  });
+
+  await step('a held-back change runs its checks again from Review (the same test cases), and goes once they pass', async () => {
+    const readme = readFileSync(join(root, 'README.md'), 'utf8');
+    const at = new Date().toISOString();
+    const store = new DraftStore(root);
+    const id = `${Date.now()}-rerun1`;
+    store.save({ id, title: 'Say hi once more', why: 'w', by: { kind: 'assistant', name: 'Claude Code' }, createdAt: at, updatedAt: at, status: 'draft', changes: [{ path: 'README.md', before: readme, after: `${readme}\nHi once more\n` }], asked: ['Say hi once more'], revision: 1, evidence: [] });
+    await t.hub.planDraft(root, id);
+    // Held back by a check that was wrong (since fixed): stopped, with its test cases kept.
+    const d = new DraftStore(root).list().find((x) => x.id === id)!;
+    store.save({ ...d, check: { ...d.check!, step: 'done', held: 'Not sent to Review: a check that was wrong.' } });
+    t.review.receiveProposal(root, { id: `held-${id}`, title: d.title, why: 'w', asked: d.asked, by: d.by, createdAt: at, status: 'held-back', changes: d.changes, history: [{ at, status: 'held-back' }], evidence: [] });
+    const entry = () => t.review.proposals(root).find((p: { id: string }) => p.id === `held-${id}`);
+    await vscode.commands.executeCommand('visualEditor.openReview');
+    const seen = listen(t.review.panel);
+    t.review.show(`held-${id}`);
+    await until(() => seen.some((m) => m.items?.find((i: { id: string }) => i.id === `held-${id}`)?.rerun?.can === true), 'Review to offer running its checks again', 5000);
+    await wait(600);
+    await shot('17-run-again');
+    await (t.review as any).receive({ type: 'rerun', id: `held-${id}` });
+    await until(() => entry()?.status === 'proposed', 'it to reach Review once its checks run again', 10_000);
+    store.remove(id);
+    require('node:fs').rmSync(join(root, '.visual-editor', 'proposals', `held-${id}.json`), { force: true });
   });
 
   await step('the map pops out into its own window and comes back', async () => {

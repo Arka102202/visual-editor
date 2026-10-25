@@ -23,7 +23,7 @@ const builds = extensions.flatMap((dir) => [
   { ...common, entryPoints: [join(dir, 'src/extension.ts')], outfile: join(dir, 'dist/extension.js'), external: ['vscode'] },
   // Work done off VS Code's own thread (src/worker.ts), e.g. reading a big project, and programs run as their own
   // process (src/draftServer.ts, a draft's app server): dist/<name>.js.
-  ...['worker', 'draftServer', 'typesCheck']
+  ...['worker', 'draftServer', 'typesCheck', 'claudeGuard']
     .filter((name) => existsSync(join(dir, `src/${name}.ts`)))
     .map((name) => ({ ...common, entryPoints: [join(dir, `src/${name}.ts`)], outfile: join(dir, `dist/${name}.js`), external: ['vscode'] })),
   // Pages shown inside VS Code (src/<page>/main.ts) run in the browser: dist/<page>.js.

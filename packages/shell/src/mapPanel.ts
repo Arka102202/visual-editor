@@ -218,6 +218,8 @@ export class MapPanel {
       const item = state?.items.find((i) => i.id === m.id);
       const plugin = item && state?.detected.find(({ plugin: p }) => item.id.startsWith(`${p.id}:`))?.plugin;
       if (state && item && plugin?.previewFix) this.proposeChange(state.project.root, plugin.previewFix(state.project, m.need), item.id);
+    } else if (m.type === 'session') {
+      void vscode.commands.executeCommand('visualEditor.startSession', { card: m.id });
     } else if (m.type === 'window') {
       void this.toggleWindow();
     } else if (m.type === 'clearChanged') {

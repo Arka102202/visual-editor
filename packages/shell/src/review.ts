@@ -3,6 +3,10 @@
 // keep a note, and an applied change can be undone. The map marks the cards a waiting proposal would change.
 
 import * as vscode from 'vscode';
+import { DraftStore } from './drafts';
+import { PLAN_STEP, WAITING } from './hub/tools';
+import type { PlanChoice } from './ui/planWindow';
+import { asItIs } from './hub/checkPlan';
 import { webviewPage } from './webviewPage';
 import { vscodeFiles } from './vscodeFiles';
 import { readFileSync } from 'node:fs';
@@ -15,7 +19,7 @@ import type { OutsideChanges } from './changes';
 import type { CurrentProject } from './currentProject';
 import type { ProjectMemory } from './memoryView';
 import { counts, hunks } from './diff';
-import { apply, conflicts, newId, ProposalStore, undo, undoConflicts, type Evidence, type Files, type Proposal } from './proposals';
+import { apply, conflicts, newId, ProposalStore, undo, undoConflicts, type Evidence, type Files, type Proposal, overruleProof, bypassProof, failedChecks, whyFailed } from './proposals';
 import type { ProjectIndex } from './projectIndex';
 import type { FromReview, ReviewItem, ToReview } from './reviewMessages';
 
@@ -32,6 +36,14 @@ export class Review implements vscode.Disposable {
   /** Pictures shown live, by proposal and card ("<proposal> <card>"). */
   private readonly lives = new Map<string, { url?: string; progress?: string; error?: string }>();
   /** Shows a card's Playground running with a proposal's changes on top (its own app), and gives its address. */
+  private openSession: ((root: string, p: Proposal) => void) | undefined;
+  private draftsTimer: ReturnType<typeof setTimeout> | undefined;
+  private replan: ((root: string, draft: string) => void) | undefined;
+  /** A change whose test cases' window opens with the next showing. */
+  private planFor: string | undefined;
+  private runPlan: ((root: string, draft: string, choice: PlanChoice) => string | undefined) | undefined;
+  /** A held-back change whose bypass window opens with the next showing. */
+  private bypassFor: string | undefined;
   private live: ((root: string, p: Proposal, card: string) => Promise<string>) | undefined;
 
   constructor(
@@ -54,6 +66,122 @@ export class Review implements vscode.Disposable {
   private readonly checking = new Map<string, { progress?: string; error?: string }>();
   /** Runs the logic check on a change with the developer's cases (set by the extension). */
   private logic: ((root: string, p: Proposal, cases: string[], means?: string[]) => Promise<LogicVerdict | string>) | undefined;
+
+  /** Continues a proposal in a design session (or shows the session changing it now). */
+  setSessions(open: (root: string, p: Proposal) => void) {
+    this.openSession = open;
+  }
+
+  /**
+   * The developer overrules a broken case of the logic check (it expected the wrong thing). A held-back change with
+   * nothing else broken then goes to Review as an ordinary proposal, with the overruling in its proof.
+   */
+  private async overrule(root: string, p: Proposal, index: number) {
+    const logic = p.evidence?.find((e) => e.logic)?.logic;
+    const c = logic?.cases[index];
+    if (!c || c.ok) return;
+    const note = await vscode.window.showInputBox({ title: `Overrule: ${c.case}`, prompt: 'Why is this case wrong? (kept in the proof, for whoever looks at it later)', ignoreFocusOut: true });
+    if (!note?.trim()) return;
+    const revision = p.evidence!.find((e) => e.logic)!.revision;
+    const evidence = overruleProof(p.evidence!, revision, [index], note.trim());
+    const store = this.store(root);
+    const clear = evidence.filter((e) => e.revision === revision).every((e) => e.passed !== false);
+    if (p.status === 'held-back' && clear) {
+      store.save({ ...p, evidence, status: 'proposed', history: [...p.history, { at: new Date().toISOString(), status: 'proposed', note: `You overruled the logic check: ${c.case} (${note.trim()})` }] });
+      // Its draft went to Review this way: it isn't sent again.
+      const drafts = new DraftStore(root);
+      const d = drafts.list().find((x) => `held-${x.id}` === p.id);
+      if (d) drafts.save({ ...d, status: 'submitted', proposal: p.id, evidence: overruleProof(d.evidence, revision, [index], note.trim()) });
+      void vscode.window.showInformationMessage(`“${p.title}” is now waiting in Review (you overruled the case).`);
+    } else store.save({ ...p, evidence });
+    this.reload(root, false);
+  }
+
+  /** Runs a change's test cases as the developer left them (its draft); a string says why it can't now. */
+  setChecks(run: (root: string, draft: string, choice: PlanChoice) => string | undefined) {
+    this.runPlan = run;
+  }
+
+  /** A project's drafts changed (a check moving on, test cases written): Review shows where they are now. */
+  draftsChanged(root: string) {
+    if (this.current.get()?.project.root !== root) return;
+    clearTimeout(this.draftsTimer);
+    this.draftsTimer = setTimeout(() => void this.send(), 300);
+  }
+
+  /** Has new test cases written for a change's draft. */
+  setReplan(replan: (root: string, draft: string) => void) {
+    this.replan = replan;
+  }
+
+  /** Shows a change waiting for its checks with the window of its test cases open. */
+  askPlan(root: string, id: string) {
+    this.current.choose(root);
+    this.planFor = id;
+    this.show(id);
+  }
+
+  /** Shows a held-back change in Review with the window to bypass its failed checks open. */
+  askBypass(root: string, id: string) {
+    this.current.choose(root);
+    this.bypassFor = id;
+    this.show(id);
+  }
+
+  /**
+   * The developer lets a held-back change go with some failed checks bypassed (their reason kept in its proof and its
+   * history). With nothing else failing it goes to Review as an ordinary proposal; its draft isn't sent again.
+   */
+  private bypass(root: string, p: Proposal, titles: string[], reason: string) {
+    if (p.status !== 'held-back' || !p.evidence?.length) return;
+    const revision = Math.max(...p.evidence.map((e) => e.revision));
+    const evidence = bypassProof(p.evidence, revision, titles, reason);
+    const store = this.store(root);
+    const now = new Date().toISOString();
+    if (failedChecks(evidence, revision).length) {
+      store.save({ ...p, evidence });
+    } else {
+      store.save({ ...p, evidence, status: 'proposed', history: [...p.history, { at: now, status: 'proposed', note: `Sent to Review by you, with ${titles.length === 1 ? 'a check' : 'checks'} bypassed: ${titles.join('; ')}. Why: ${reason}` }] });
+      const drafts = new DraftStore(root);
+      const d = drafts.list().find((x) => `held-${x.id}` === p.id);
+      if (d) drafts.save({ ...d, status: 'submitted', proposal: p.id, evidence: bypassProof(d.evidence, revision, titles, reason) });
+      void vscode.window.showInformationMessage(`“${p.title}” is now waiting in Review, marked as sent with ${titles.length} check${titles.length === 1 ? '' : 's'} bypassed.`);
+    }
+    this.reload(root, false);
+  }
+
+  /** Whether a held-back change's test cases can run again as they are, or are running now (the step). */
+  private rerunOf(root: string, id: string): NonNullable<ReviewItem['rerun']> {
+    const d = new DraftStore(root).list().find((x) => `held-${x.id}` === id);
+    const ready = !!d && d.status === 'draft' && d.plan?.revision === d.revision;
+    const step = d?.check?.revision === d?.revision ? d?.check?.step : undefined;
+    const running = step && step !== 'done' && step !== WAITING && step !== PLAN_STEP ? step : undefined;
+    const p = d?.plan;
+    const view = ready && p ? { means: p.means, looksOnly: p.looksOnly, checks: p.checks.map((x) => ({ id: x.id, title: x.title, why: x.why, use: x.use, ...(x.always ? { always: true } : {}) })), cases: p.cases.map((x) => ({ case: x.case, expected: x.expected, how: x.how, use: x.use })) } : undefined;
+    return { can: ready && !running, ...(running ? { running } : {}), ...(view ? { view } : {}) };
+  }
+
+  /** Where a change waiting for its checks is: its test cases being written, ready (to show), or running. */
+  private planOf(root: string, id: string): NonNullable<ReviewItem['plan']> {
+    const d = new DraftStore(root).list().find((x) => `held-${x.id}` === id);
+    const c = d?.check;
+    if (!d || !c || c.step === PLAN_STEP || c.step === 'starting') return { state: 'writing' };
+    if (c.step === WAITING && d.plan) {
+      const p = d.plan;
+      return { state: 'ready', view: { means: p.means, looksOnly: p.looksOnly, checks: p.checks.map((x) => ({ id: x.id, title: x.title, why: x.why, use: x.use, ...(x.always ? { always: true } : {}) })), cases: p.cases.map((x) => ({ case: x.case, expected: x.expected, how: x.how, use: x.use })) } };
+    }
+    return { state: 'running', step: c.step };
+  }
+
+  /** Marks a proposal as being changed in a design session (that session's draft), or not any more. */
+  setSessionOf(root: string, id: string, draft: string | undefined) {
+    const store = this.store(root);
+    const p = store.get(id);
+    if (!p) return;
+    const { session: _session, ...rest } = p;
+    store.save(draft ? { ...rest, session: draft } : rest);
+    this.reload(root, false);
+  }
 
   setLogic(logic: (root: string, p: Proposal, cases: string[], means?: string[]) => Promise<LogicVerdict | string>) {
     this.logic = logic;
@@ -325,6 +453,36 @@ export class Review implements vscode.Disposable {
     const store = this.store(root);
     const p = store.get(m.id);
     if (!p) return;
+    if (m.type === 'session') return this.openSession?.(root, p);
+    if (m.type === 'overrule') return this.overrule(root, p, m.index);
+    if (m.type === 'bypass') return this.bypass(root, p, m.titles, m.reason);
+    if (m.type === 'replan') {
+      const d = new DraftStore(root).list().find((x) => `held-${x.id}` === p.id);
+      if (!d || d.status !== 'draft') return;
+      // New test cases are written; the change waits under "Checks to approve", and their window opens when ready.
+      this.replan?.(root, d.id);
+      return this.reload(root, false);
+    }
+    if (m.type === 'rerun') {
+      const d = new DraftStore(root).list().find((x) => `held-${x.id}` === p.id);
+      if (!d?.plan || d.plan.revision !== d.revision) {
+        void vscode.window.showInformationMessage('Its test cases were written before this version (or before test cases existed): ask Claude in your chat to send it again, for new ones.');
+        return;
+      }
+      const why = this.runPlan?.(root, d.id, asItIs(d.plan));
+      if (why) void vscode.window.showWarningMessage(why);
+      return this.reload(root, false);
+    }
+    if (m.type === 'runPlan') {
+      const why = this.runPlan?.(root, p.id.replace(/^held-/, ''), m.choice);
+      if (why) void vscode.window.showWarningMessage(why);
+      return this.reload(root, false);
+    }
+    // Being changed in a design session: nothing is decided on it until the session is done (or discarded).
+    if (p.session && m.type !== 'undo') {
+      void vscode.window.showInformationMessage(`“${p.title}” is being changed in a design session. Press Done there to bring the changes back here (or Discard to keep it as it was), then decide.`);
+      return;
+    }
     const files = this.files(root);
     try {
       if (m.type === 'approve') {
@@ -391,6 +549,12 @@ export class Review implements vscode.Disposable {
         title: p.title,
         why: p.why,
         ...(p.asked?.length ? { asked: p.asked } : {}),
+        ...(p.session ? { inSession: true } : {}),
+        ...(p.status === 'awaiting-checks' ? { plan: this.planOf(root!, p.id) } : {}),
+        ...(p.status === 'held-back' ? { rerun: this.rerunOf(root!, p.id) } : {}),
+        ...(p.status === 'held-back' && p.evidence?.length
+          ? { failed: failedChecks(p.evidence, Math.max(...p.evidence.map((e) => e.revision))).map((e) => ({ title: e.title, why: whyFailed(e) })) }
+          : {}),
         by: p.by,
         createdAt: p.createdAt,
         status: p.status,
@@ -411,7 +575,12 @@ export class Review implements vscode.Disposable {
     if (!this.selected || !items.some((i) => i.id === this.selected)) this.selected = (items.find((i) => i.status === 'proposed') ?? items[0])?.id;
     // A proposal that shows how it looks needs the app: started the first time one is shown.
     if (root && items.find((i) => i.id === this.selected)?.look && !this.apps.has(root)) void this.startApp(root);
-    const message: ToReview = { type: 'show', project: state?.project.name, items, selected: this.selected, problems: root ? this.store(root).problems : [], app: root ? this.apps.get(root) : undefined };
+    const message: ToReview = { type: 'show', project: state?.project.name, items, selected: this.selected, problems: root ? this.store(root).problems : [], app: root ? this.apps.get(root) : undefined, ...(this.bypassFor ? { askBypass: this.bypassFor } : {}) };
+    this.bypassFor = undefined;
+    if (this.planFor) {
+      (message as ToReview).askPlan = this.planFor;
+      this.planFor = undefined;
+    }
     this.panel.title = `Review${state ? ` · ${state.project.name}` : ''}`;
     void this.panel.webview.postMessage(message);
   }

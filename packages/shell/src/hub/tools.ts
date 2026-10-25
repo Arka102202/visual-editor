@@ -8,7 +8,8 @@ import { z } from 'zod';
 import type { Item, Plugin, PluginAgent, PluginTool, ToolAnswer, ToolInput } from '@visual-editor/contract';
 import { forCard, rulesText, type MemoryEntry } from '../memory';
 import type { ProjectState } from '../projectIndex';
-import { newId, parseProposal, safePath, type Evidence, type FileChange, type Proposal } from '../proposals';
+import { holdsBack, LOOKS_SAME, newId, parseProposal, safePath, type Evidence, type FileChange, type Proposal } from '../proposals';
+import { applyEdits, BUILT_IN_CHECKS, choicesText, type AvailableCheck, type CheckPlan, type PlanEdits } from './checkPlan';
 import { draftView, type Draft } from '../drafts';
 import { current, JOB_MINUTES, newJob, nextStep, type Job } from '../jobs';
 import { logicText, type LogicVerdict } from './logicCheck';
@@ -50,7 +51,22 @@ export interface HubHost {
    */
   compareApp?(root: string, draft: Draft, path: string): Promise<AppComparison | string>;
   /** The logic check (logicCheck.ts): does the draft do exactly what was asked, soundly. A string says why it couldn't run. */
-  logicCheck?(root: string, draft: Draft): Promise<LogicVerdict | string>;
+  /** The check planner (checkPlan.ts): the plan for a finished change (which checks apply, the scenarios); or why none. */
+  planChecks?(root: string, draft: Draft, available: AvailableCheck[]): Promise<CheckPlan | string>;
+  /** Runs a plan's scenarios: the developer's own read in the code, then those that can be tried in the app. */
+  runPlannedCases?(root: string, draft: Draft, plan: CheckPlan): Promise<LogicVerdict | string>;
+  /** A finished change's test cases are written: the developer looks at them and runs them. */
+  planned?(root: string, draft: Draft): void;
+  /** How long a call waits for a check before saying it goes on in the background (default CHECK_WAIT_MS). */
+  checkWaitMs?: number;
+  /** The design session open in the developer's editor for a project, if one: its draft and title. */
+  session?(root: string): { draft: string; title: string } | undefined;
+  /** Opens a design session (about a card, if given) with what was asked; its draft, or why it couldn't. */
+  startSession?(root: string, card: string | undefined, asked: string): { draft: string } | string;
+  /** Continues a waiting (or sent-back, held-back) proposal in a design session; its draft, or why it couldn't. */
+  continueProposal?(root: string, id: string): { draft: string } | string;
+  /** A draft's check ended (sent: its proposal; or why it was held back). */
+  checked?(root: string, draft: Draft, result: { proposal: Proposal } | string): void;
 }
 
 export interface AppComparison {
@@ -88,9 +104,15 @@ between them), its rules and decisions, and the history of reviewed changes.
 - NEVER edit files directly. Every change goes through propose_change: the developer sees it in Review and approves,
   sends it back with a note, or rejects it. Then call proposal_status; if it was sent back, read the note and propose
   again.
-- Nothing reaches Review unless Visual Editor's checks and its logic check pass on it: a separate Claude holds the
-  change to what the developer asked for (give it, in their words, as asked). If one fails you get the problems to fix
-  instead.
+- Design sessions: the developer and you shape a change together, live, in a tab. While one is open, put every change
+  for it into its draft with save_draft (draft: its id), adding each new request as asked, and don't propose: nothing
+  is checked until the developer is done (they press Done, or say "done" and you call submit_draft). start_session
+  opens one ("let's design a new look for ProjectCard"); to change a proposal that is waiting in Review, use
+  continue_proposal instead of proposing a replacement.
+- When you send a change (propose_change, submit_draft), Visual Editor's check planner writes its test cases: which
+  checks apply, and scenarios that hold it to what the developer asked (give that, in their words, as asked). The
+  developer looks at them, changes them if they like, and runs them; passing, it reaches Review, else you get what to
+  fix. Sending answers at once: don't wait or send it again; follow it with proposal_status.
 - For bigger jobs, work in a draft: save_draft keeps the files apart (nothing changes), plugin tools given its id
   (draft) look at the project as it would leave it, read_draft shows it, and submit_draft sends it to Review.
 - Visual Editor's agents (a worker, then a checker) run as jobs: job_start, then follow job_status's next step.
@@ -99,7 +121,7 @@ Card ids look like "react:component:src/Card.tsx#Card". Several projects may be 
 matters; otherwise the one on the map is used.`;
 
 const READY_WAIT_MS = 5000;
-const STATUS_WORDS: Record<Proposal['status'], string> = { proposed: 'waiting for review', applied: 'approved and applied', rejected: 'rejected', 'sent-back': 'sent back', undone: 'applied, then undone', 'held-back': 'held back by a check (it never reached the developer)' };
+const STATUS_WORDS: Record<Proposal['status'], string> = { 'awaiting-checks': 'its test cases wait for the developer to run them', proposed: 'waiting for review', applied: 'approved and applied', rejected: 'rejected', 'sent-back': 'sent back', undone: 'applied, then undone', 'held-back': 'held back by a check (it never reached the developer)' };
 
 export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assistant'): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version }, { instructions: INSTRUCTIONS });
@@ -236,7 +258,7 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
     {
       title: 'Propose a change',
       description:
-        'The only way to change code. Give each file\'s complete new content (or null to remove it). Visual Editor checks it first (the plugins\' checks, and a picture of any component it changes that can be previewed): if a check fails, it does not go to Review and you get the problems to fix; if it passes, it waits in Review, with that proof, until the developer approves, sends it back or rejects it. Nothing changes before that. Then check proposal_status.',
+        'The only way to change code. Give each file\'s complete new content (or null to remove it). Visual Editor\'s check planner then writes its test cases (which checks apply, scenarios that try to break it); the developer looks at them and runs them; passing, it waits in Review, with that proof, until they approve, send it back or reject it; failing, you get what to fix. Nothing changes before that. Answers at once: follow it with proposal_status (the id it gives).',
       inputSchema: {
         title: z.string().describe('Short, plain words: what changes, e.g. "Add an onOpen callback to PostCard"'),
         why: z.string().describe('Why, in plain words, for the developer'),
@@ -253,6 +275,9 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       const s = await pick(project);
       if (typeof s === 'string') return fail(s);
       const root = s.project.root;
+      // A design session is open: changes go into it, checked once when the developer is done.
+      const open = host.session?.(root);
+      if (open) return fail(sessionWords(open));
       const files: FileChange[] = [];
       for (const c of changes) {
         const path = c.path.replace(/\\/g, '/').replace(/^\.\//, '');
@@ -266,12 +291,8 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       const now = new Date().toISOString();
       const d: Draft = { id: newId(), title, why, by: { kind: 'assistant', name: client }, createdAt: now, updatedAt: now, status: 'draft', changes: files, ...(cards?.length ? { items: cards } : {}), asked: [asked.trim()], ...(cases?.length ? { cases } : {}), revision: 1, evidence: [] };
       host.saveDraft(root, d);
-      const blocked = await provenOrWhy(s, d, 'call propose_change again with the corrected files');
-      if (blocked) return fail(blocked);
-      const sent = await submit(root, host.drafts(root).find((x) => x.id === d.id) ?? d);
-      if (typeof sent === 'string') return fail(sent);
-      const said = sent.evidence.map((e) => `${mark(e)} ${e.title}`).join('; ');
-      return reply(`Proposal ${sent.proposal.id} is waiting in Review for the developer, with its proof: ${said}. Nothing has changed yet. Call proposal_status with id "${sent.proposal.id}" to see what they decided.`);
+      void requestChecks(s, d.id);
+      return reply(sentForChecks(d.id));
     },
   );
 
@@ -289,6 +310,16 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       const all = host.proposals(s.project.root);
       if (!id) return reply(all.length ? all.slice(0, 15).map((p) => `${p.id} · ${STATUS_WORDS[p.status]} · ${p.title}`).join('\n') : 'No proposals yet.');
       const p = all.find((x) => x.id === id);
+      // A draft being checked on its way to Review: where its check is, or how it ended.
+      const d = p ? undefined : host.drafts(s.project.root).find((x) => x.id === id);
+      if (d?.check) {
+        const c = d.check;
+        if (c.sent) return reply(`It reached Review as proposal ${c.sent}: ${STATUS_WORDS[all.find((x) => x.id === c.sent)?.status ?? 'proposed']}. Call proposal_status with id "${c.sent}" later to see what the developer decided.`);
+        if (c.held) return reply(`It did not reach Review. ${c.held}`);
+        if (c.step === PLAN_STEP) return reply('Visual Editor\'s check planner is writing its test cases. Ask again later; don\'t send it again.');
+        if (c.step === WAITING) return reply('Its test cases are written: it waits for the developer to look at them and press Run. Nothing for you to do now; ask again later.');
+        return reply(`Still being checked (version ${c.revision}): now ${c.step}, started ${Math.round((Date.now() - Date.parse(c.at)) / 1000)} s ago. Ask again in a minute; don't send it again.`);
+      }
       if (!p) return fail(`No proposal "${id}" in ${s.project.name}.`);
       const note = [...p.history].reverse().find((h) => h.note)?.note;
       // The developer's own cases, and how they (and any other case) did: kept when it's proposed again.
@@ -335,100 +366,11 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
     },
   );
 
-  /**
-   * Proves a draft the way Visual Editor can on its own: every check its plugins have (on the project as the draft
-   * leaves it), and a picture of each component it changes that can be previewed (up to 3). Returns the proof kept.
-   */
-  const proveDraft = async (s: ProjectState, d: Draft, missingOnly = false): Promise<Evidence[]> => {
-    const root = s.project.root;
-    const kept = () => (host.drafts(root).find((x) => x.id === d.id) ?? d).evidence.filter((e) => e.revision === d.revision);
-    // (missingOnly: what was already run on this version, by Claude or before, isn't run again.)
-    const ran = (title: string) => missingOnly && kept().some((e) => e.by === 'Visual Editor' && (e.title === title || e.title.startsWith(`${title} (`)));
-    for (const { plugin, tool } of host.tools()) {
-      if (!tool.checks || !s.detected.some((x) => x.plugin.id === plugin.id) || ran(tool.title)) continue;
-      try {
-        await runTool(s, tool, {}, d);
-      } catch (e) {
-        addProof(root, d, { kind: 'note', title: `${tool.title}: couldn't run`, text: `A bug in the ${plugin.name} plugin: ${e instanceof Error ? e.message : e}`, by: 'Visual Editor', at: new Date().toISOString(), revision: d.revision });
-      }
-    }
-    // Pictures only for a change that passed its checks (a failed one goes back to be fixed first).
-    if (kept().some((e) => e.passed === false)) return kept();
-    const cards = (await host.cardsTouched?.(root, d).catch(() => [])) ?? [];
-    for (const card of cards.slice(0, 3)) {
-      if (missingOnly && kept().some((e) => e.kind === 'picture' && e.card === card)) continue;
-      const p = await picture(root, d, card);
-      if (typeof p === 'string') addProof(root, d, { kind: 'note', title: `No picture of ${card.split('#').pop()}`, text: p, by: 'Visual Editor', at: new Date().toISOString(), revision: d.revision });
-    }
-    return kept();
-  };
-
-  /**
-   * The one rule for reaching Review: Visual Editor's checks ran on this version of the draft (any missing are run now)
-   * and nothing on it failed. Undefined when it may go; else why not, with the problems to fix.
-   */
-  const provenOrWhy = async (s: ProjectState, d: Draft, again = 'save_draft with the draft id, then submit_draft again'): Promise<string | undefined> => {
-    const proof = await proveDraft(s, d, true);
-    // Held back: the developer can see it (and why) in Review, though it never reached them for approval.
-    const blocked = (failed: Evidence[]) => {
-      holdBack(s.project.root, host.drafts(s.project.root).find((x) => x.id === d.id) ?? d);
-      return [`Not sent to Review: ${failed.map((e) => e.title).join(', ')} did not pass.`, ...failed.map((e) => `--- ${e.title}\n${e.text}`), `Fix it (${again}; it is draft ${d.id}).`].join('\n');
-    };
-    const failed = proof.filter((e) => e.passed === false);
-    if (failed.length) return blocked(failed);
-    // Then the logic check, on any change to code (once per version).
-    const code = d.changes.some((c) => /\.(m?[jt]sx?|vue|svelte|css|scss|html)$/.test(c.path));
-    if (code && !proof.some((e) => e.title === LOGIC && e.passed === true)) {
-      const asked = d.asked?.length ? d.asked : [d.title];
-      const verdict = host.logicCheck ? await host.logicCheck(s.project.root, { ...d, asked }) : 'The logic check isn\'t available here.';
-      if (typeof verdict === 'string') return `Not sent to Review: ${verdict} Every change needs the logic check: try again in a moment.`;
-      const { passed, cost: _cost, ...logic } = verdict;
-      const e: Evidence = { kind: 'check', title: LOGIC, text: logicText(asked, logic), passed, by: 'Visual Editor (logic checker)', at: new Date().toISOString(), revision: d.revision, logic };
-      addProof(s.project.root, d, e, (x) => x.title === LOGIC);
-      if (!passed) return blocked([e]);
-    }
-    if (!proof.length && !code) addProof(s.project.root, d, { kind: 'note', title: 'No checks apply to these files', text: 'None of Visual Editor\'s checks apply to files like these.', by: 'Visual Editor', at: new Date().toISOString(), revision: d.revision });
-    return undefined;
-  };
-
-  /**
-   * A draft a check stopped, kept as a held-back proposal (one per draft: the latest try), so the developer sees what
-   * was stopped and why. There's nothing to approve.
-   */
-  const holdBack = (root: string, d: Draft) => {
-    const now = new Date().toISOString();
-    const evidence = d.evidence.filter((e) => e.revision === d.revision);
-    const held = parseProposal(
-      JSON.stringify({ id: `held-${d.id}`, title: d.title, why: d.why, asked: d.asked, cases: d.cases, by: d.by, createdAt: now, status: 'held-back', changes: d.changes, items: d.items, history: [{ at: now, status: 'held-back' }], evidence }),
-      `held-${d.id}`,
-    );
-    if (typeof held !== 'string') host.propose(root, held);
-  };
-
-  /** Files of a draft that changed in the project since it was saved, in words; undefined when none did. */
-  const stale = async (root: string, d: Draft): Promise<string | undefined> => {
-    const moved: string[] = [];
-    for (const c of d.changes) if (((await host.readFile(root, c.path)) ?? null) !== c.before) moved.push(c.path);
-    return moved.length ? `These files changed in the project since the draft was saved: ${moved.join(', ')}. Read them again, save the draft again with save_draft (draft: "${d.id}"), check it, then submit it.` : undefined;
-  };
-
-  /** A draft to Review as a proposal, with its proof for its current version; a string says why not. */
-  const submit = async (root: string, d: Draft): Promise<{ proposal: Proposal; evidence: Evidence[] } | string> => {
-    if (d.status === 'submitted') return `Draft ${d.id} is already in Review as proposal ${d.proposal}.`;
-    const moved = await stale(root, d);
-    if (moved) return moved;
-    const now = new Date().toISOString();
-    // Its proof goes with it: what was checked on this version.
-    const evidence = d.evidence.filter((e) => e.revision === d.revision);
-    const checked = parseProposal(
-      JSON.stringify({ id: newId(), title: d.title, why: d.why, asked: d.asked, cases: d.cases, by: d.by, createdAt: now, status: 'proposed', changes: d.changes, items: d.items, history: [{ at: now, status: 'proposed' }], evidence }),
-      newId(),
-    );
-    if (typeof checked === 'string') return checked;
-    host.propose(root, checked);
-    host.saveDraft(root, { ...d, status: 'submitted', proposal: checked.id, updatedAt: now });
-    return { proposal: checked, evidence };
-  };
+  const { picture, runTool, requestChecks, compare, lookMustStay, stale } = draftFlow(host);
+  const sentForChecks = (id: string) =>
+    `Sent. Visual Editor's check planner is writing its test cases; the developer looks at them and presses Run, then it reaches Review (or comes back with what to fix). Nothing to wait for and don't send it again: call proposal_status with id "${id}" later to see where it is.`;
+  const sessionWords = (open: { draft: string; title: string }) =>
+    `A design session is open in the developer's editor: “${open.title}”, draft ${open.draft}. Put this change into it with save_draft (draft: "${open.draft}"), adding what the developer asked as asked; don't propose it. It shows in the session live; nothing is checked until the developer is done (they press Done, or say "done" and you call submit_draft with id "${open.draft}").`;
 
   server.registerTool(
     'save_draft',
@@ -481,8 +423,11 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
         changes: next,
         ...(cards?.length ? { items: cards } : old?.items ? { items: old.items } : {}),
         asked: [...(old?.asked ?? []), ...(asked?.trim() && !old?.asked?.includes(asked.trim()) ? [asked.trim()] : [])],
+        // (What belongs to the draft itself stays: the developer's own cases, and the design session working in it.)
+        ...(old?.cases?.length ? { cases: old.cases } : {}),
         revision,
         evidence: old?.evidence ?? [],
+        ...(old?.session ? { session: old.session } : {}),
       };
       host.saveDraft(root, d);
       const stale = old && !same && old.evidence.some((e) => e.revision === old.revision) ? '\nIts earlier proof was for the previous version: check it again.' : '';
@@ -528,25 +473,62 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
     {
       title: 'Send a draft to Review',
       description:
-        'Sends a draft to Review as a proposal. Visual Editor first runs any check (and picture) not yet run on its current version; if anything on that version did not pass, it is not sent and you get the problems to fix (save_draft with the draft id, then submit again). Once in Review it waits until the developer approves, sends it back or rejects it. Then check proposal_status.',
+        'Sends a finished draft on its way to Review: Visual Editor\'s check planner writes its test cases (which checks apply, and scenarios that try to break it), the developer looks at them and presses Run, and if they pass it waits in Review for approval (if not, you get what to fix: save_draft with the draft id, then submit again). Answers at once; follow it with proposal_status (the draft id). For a design session\'s draft, only when the developer says they are done.',
       inputSchema: { id: z.string(), project: projectArg },
     },
     async ({ id, project }) => {
       const s = await pick(project);
       if (typeof s === 'string') return fail(s);
-      const root = s.project.root;
-      const d = host.drafts(root).find((x) => x.id === id);
+      const d = host.drafts(s.project.root).find((x) => x.id === id);
       if (!d) return fail(`No draft "${id}" in ${s.project.name}.`);
-      if (d.status === 'submitted') return fail(`Draft ${d.id} is already in Review as proposal ${d.proposal}.`);
-      // (Files that moved on first: no checks, least of all the logic check, on a draft that can't be sent as it is.)
-      const moved = await stale(root, d);
+      if (d.status === 'submitted') return fail(`Draft ${id} is already in Review as proposal ${d.proposal}.`);
+      // (Files that moved on first: no test cases for a draft that can't be sent as it is.)
+      const moved = await stale(s.project.root, d);
       if (moved) return fail(moved);
-      const blocked = await provenOrWhy(s, d);
-      if (blocked) return fail(blocked);
-      const sent = await submit(root, host.drafts(root).find((x) => x.id === d.id) ?? d);
-      if (typeof sent === 'string') return fail(sent);
-      const { proposal, evidence } = sent;
-      return reply(`Draft ${d.id} is now proposal ${proposal.id}, waiting in Review for the developer, with its proof: ${evidence.map((e) => `${mark(e)} ${e.title}`).join('; ')}. Nothing has changed yet.\nCall proposal_status with id "${proposal.id}" to see what they decided.`);
+      void requestChecks(s, id);
+      return reply(sentForChecks(id));
+    },
+  );
+
+  server.registerTool(
+    'start_session',
+    {
+      title: 'Open a design session',
+      description:
+        'Opens a design session in the developer\'s editor: a tab that shows a draft live (a component\'s Playground, or the app) while you and the developer shape a change together. Put every change for it into its draft with save_draft (draft: the id this returns); nothing is checked until the developer is done. Use it when the developer wants to design or try something out ("let\'s design a new look for ProjectCard").',
+      inputSchema: {
+        asked: z.string().describe('What the developer asked for, in their own words'),
+        card: z.string().optional().describe('The component\'s card id (or name) it is about, if one'),
+        project: projectArg,
+      },
+    },
+    async ({ asked, card, project }) => {
+      const s = await pick(project);
+      if (typeof s === 'string') return fail(s);
+      if (!host.startSession) return fail('Design sessions can\'t be opened here.');
+      const item = card ? s.items.find((i) => i.id === card) ?? s.items.find((i) => i.label === card && i.preview) ?? s.items.find((i) => i.label === card) : undefined;
+      if (card && !item) return fail(`No card "${card}" (use list_cards to find its id).`);
+      const r = host.startSession(s.project.root, item?.id, asked.trim());
+      if (typeof r === 'string') return fail(r);
+      return reply(`A design session is open in the developer's editor (draft ${r.draft}). Put each change into it with save_draft (draft: "${r.draft}"), giving each file's whole new content and each new request as asked; it shows live. Don't propose it: when the developer is done they press Done (or say "done", and you call submit_draft with id "${r.draft}").`);
+    },
+  );
+
+  server.registerTool(
+    'continue_proposal',
+    {
+      title: 'Change a proposal in a design session',
+      description:
+        'For more changes to a proposal that is waiting in Review (or was sent back or held back): opens a design session that starts from it, instead of proposing a replacement. Put the changes into its draft with save_draft (draft: the id this returns); when the developer is done, the result goes back into the same proposal.',
+      inputSchema: { id: z.string().describe('The proposal id'), project: projectArg },
+    },
+    async ({ id, project }) => {
+      const s = await pick(project);
+      if (typeof s === 'string') return fail(s);
+      if (!host.continueProposal) return fail('Design sessions can\'t be opened here.');
+      const r = host.continueProposal(s.project.root, id);
+      if (typeof r === 'string') return fail(r);
+      return reply(`Proposal ${id} is open in a design session (draft ${r.draft}), with its changes. Put more changes into it with save_draft (draft: "${r.draft}"), each new request as asked; it shows live. When the developer is done (Done in the session, or "done" and you call submit_draft with id "${r.draft}"), the result goes back into proposal ${id}.`);
     },
   );
 
@@ -576,53 +558,6 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
     },
   );
 
-  /** A picture of a card's Playground as a draft leaves it, kept with the draft as proof; a string says why there's none. */
-  const picture = async (root: string, d: Draft, card: string): Promise<(DraftPicture & { text: string }) | string> => {
-    if (!host.pictures) return 'Pictures can’t be taken here.';
-    let p: DraftPicture | string;
-    try {
-      p = await host.pictures(root, d, card);
-    } catch (e) {
-      return `The picture couldn't be taken: ${e instanceof Error ? e.message : e}`;
-    }
-    if (typeof p === 'string') return p;
-    const image = relative(root, p.image).split(sep).join('/');
-    const words = `${p.designs.length} design${p.designs.length === 1 ? '' : 's'} (${p.designs.join(', ')}) × ${p.states.length} state${p.states.length === 1 ? '' : 's'} (${p.states.join(', ')}); ${p.tiles} drawn.`;
-    const text = `${words}${p.problems.length ? `\nProblems on the page:\n${p.problems.map((x) => `- ${x}`).join('\n')}` : ''}`;
-    const title = `Playground: ${p.card}`;
-    const e: Evidence = { kind: 'picture', title, text, ...(p.problems.length ? { passed: false } : {}), by: 'Visual Editor', at: new Date().toISOString(), revision: d.revision, image, card: p.cardId };
-    addProof(root, d, e, (x) => x.kind === 'picture' && x.title === title);
-    return { ...p, text };
-  };
-
-  /** Adds proof to a draft (replacing what `same` matches on its version). */
-  const addProof = (root: string, d: Draft, e: Evidence, same: (x: Evidence) => boolean = () => false) => {
-    const now = host.drafts(root).find((x) => x.id === d.id) ?? d;
-    if (now.status === 'draft') host.saveDraft(root, { ...now, evidence: [...now.evidence.filter((x) => !(x.revision === e.revision && same(x))), e] });
-  };
-
-  /** Runs a plugin's tool (with a draft: on the project as it would leave it; a check's answer is kept as proof). */
-  const runTool = async (s: ProjectState, tool: PluginTool, input: Record<string, unknown>, draft?: Draft): Promise<ToolAnswer> => {
-    const root = s.project.root;
-    const real = (path: string) => host.readFile(root, path);
-    const view = draft ? draftView(s.project.files, draft, real) : undefined;
-    const answer = await tool.run(input, {
-      project: view ? { ...s.project, files: view.files } : s.project,
-      items: s.items,
-      links: s.links,
-      read: view?.read ?? real,
-      ...(draft ? { draft: { id: draft.id, title: draft.title, changes: draft.changes.map((c) => ({ path: c.path, after: c.after })) } } : {}),
-    });
-    // A check on a draft is kept with it as proof (the latest answer for the same question on the same version).
-    if (draft && tool.checks && typeof answer === 'string') {
-      const last = answer.trim().split('\n').pop() ?? '';
-      const asked = Object.entries(input).filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => `${k}: ${String(v)}`).join(', ');
-      const title = `${tool.title}${asked ? ` (${asked})` : ''}`;
-      addProof(root, draft, { kind: 'check', title, text: answer.slice(0, 8000), ...(last === 'PASSED' ? { passed: true } : last === 'PROBLEMS' ? { passed: false } : {}), by: 'Visual Editor', at: new Date().toISOString(), revision: draft.revision }, (x) => x.kind === 'check' && x.title === title);
-    }
-    return answer;
-  };
-
   server.registerTool(
     'draft_pictures',
     {
@@ -649,7 +584,7 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
     {
       title: 'Does the app look the same with a draft?',
       description:
-        'Pictures a page of the running app twice, from the real files and with the draft on top (its own copy of the app; nothing changes in the project), and compares them pixel by pixel. For changes that must not change how the app looks (making a component previewable, tidying code). The result is kept with the draft as proof: passed when they match. Open the pictures with Read (the difference picture marks what changed in red). Vite projects only.',
+        'Pictures a page of the running app twice, from the real files and with the draft on top (its own copy of the app; nothing changes in the project), and compares them pixel by pixel. Only for changes that must not change how the app looks (making a component previewable, tidying code): never for a change to a design, which is meant to look different. In an agent\'s job that promises the look stays, it is proof (passed when they match); otherwise it is kept as information only. Open the pictures with Read (the difference picture marks what changed in red). Vite projects only.',
       inputSchema: {
         draft: z.string().describe('The draft id'),
         path: z.string().describe('The page\'s address in the app, e.g. "/" or "/settings" (a page that shows what the draft changes)'),
@@ -665,23 +600,9 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       if (d.status === 'submitted') return fail(`Draft ${d.id} is already in Review.`);
       if (!host.compareApp) return fail('The app can’t be compared here.');
       const page = path.startsWith('/') ? path : `/${path}`;
-      let c: AppComparison | string;
-      try {
-        c = await host.compareApp(root, d, page);
-      } catch (e) {
-        return fail(`The app couldn't be compared: ${e instanceof Error ? e.message : e}`);
-      }
-      if (typeof c === 'string') return fail(c);
-      const share = c.total ? c.differing / c.total : 0;
-      // The same: at most a few stray pixels apart (changing a word changes about a thousand), and the same size.
-      const same = c.differing <= 25 && !c.sizes;
-      const words = same
-        ? `The page ${page} looks the same with the draft (${c.differing.toLocaleString('en')} of ${c.total.toLocaleString('en')} pixels differ).`
-        : `The page ${page} looks different with the draft: ${c.differing.toLocaleString('en')} of ${c.total.toLocaleString('en')} pixels differ (${(share * 100).toFixed(1)}%)${c.sizes ? `, and its size changed from ${c.sizes.before.join('×')} to ${c.sizes.after.join('×')}` : ''}. What differs is marked in red in the difference picture.`;
-      const text = [words, ...c.problems.map((p) => `Problem on the page: ${p}`)].join('\n');
-      const title = `Looks the same in the app: ${page}`;
-      addProof(root, d, { kind: 'check', title, text, passed: same && !c.problems.length, by: 'Visual Editor', at: new Date().toISOString(), revision: d.revision, image: relative(root, c.diff).split(sep).join('/') }, (x) => x.title === title);
-      return reply(`${text}\nBefore: ${c.before}\nAfter: ${c.after}\nDifference: ${c.diff}\n${same && !c.problems.length ? 'PASSED' : 'PROBLEMS'}`);
+      const r = await compare(root, d, page, lookMustStay(root, d));
+      if (typeof r === 'string') return fail(r);
+      return reply(`${r.text}\nBefore: ${r.before}\nAfter: ${r.after}\nDifference: ${r.diff}\n${r.passed ? 'PASSED' : 'PROBLEMS'}`);
     },
   );
 
@@ -803,14 +724,10 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       const failedProof = proof.filter((e) => e.passed === false);
       if (failedProof.length) return fail(`It can't pass: on this version, ${failedProof.map((e) => e.title).join(', ')} did not pass. Send it back with what to fix.`);
       if (!proof.some((e) => e.passed === true)) return fail('A pass needs proof: run the checks on the draft (plugin check tools with draft, e.g. check_variant_files) until one passes on this version, then give the verdict again.');
-      // The logic check too (it reads the job's request): if it finds problems, send it back with them.
-      const held = await provenOrWhy(s, host.drafts(root).find((x) => x.id === d.id) ?? d, 'send it back to the worker with these reasons');
-      if (held) return fail(held);
-      const sent = await submit(root, host.drafts(root).find((x) => x.id === d.id) ?? d);
-      if (typeof sent === 'string') return fail(sent);
-      const next: Job = { ...j, status: 'passed', proposal: sent.proposal.id, history: [...j.history, { at, who: 'checker', what: `Passed${reasons?.trim() ? `: ${reasons.trim()}` : ''}` }, { at, who: 'Visual Editor', what: `Sent to Review as proposal ${sent.proposal.id}` }] };
-      host.saveJob(root, next);
-      return reply(`Passed: it is in Review as proposal ${sent.proposal.id}, with its proof (${sent.evidence.length}). End your answer now.`);
+      // Then, like any finished change: its test cases are planned, and wait in Review for the developer to run them.
+      void requestChecks(s, d.id);
+      host.saveJob(root, { ...j, status: 'passed', proposal: `held-${d.id}`, history: [...j.history, { at, who: 'checker', what: `Passed${reasons?.trim() ? `: ${reasons.trim()}` : ''}` }, { at, who: 'Visual Editor', what: 'Waiting in Review for the developer to look at its test cases and run them' }] });
+      return reply('Passed: it waits in Review for the developer to look at its test cases and run them. End your answer now.');
     },
   );
 
@@ -868,4 +785,364 @@ function zodOf(input: ToolInput): z.ZodTypeAny {
 function entryLine(e: MemoryEntry): string {
   const what = e.kind === 'change' ? (e.outcome === 'sent-back' ? 'sent back' : e.outcome ?? 'applied') : e.kind;
   return `- [${what}] ${e.text}${e.detail ? ` (${e.detail})` : ''}${e.note ? ` · developer's note: "${e.note}"` : ''} · ${e.by.name}, ${e.at.slice(0, 10)}`;
+}
+
+type Finished = { proposal: Proposal; evidence: Evidence[] } | string;
+/** Checks running now, by project and draft (in this VS Code). */
+const RUNNING = new Map<string, Promise<Finished>>();
+/** Test cases being written now, by project and draft. */
+const RUNNING_PLANS = new Map<string, Promise<CheckPlan | string>>();
+/** A draft's check steps, as proposal_status and the session tab tell them. */
+export const PLAN_STEP = 'writing the test cases (the check planner reads the change)';
+export const WAITING = 'waiting for you to look at the test cases and run them';
+/** Files the scenarios are for (code). */
+const CODE = /\.(m?[jt]sx?|vue|svelte|css|scss|html)$/;
+
+/** The plan for a change with no code in it: the checks that always run, no scenarios (no planner needed). */
+function basicPlan(available: AvailableCheck[], revision: number): CheckPlan {
+  return { revision, at: new Date().toISOString(), means: [], looksOnly: false, cases: [], fixes: [], checks: available.map((a) => ({ id: a.id, title: a.title, why: a.always ? 'Always checked.' : 'Not for files like these (no code changed).', use: !!a.always, ...(a.always ? { always: true } : {}) })) };
+}
+/** How long a call waits for its check before saying it's still running (assistants' tools give up after a minute). */
+export const CHECK_WAIT_MS = 45_000;
+
+/**
+ * What happens to a draft on its way to Review, the same however it's sent (submit_draft, propose_change, a design
+ * session's Done): its checks and pictures as proof, the one rule for reaching Review, holding it back, and sending it.
+ */
+export function draftFlow(host: HubHost) {
+  /**
+   * The one rule for reaching Review: the checks the developer approved in this version's plan ran, and nothing that
+   * holds a change back failed (or they bypassed it). Undefined when it may go; else why not, with the problems to fix.
+   */
+  const provenOrWhy = async (s: ProjectState, d: Draft, again = 'save_draft with the draft id, then submit_draft again', step: (what: string) => void = () => {}): Promise<string | undefined> => {
+    const root = s.project.root;
+    const latest = () => host.drafts(root).find((x) => x.id === d.id) ?? d;
+    const plan = latest().plan;
+    if (!plan || plan.revision !== d.revision) return 'Not sent to Review: its test cases haven\'t been planned and run for this version yet.';
+    const now = () => new Date().toISOString();
+    const note = (title: string, text: string) => addProof(root, d, { kind: 'note', title, text, by: 'Visual Editor', at: now(), revision: d.revision }, (x) => x.title === title);
+    const choices = choicesText(plan);
+    if (choices) note('Your choices on the checks', choices);
+    if (plan.skipAll) return undefined;
+    // Held back: the developer can see it (and why) in Review, though it never reached them for approval.
+    const blocked = (failed: Evidence[]) => {
+      // (A design session shows why in its own tab: it isn't listed as held back too.)
+      if (!d.session) holdBack(root, latest());
+      return [`Not sent to Review: ${failed.map((e) => e.title).join(', ')} did not pass.`, ...failed.map((e) => `--- ${e.title}\n${e.text}`), `Fix it (${again}; it is draft ${d.id}).`].join('\n');
+    };
+    const kept = () => latest().evidence.filter((e) => e.revision === d.revision);
+    // (What already ran on this version isn't run again.)
+    const ran = (title: string) => kept().some((e) => e.by.startsWith('Visual Editor') && (e.title === title || e.title.startsWith(`${title} (`)));
+    for (const c of plan.checks.filter((x) => x.use)) {
+      if (c.id === 'pictures') {
+        // (Pictures only for a change that passed its checks so far: a failed one goes back to be fixed first.)
+        if (kept().some((e) => holdsBack(e, false))) continue;
+        step('pictures in the Playground');
+        const cards = (await host.cardsTouched?.(root, d).catch(() => [])) ?? [];
+        for (const card of cards.slice(0, 3)) {
+          // (A picture that showed problems is taken again: the run may have been fixed since.)
+          if (kept().some((e) => e.kind === 'picture' && e.card === card && e.passed !== false)) continue;
+          const p = await picture(root, d, card);
+          if (typeof p === 'string') note(`No picture of ${card.split('#').pop()}`, p);
+        }
+      } else if (c.id === 'looks_same') {
+        if (!c.page || ran(`${LOOKS_SAME}: ${c.page}`)) continue;
+        step('comparing the app');
+        const r = await compare(root, d, c.page, true);
+        if (typeof r === 'string') note(`${LOOKS_SAME}: ${c.page} couldn't run`, r);
+      } else {
+        const found = host.tools().find(({ tool }) => tool.name === c.id);
+        if (!found || ran(found.tool.title)) continue;
+        step(found.tool.title);
+        try {
+          await runTool(s, found.tool, {}, d);
+        } catch (e) {
+          note(`${found.tool.title}: couldn't run`, `A bug in the ${found.plugin.name} plugin: ${e instanceof Error ? e.message : e}`);
+        }
+      }
+    }
+    const mustStay = plan.checks.some((c) => c.id === 'looks_same' && c.use) || lookMustStay(root, d);
+    const failed = kept().filter((e) => holdsBack(e, mustStay));
+    if (failed.length) return blocked(failed);
+    // Then the scenarios: read in the code, and tried in the app where they can be (once per version).
+    if (plan.cases.some((c) => c.use) && !kept().some((e) => e.title === LOGIC && (e.passed === true || e.bypassed))) {
+      const asked = d.asked?.length ? d.asked : [d.title];
+      step('the scenarios (read in the code, and tried in the app)');
+      const verdict = host.runPlannedCases ? await host.runPlannedCases(root, { ...d, asked }, plan) : 'The scenarios can\'t be run here.';
+      if (typeof verdict === 'string') return `Not sent to Review: ${verdict} Press Run again in a moment.`;
+      const { passed, cost: _cost, ...logic } = verdict;
+      const e: Evidence = { kind: 'check', title: LOGIC, text: logicText(asked, logic), passed, by: 'Visual Editor (logic checker)', at: now(), revision: d.revision, logic };
+      addProof(root, d, e, (x) => x.title === LOGIC);
+      if (!passed) return blocked([e]);
+    }
+    if (!kept().length) note('No checks apply to these files', 'None of Visual Editor\'s checks apply to a change like this.');
+    return undefined;
+  };
+
+  /** The checks Visual Editor can run on a project's changes: its plugins' checks, then its own. */
+  const available = (s: ProjectState): AvailableCheck[] => [
+    ...host.tools().filter(({ plugin, tool }) => tool.checks && s.detected.some((x) => x.plugin.id === plugin.id)).map(({ tool }) => ({ id: tool.name, title: tool.title, description: tool.description, ...(tool.always ? { always: true } : {}) })),
+    ...BUILT_IN_CHECKS,
+  ];
+
+  /**
+   * A finished change waiting for the developer: listed in Review (one entry per draft, which becomes its proposal), its
+   * test cases being written or ready to run.
+   */
+  const awaitChecks = (root: string, d: Draft) => {
+    const id = `held-${d.id}`;
+    const had = host.proposals(root).find((p) => p.id === id);
+    const now = new Date().toISOString();
+    const entry = parseProposal(
+      JSON.stringify({ id, title: d.title, why: d.why, asked: d.asked, cases: d.cases, by: d.by, createdAt: had?.createdAt ?? now, status: 'awaiting-checks', changes: d.changes, items: d.items, history: [...(had?.history ?? []), ...(had?.status === 'awaiting-checks' ? [] : [{ at: now, status: 'awaiting-checks' }])], evidence: d.evidence.filter((e) => e.revision === d.revision) }),
+      id,
+    );
+    if (typeof entry !== 'string') host.propose(root, entry);
+  };
+
+  /**
+   * A finished change: the check planner writes its test cases (in the background: one Claude run), and they wait for
+   * the developer to run them. A change with no code in it gets the checks that always run, without the planner.
+   */
+  const requestChecks = (s: ProjectState, id: string): Promise<CheckPlan | string> => {
+    const root = s.project.root;
+    const key = `${root}#plan#${id}`;
+    const had = RUNNING_PLANS.get(key);
+    if (had) return had;
+    const d0 = host.drafts(root).find((x) => x.id === id);
+    if (!d0) return Promise.resolve(`No draft "${id}".`);
+    const at = new Date().toISOString();
+    const record = (check: Partial<NonNullable<Draft['check']>>, plan?: CheckPlan) => {
+      const now = host.drafts(root).find((x) => x.id === id);
+      if (now) host.saveDraft(root, { ...now, check: { at, revision: d0.revision, step: 'starting', ...check }, ...(plan ? { plan } : {}) });
+    };
+    record({ step: PLAN_STEP });
+    if (!d0.session) awaitChecks(root, d0);
+    const promise = (async (): Promise<CheckPlan | string> => {
+      const avail = available(s);
+      const code = d0.changes.some((c) => CODE.test(c.path));
+      const plan = code && host.planChecks ? await host.planChecks(root, { ...d0, asked: d0.asked?.length ? d0.asked : [d0.title] }, avail) : basicPlan(avail, d0.revision);
+      if (typeof plan === 'string') {
+        record({ step: 'done', held: `Its test cases couldn't be written: ${plan} Send it again in a moment.` });
+        return plan;
+      }
+      record({ step: WAITING }, plan);
+      const d = host.drafts(root).find((x) => x.id === id);
+      if (d) {
+        if (!d.session) awaitChecks(root, d);
+        host.planned?.(root, d);
+      }
+      return plan;
+    })()
+      .catch((e: unknown) => `The test cases couldn't be written: ${e instanceof Error ? e.message : String(e)}`)
+      .finally(() => RUNNING_PLANS.delete(key));
+    RUNNING_PLANS.set(key, promise);
+    return promise;
+  };
+
+  /**
+   * The developer ran a plan (with their changes to it): the approved checks run in the background, and it goes to
+   * Review or is held back. A string says why it can't run now.
+   */
+  const runChecks = (s: ProjectState, id: string, edits: PlanEdits, again?: string): string | { promise: Promise<Finished> } => {
+    const root = s.project.root;
+    const d = host.drafts(root).find((x) => x.id === id);
+    if (!d) return `No draft "${id}".`;
+    if (d.status !== 'draft') return 'It has already gone to Review.';
+    if (!d.plan || d.plan.revision !== d.revision) return 'Its test cases aren\'t written for this version yet.';
+    if (RUNNING.has(`${root}#${id}`)) return 'Its checks are running already.';
+    const plan = applyEdits(d.plan, edits);
+    if (typeof plan === 'string') return plan;
+    // A run redoes what it runs: the scenarios' earlier result, and what its own checks found failing before, are tried
+    // again (pictures that showed problems are taken again). What passed, what the developer bypassed, and what other
+    // checks found stay.
+    const rerun = new Set([LOGIC, ...plan.checks.filter((c) => c.use).flatMap((c) => (c.id === 'looks_same' && c.page ? [`${LOOKS_SAME}: ${c.page}`] : host.tools().filter(({ tool }) => tool.name === c.id).map(({ tool }) => tool.title)))]);
+    const evidence = d.evidence.filter((e) => e.revision !== d.revision || e.bypassed || !(e.title === LOGIC || (e.passed === false && rerun.has(e.title))));
+    host.saveDraft(root, { ...d, plan, evidence });
+    return { promise: checkInBackground(s, id, again).promise };
+  };
+
+  /**
+   * A draft a check stopped, kept as a held-back proposal (one per draft: the latest try), so the developer sees what
+   * was stopped and why. There's nothing to approve.
+   */
+  const holdBack = (root: string, d: Draft) => {
+    const now = new Date().toISOString();
+    const evidence = d.evidence.filter((e) => e.revision === d.revision);
+    const held = parseProposal(
+      JSON.stringify({ id: `held-${d.id}`, title: d.title, why: d.why, asked: d.asked, cases: d.cases, by: d.by, createdAt: now, status: 'held-back', changes: d.changes, items: d.items, history: [{ at: now, status: 'held-back' }], evidence }),
+      `held-${d.id}`,
+    );
+    if (typeof held !== 'string') host.propose(root, held);
+  };
+
+  /** Files of a draft that changed in the project since it was saved, in words; undefined when none did. */
+  const stale = async (root: string, d: Draft): Promise<string | undefined> => {
+    const moved: string[] = [];
+    for (const c of d.changes) if (((await host.readFile(root, c.path)) ?? null) !== c.before) moved.push(c.path);
+    return moved.length ? `These files changed in the project since the draft was saved: ${moved.join(', ')}. Read them again, save the draft again with save_draft (draft: "${d.id}"), check it, then submit it.` : undefined;
+  };
+
+  /** A draft to Review as a proposal, with its proof for its current version; a string says why not. */
+  const submit = async (root: string, d: Draft): Promise<{ proposal: Proposal; evidence: Evidence[] } | string> => {
+    if (d.status === 'submitted') return `Draft ${d.id} is already in Review as proposal ${d.proposal}.`;
+    const moved = await stale(root, d);
+    if (moved) return moved;
+    const now = new Date().toISOString();
+    // Its proof goes with it: what was checked on this version.
+    const evidence = d.evidence.filter((e) => e.revision === d.revision);
+    // A design session that continued a proposal puts its result back into that proposal (waiting again, with the new
+    // changes and proof, and a line in its history), instead of making a second one.
+    const into = d.session?.proposal ? host.proposals(root).find((p) => p.id === d.session!.proposal) : undefined;
+    if (into) {
+      const { session: _session, ...rest } = into;
+      const updated = parseProposal(
+        JSON.stringify({ ...rest, title: d.title, why: d.why, asked: d.asked, cases: d.cases, status: 'proposed', changes: d.changes, items: d.items, evidence, history: [...into.history, { at: now, status: 'proposed', note: 'Changed in a design session' }] }),
+        into.id,
+      );
+      if (typeof updated === 'string') return updated;
+      host.propose(root, updated);
+      host.saveDraft(root, { ...d, status: 'submitted', proposal: updated.id, updatedAt: now });
+      return { proposal: updated, evidence };
+    }
+    // (A change that waited in Review for its checks keeps its entry: it becomes the proposal.)
+    const pid = host.proposals(root).some((p) => p.id === `held-${d.id}`) ? `held-${d.id}` : newId();
+    const checked = parseProposal(
+      JSON.stringify({ id: pid, title: d.title, why: d.why, asked: d.asked, cases: d.cases, by: d.by, createdAt: now, status: 'proposed', changes: d.changes, items: d.items, history: [{ at: now, status: 'proposed' }], evidence }),
+      newId(),
+    );
+    if (typeof checked === 'string') return checked;
+    host.propose(root, checked);
+    host.saveDraft(root, { ...d, status: 'submitted', proposal: checked.id, updatedAt: now });
+    return { proposal: checked, evidence };
+  };
+
+  /** Whether a draft must leave the look alone: it's the draft of a job whose agent promises it (it compares the app). */
+  const lookMustStay = (root: string, d: Draft): boolean => {
+    const job = host.jobs(root).find((j) => j.draft === d.id);
+    const agent = job && host.agents().find(({ agent: a }) => a.name === job.agent)?.agent;
+    return !!agent && [...(agent.worker.tools ?? []), ...(agent.checker.tools ?? [])].includes('compare_app');
+  };
+
+  /**
+   * Compares an app page with and without a draft, kept as proof (`counts`: passed or failed, for a change that must
+   * keep the look; otherwise information only). A string says why it couldn't.
+   */
+  const compare = async (root: string, d: Draft, page: string, counts: boolean): Promise<{ text: string; passed: boolean; before: string; after: string; diff: string } | string> => {
+    if (!host.compareApp) return 'The app can’t be compared here.';
+    let c: AppComparison | string;
+    try {
+      c = await host.compareApp(root, d, page);
+    } catch (e) {
+      return `The app couldn't be compared: ${e instanceof Error ? e.message : e}`;
+    }
+    if (typeof c === 'string') return c;
+    const share = c.total ? c.differing / c.total : 0;
+    // The same: at most a few stray pixels apart (changing a word changes about a thousand), and the same size.
+    const same = c.differing <= 25 && !c.sizes;
+    const words = same
+      ? `The page ${page} looks the same with the draft (${c.differing.toLocaleString('en')} of ${c.total.toLocaleString('en')} pixels differ).`
+      : `The page ${page} looks different with the draft: ${c.differing.toLocaleString('en')} of ${c.total.toLocaleString('en')} pixels differ (${(share * 100).toFixed(1)}%)${c.sizes ? `, and its size changed from ${c.sizes.before.join('×')} to ${c.sizes.after.join('×')}` : ''}. What differs is marked in red in the difference picture.`;
+    const text = [words, ...c.problems.map((p) => `Problem on the page: ${p}`)].join('\n');
+    const title = `${LOOKS_SAME}: ${page}`;
+    const passed = same && !c.problems.length;
+    // (Only a change that must leave the look alone passes or fails on it; for others it's information.)
+    addProof(root, d, { kind: 'check', title, text: counts ? text : `For information only (this change isn't meant to keep the look): ${text}`, ...(counts ? { passed } : {}), by: 'Visual Editor', at: new Date().toISOString(), revision: d.revision, image: relative(root, c.diff).split(sep).join('/') }, (x) => x.title === title);
+    return { text, passed, before: c.before, after: c.after, diff: c.diff };
+  };
+
+  /** A picture of a card's Playground as a draft leaves it, kept with the draft as proof; a string says why there's none. */
+  const picture = async (root: string, d: Draft, card: string): Promise<(DraftPicture & { text: string }) | string> => {
+    if (!host.pictures) return 'Pictures can’t be taken here.';
+    let p: DraftPicture | string;
+    try {
+      p = await host.pictures(root, d, card);
+    } catch (e) {
+      return `The picture couldn't be taken: ${e instanceof Error ? e.message : e}`;
+    }
+    if (typeof p === 'string') return p;
+    const image = relative(root, p.image).split(sep).join('/');
+    const words = `${p.designs.length} design${p.designs.length === 1 ? '' : 's'} (${p.designs.join(', ')}) × ${p.states.length} state${p.states.length === 1 ? '' : 's'} (${p.states.join(', ')}); ${p.tiles} drawn.`;
+    const text = `${words}${p.problems.length ? `\nProblems on the page:\n${p.problems.map((x) => `- ${x}`).join('\n')}` : ''}`;
+    const title = `Playground: ${p.card}`;
+    const e: Evidence = { kind: 'picture', title, text, ...(p.problems.length ? { passed: false } : {}), by: 'Visual Editor', at: new Date().toISOString(), revision: d.revision, image, card: p.cardId };
+    addProof(root, d, e, (x) => x.kind === 'picture' && x.title === title);
+    return { ...p, text };
+  };
+
+  /** Adds proof to a draft (replacing what `same` matches on its version). */
+  const addProof = (root: string, d: Draft, e: Evidence, same: (x: Evidence) => boolean = () => false) => {
+    const now = host.drafts(root).find((x) => x.id === d.id) ?? d;
+    if (now.status === 'draft') host.saveDraft(root, { ...now, evidence: [...now.evidence.filter((x) => !(x.revision === e.revision && same(x))), e] });
+  };
+
+  /** Runs a plugin's tool (with a draft: on the project as it would leave it; a check's answer is kept as proof). */
+  const runTool = async (s: ProjectState, tool: PluginTool, input: Record<string, unknown>, draft?: Draft): Promise<ToolAnswer> => {
+    const root = s.project.root;
+    const real = (path: string) => host.readFile(root, path);
+    const view = draft ? draftView(s.project.files, draft, real) : undefined;
+    const answer = await tool.run(input, {
+      project: view ? { ...s.project, files: view.files } : s.project,
+      items: s.items,
+      links: s.links,
+      read: view?.read ?? real,
+      ...(draft ? { draft: { id: draft.id, title: draft.title, changes: draft.changes.map((c) => ({ path: c.path, after: c.after })) } } : {}),
+    });
+    // A check on a draft is kept with it as proof (the latest answer for the same question on the same version).
+    if (draft && tool.checks && typeof answer === 'string') {
+      const last = answer.trim().split('\n').pop() ?? '';
+      const asked = Object.entries(input).filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => `${k}: ${String(v)}`).join(', ');
+      const title = `${tool.title}${asked ? ` (${asked})` : ''}`;
+      addProof(root, draft, { kind: 'check', title, text: answer.slice(0, 8000), ...(last === 'PASSED' ? { passed: true } : last === 'PROBLEMS' ? { passed: false } : {}), by: 'Visual Editor', at: new Date().toISOString(), revision: draft.revision }, (x) => x.kind === 'check' && x.title === title);
+    }
+    return answer;
+  };
+
+  /** Sends a draft to Review the one way: files that moved on first, then its proof (checks, logic check), then Review. */
+  const finish = async (s: ProjectState, id: string, again?: string, step?: (what: string) => void): Promise<Finished> => {
+    const root = s.project.root;
+    const d = host.drafts(root).find((x) => x.id === id);
+    if (!d) return `No draft "${id}" in ${s.project.name}.`;
+    if (d.status === 'submitted') return `Draft ${d.id} is already in Review as proposal ${d.proposal}.`;
+    // (Files that moved on first: no checks, least of all the logic check, on a draft that can't be sent as it is.)
+    const moved = await stale(root, d);
+    if (moved) return moved;
+    const blocked = await provenOrWhy(s, d, again, step);
+    if (blocked) return blocked;
+    return submit(root, host.drafts(root).find((x) => x.id === d.id) ?? d);
+  };
+
+  /**
+   * finish, in the background: an assistant's call can't wait the minute or two a logic check takes (its tools give up
+   * after about a minute). The draft keeps where its check is and how it ended (proposal_status, job_status and a
+   * session tab read it). One check per draft at a time: asking again while one runs gets that one. `after`: told how
+   * it ended.
+   */
+  const checkInBackground = (s: ProjectState, id: string, again?: string, after?: (r: Finished) => void): { promise: Promise<Finished>; already: boolean } => {
+    const root = s.project.root;
+    const key = `${root}#${id}`;
+    const had = RUNNING.get(key);
+    if (had) return { promise: had, already: true };
+    const at = new Date().toISOString();
+    const revision = host.drafts(root).find((x) => x.id === id)?.revision ?? 1;
+    const record = (check: Partial<NonNullable<Draft['check']>>) => {
+      const now = host.drafts(root).find((x) => x.id === id);
+      if (now) host.saveDraft(root, { ...now, check: { at, revision, step: 'starting', ...check } });
+    };
+    record({ step: 'starting' });
+    const promise = finish(s, id, again, (step) => record({ step }))
+      .catch((e: unknown) => `The check couldn't finish: ${e instanceof Error ? e.message : String(e)}`)
+      .then((r) => {
+        record(typeof r === 'string' ? { step: 'done', held: r } : { step: 'done', sent: r.proposal.id });
+        after?.(r);
+        const d = host.drafts(root).find((x) => x.id === id);
+        if (d) host.checked?.(root, d, r);
+        return r;
+      })
+      .finally(() => RUNNING.delete(key));
+    RUNNING.set(key, promise);
+    return { promise, already: false };
+  };
+
+  return { provenOrWhy, holdBack, stale, submit, picture, addProof, runTool, finish, checkInBackground, lookMustStay, requestChecks, runChecks, compare, available };
 }

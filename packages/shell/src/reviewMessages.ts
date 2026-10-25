@@ -2,6 +2,7 @@
 
 import type { Hunk } from './diff';
 import type { Evidence, Proposal } from './proposals';
+import type { PlanChoice, PlanView } from './ui/planWindow';
 
 export interface ReviewFile {
   path: string;
@@ -34,6 +35,14 @@ export interface ReviewItem {
   checking?: { progress?: string; error?: string };
   /** Its pictures shown live (the Playground running, by card id): starting, running at `url`, or why not. */
   live?: Record<string, { url?: string; progress?: string; error?: string }>;
+  /** It's being changed in a design session now. */
+  inSession?: boolean;
+  /** Held back: the checks that failed (to fix, or bypass). */
+  failed?: { title: string; why: string }[];
+  /** Held back: its test cases can be run again as they are (they were written for this version), or are running now. */
+  rerun?: { can: boolean; running?: string; view?: PlanView };
+  /** Waiting for its checks: its test cases being written, ready for the developer, or running (the step it's on). */
+  plan?: { state: 'writing' | 'ready' | 'running'; step?: string; view?: PlanView };
 }
 
 /** Shell → review page. */
@@ -46,6 +55,10 @@ export type ToReview = {
   problems: { file: string; message: string }[];
   /** The app (its dev server, through the proxy), for proposals that show how they look. */
   app?: { url?: string; progress?: string; error?: string };
+  /** Open the window to bypass this held-back change's failed checks (its checks just ended). */
+  askBypass?: string;
+  /** Open the window with this change's test cases (they're ready). */
+  askPlan?: string;
 };
 
 /** Review page → shell. */
@@ -65,4 +78,16 @@ export type FromReview =
   | { type: 'live'; id: string; card: string }
   | { type: 'unlive'; id: string; card: string }
   /** The developer's own cases, for the logic check to try on this change. */
-  | { type: 'cases'; id: string; cases: string[] };
+  | { type: 'cases'; id: string; cases: string[] }
+  /** Keep changing it in a design session (or open the one changing it now). */
+  | { type: 'session'; id: string }
+  /** The developer says this broken case (its place in the logic check's report) is wrong. */
+  | { type: 'overrule'; id: string; index: number }
+  /** The developer lets a held-back change go with these checks (by title) failed, with why. */
+  | { type: 'bypass'; id: string; titles: string[]; reason: string }
+  /** The developer ran a change's test cases, as they left them. */
+  | { type: 'runPlan'; id: string; choice: PlanChoice }
+  /** Run a held-back change's test cases again, as they are. */
+  | { type: 'rerun'; id: string }
+  /** Have new test cases written for a change (the planner), to look at and run. */
+  | { type: 'replan'; id: string };
