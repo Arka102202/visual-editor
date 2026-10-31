@@ -10,6 +10,7 @@ import { helperTemplate, updateHelper } from './helper';
 import { setupProject } from './setup';
 import { previewFix } from './providers';
 import { makePreviewableAgent, newVariantAgent } from './agents';
+import { sessionKinds } from './sessions';
 import { checkTypesTool, checkVariantFilesTool, previewableTool, rememberModel, variantBriefTool, variantRulesSkill } from './tools';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -66,6 +67,7 @@ export const reactPlugin: Plugin = {
   tools: [previewableTool, variantBriefTool, checkVariantFilesTool, checkTypesTool],
   skills: [variantRulesSkill],
   agents: [makePreviewableAgent, newVariantAgent],
+  sessions: sessionKinds,
   setup: (project) => setupProject((p) => (existsSync(join(project.root, p)) ? readFileSync(join(project.root, p), 'utf8') : undefined), helperTemplate()),
   readers: [
     {

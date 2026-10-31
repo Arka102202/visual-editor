@@ -311,11 +311,25 @@ Claude.
   or swapped while checks use it. Failed checks can be bypassed with a reason, kept in the proof.
 - **Later:** your own checks as commands (npm test, lint); checks kept as project rules.
 
-### 2.15 Kinds of session
+### 2.15 Kinds of session ✅ done
 - **You get:** **New design** (a variant, for a situation if there are any), **New component**, **New page** (built in
   the previewable shape from the start), **Change a design**. A **Design system builder** (theme colours, spacing,
   fonts on a sample page) comes later as its own kind.
 - **Done when:** a new page made in a session works in the app and as a prototype.
+- **How it works:** plugins offer kinds of session (React: New design, Change a design, New component, New page),
+  each saying what it needs (a component, which design, a name, a page's address) and giving Claude a brief: what to
+  make, where, and the rules to keep. Starting a session asks the kind, then only what it needs; Claude can start one
+  from the chat (start_session with a kind). A page session's tab also shows the page in the app, at its address.
+  With several sessions open, Claude works in the one looked at last ("Claude works here" on its tab, "Work here" on
+  the others), is told the others too, and asks when it isn't clear which one a message is about.
+- **Checked:** on the archFlow copy, a New page session (Hello at /hello) with a scripted page saved into it: /hello
+  works in the session's app (real data, its route) and the Playground shows its states. Not yet with Claude itself
+  building the page (in 2.17, when the plan's allowance is back).
+- **Also:** the test cases open in their own window (👁): what will run and why, what the planner left out, each
+  scenario and what it should do; untick, edit, add, then Run. While they run, a live list shows each one (waiting,
+  running with how long so far, passed, failed, skipped) and how long each took. Checks that stop before running (a
+  file changed in the project since the draft was saved) hold the change back with why, and saving the draft again
+  catches it up.
 
 ### 2.16 Agent: Set up project
 - **You get:** the helper and the providers file added to a project that has neither.
