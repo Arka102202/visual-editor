@@ -331,9 +331,23 @@ Claude.
   file changed in the project since the draft was saved) hold the change back with why, and saving the draft again
   catches it up.
 
-### 2.16 Agent: Set up project
+### 2.16 Agent: Set up project ✅ done
 - **You get:** the helper and the providers file added to a project that has neither.
 - **Done when:** a fresh React project is ready for Preview.
+- **How it works:** the helper and its short name were already put in place by themselves when a project opens. The
+  **Set up project** agent does the rest: its tool **setup_brief** reads how the app starts (its entry file and the
+  top of its App) and writes a providers file from what the app is wrapped in, made for previews: the router becomes
+  one in memory (added anyway when the app uses react-router), React Query gets a client that doesn't retry,
+  StrictMode and error boundaries are left out, a theme comes along with what it's made from. It flags what needs a
+  decision: the project's own providers (they may sign in or load data), ones that call a server (Auth0, Apollo…),
+  values made inside a component, and code the entry runs first (a theme set on the page). Then one component is
+  made previewable (the one you name, or the shortest plain one), in the same draft, and checked like Make previewable.
+  Vite projects only for now; others are told so. A project that isn't set up (no providers file, nothing
+  previewable) gets a **nudge** on the map: ▶ starts Set up project, ✕ closes it for that project ("Show closed
+  hints again" brings it back).
+- **Checked:** setup_brief on a fresh `npm create vite` app (nothing to wrap), on archFlow (its query client; its
+  own AppRouter counted as the app; its theme set on the page flagged), and on the two sample shops (Auth0, Apollo,
+  Redux, a theme made in a component: each flagged). Tried by hand on a fresh Vite app, nudge and agent.
 
 ### 2.17 Tested
 - **Done when:** each kind of session and each agent works from a button and from the chat on the archFlow copy, with
@@ -449,6 +463,7 @@ situations). **Proof:** rendered tokens, contrast checks, a comparison with your
 
 1. **7.1 Project shapes:** several projects in one folder (switcher), multi-root workspaces, npm/yarn/pnpm
    workspaces (packages map), submodules.
+   - **To think about when we get here:** micro frontends (Module Federation, single-spa).
 2. **7.2 Plugin manager:** suggests the plugins a project needs and installs them in one click.
 3. **7.3 Settings and health page:** everything in one place, errors in plain words.
 4. **7.4 Performance:** smooth at about 5,000 files on 8 GB RAM.

@@ -55,9 +55,9 @@ test('previewable: search narrows it, and says when nothing matches', () => {
 });
 
 test('the React plugin hands the shell its tools and know-how', () => {
-  assert.deepEqual(reactPlugin.tools?.map((t) => t.name), ['previewable', 'variant_brief', 'check_variant_files', 'check_types']);
+  assert.deepEqual(reactPlugin.tools?.map((t) => t.name), ['previewable', 'variant_brief', 'check_variant_files', 'check_types', 'setup_brief']);
   assert.deepEqual(reactPlugin.skills?.map((s) => s.name), ['variant-rules']);
-  assert.deepEqual(reactPlugin.agents?.map((a) => a.name), ['make-previewable', 'new-variant']);
+  assert.deepEqual(reactPlugin.agents?.map((a) => a.name), ['make-previewable', 'new-variant', 'set-up-project']);
   assert.match(variantRulesSkill.text, /^# Variants: how a component or page is made previewable/, 'the rules doc, bundled as text');
 });
 

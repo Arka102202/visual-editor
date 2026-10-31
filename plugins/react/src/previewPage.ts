@@ -31,9 +31,7 @@ export function helperFile(project: ProjectInfo): string | undefined {
  * (/src/index.css); a package's CSS under /node_modules/ (as the dev server serves it).
  */
 export function globalCss(project: ProjectInfo, read: (path: string) => string | undefined = (p) => (existsSync(join(project.root, p)) ? readFileSync(join(project.root, p), 'utf8') : undefined)): string[] {
-  const html = read('index.html') ?? '';
-  const src = /<script[^>]*type=["']module["'][^>]*src=["']([^"']+)["']/i.exec(html)?.[1] ?? /<script[^>]*src=["']([^"']+)["'][^>]*type=["']module["']/i.exec(html)?.[1];
-  const entry = src ? src.replace(/^\//, '') : ['src/main.tsx', 'src/main.ts', 'src/main.jsx', 'src/index.tsx', 'src/index.jsx'].find((p) => read(p) !== undefined);
+  const entry = entryFile(read);
   const code = entry ? read(entry) : undefined;
   if (!entry || !code) return [];
   const out: string[] = [];
@@ -42,6 +40,13 @@ export function globalCss(project: ProjectInfo, read: (path: string) => string |
     out.push(spec.startsWith('.') ? `/${posix.normalize(posix.join(posix.dirname(entry), spec))}` : spec.startsWith('/') ? spec : `/node_modules/${spec}`);
   }
   return out;
+}
+
+/** The app's entry file: the module index.html loads (src/main.tsx in a Vite app), or the usual names. */
+export function entryFile(read: (path: string) => string | undefined): string | undefined {
+  const html = read('index.html') ?? '';
+  const src = /<script[^>]*type=["']module["'][^>]*src=["']([^"']+)["']/i.exec(html)?.[1] ?? /<script[^>]*src=["']([^"']+)["'][^>]*type=["']module["']/i.exec(html)?.[1];
+  return src ? src.replace(/^\//, '') : ['src/main.tsx', 'src/main.ts', 'src/main.jsx', 'src/index.tsx', 'src/index.jsx'].find((p) => read(p) !== undefined);
 }
 
 /** The component's fixed data (Name.mock.ts, next to its chooser), if it has one. */

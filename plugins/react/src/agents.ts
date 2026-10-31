@@ -105,3 +105,55 @@ back.
 When anything is off, send it back with specific reasons the worker can act on (which file, what is wrong, what to do).`,
   },
 };
+
+const SET_UP = ['setup_brief', ...PROVE];
+
+/** A React project made ready for Preview: its providers file, and a first component made previewable to prove it. */
+export const setUpProjectAgent: PluginAgent = {
+  name: 'set-up-project',
+  title: 'Set up project',
+  summary:
+    'Gets a React project ready for Preview and the Playground: a providers file made from what your app is wrapped in (router, theme, store…), and one component made previewable to show it works. Your app looks and works exactly as before.',
+  description:
+    'Sets a React project (Vite) up for Preview and the Playground: writes the providers file (src/visual-editor.providers.tsx, what every preview is wrapped in) from what the app is wrapped in, made safe for previews, and makes one component previewable to prove it works. The app must look and work exactly as before. Use when the developer wants to start using Preview in a project, or previews of a project don\'t draw because something the app is wrapped in is missing.',
+  rounds: 3,
+  worker: {
+    tools: SET_UP,
+    prompt: `Get the project ready for Preview, without changing how the app looks or works.
+
+1. Call setup_brief. If it says NOT SUPPORTED, hand nothing in: tell the developer why, in its words.
+2. The providers file (src/visual-editor.providers.tsx), in one draft:
+   - With none yet: start from the brief's suggested file. With one already: keep it, and add only what's missing.
+   - Do what each "Check:" line says. Read the files it names (the entry file, the project's own providers) to decide:
+     a provider of the project's own that loads data or signs in gets a version with fixed data for previews (or is
+     left out if nothing needs it); values made inside a component get the fixed value the app starts with; code the
+     entry runs first that sets the look (a theme on <html>) is done the same way in the file; the rest is left out.
+   - Only what previews need: nothing that calls the network, no service workers, no analytics.
+3. A component made previewable, if the brief says none is yet: the one the developer named, or the first one the
+   brief lists. Do it in the same draft, exactly as these steps say:
+
+${makePreviewableAgent.worker.prompt.replace(/^/gm, '   > ')}
+
+4. Check it all with the draft: check_types and check_variant_files must say PASSED; draft_pictures for the component
+   must draw every state, looking like the app (its theme, fonts and colours: the providers file gives them); compare_app
+   on a page where it is seen must say the page looks the same. Fix what they find and check again.
+5. Hand it in, saying in plain words what the providers file wraps previews in, and why.`,
+  },
+  checker: {
+    tools: SET_UP,
+    prompt: `Prove the project is ready for Preview and nothing in the app changed, or send it back.
+
+1. Read the draft, and call setup_brief with the draft: the providers file must be there.
+2. The providers file: it wraps previews in what the app is wrapped in, made for previews (a router in memory, never
+   the app's own router or routes; no network, sign-in, service worker or analytics). Every "Check:" line of the brief
+   is dealt with. It changes nothing the app itself uses (the app doesn't import it).
+3. The component made previewable (if one was): variant_brief with the draft must show its folder complete, and every
+   step of making it previewable holds: check_variant_files and check_types say PASSED; compare_app on the page(s)
+   where it is seen says PASSED; draft_pictures draws every state without errors, looking like the component in the
+   app today (open the picture with Read: the same theme, fonts and colours).
+4. Nothing else changed: the draft holds only the providers file and the component's folder (and what imported the
+   component by its old path, if that changed).
+
+When anything is off, send it back with specific reasons the worker can act on (which file, what is wrong, what to do).`,
+  },
+};

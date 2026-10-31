@@ -9,7 +9,9 @@ import { useVariant } from './useVariant';
 import { helperTemplate, updateHelper } from './helper';
 import { setupProject } from './setup';
 import { previewFix } from './providers';
-import { makePreviewableAgent, newVariantAgent } from './agents';
+import { providersFile } from './previewPage';
+import { makePreviewableAgent, newVariantAgent, setUpProjectAgent } from './agents';
+import { setupBriefTool } from './setupBrief';
 import { sessionKinds } from './sessions';
 import { checkTypesTool, checkVariantFilesTool, previewableTool, rememberModel, variantBriefTool, variantRulesSkill } from './tools';
 import { existsSync, readFileSync } from 'node:fs';
@@ -64,10 +66,15 @@ export const reactPlugin: Plugin = {
   useVariant,
   updateHelper: (project) => updateHelper(project),
   previewFix: (project, need) => previewFix(project, need),
-  tools: [previewableTool, variantBriefTool, checkVariantFilesTool, checkTypesTool],
+  tools: [previewableTool, variantBriefTool, checkVariantFilesTool, checkTypesTool, setupBriefTool],
   skills: [variantRulesSkill],
-  agents: [makePreviewableAgent, newVariantAgent],
+  agents: [makePreviewableAgent, newVariantAgent, setUpProjectAgent],
   sessions: sessionKinds,
+  // Not set up for Preview yet (no providers file, nothing previewable, a Vite app): the Set up project agent does it.
+  nudges: (project, items) =>
+    !providersFile(project) && !items.some((i) => i.preview) && project.files.some((f) => /^vite\.config\.[cm]?[jt]s$/.test(f))
+      ? [{ id: 'set-up', text: `${project.name} isn’t set up for Preview yet: Set up project gets it ready (a providers file from what your app is wrapped in, and one component you can preview).`, agent: 'set-up-project' }]
+      : [],
   setup: (project) => setupProject((p) => (existsSync(join(project.root, p)) ? readFileSync(join(project.root, p), 'utf8') : undefined), helperTemplate()),
   readers: [
     {
