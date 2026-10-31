@@ -1,6 +1,7 @@
 // What the shell and a design session's tab say to each other. Shared by both sides, so they can't drift apart.
 
 import type { PlanChoice, PlanView } from './ui/planWindow';
+import type { ProgressLine } from './ui/progress';
 
 /** A card the session can show: its designs and states (for one state at a time). */
 export interface SessionCard {
@@ -15,6 +16,11 @@ export interface SessionView {
   title: string;
   /** The proposal it continues (Done puts the result back into it). */
   proposal?: string;
+  /** Claude works in this session now (the one looked at last, or chosen with "Work here"). */
+  current?: boolean;
+  /** Its kind ("New page"…), and the page it makes, if a page. */
+  kind?: string;
+  page?: string;
   /** What the developer asked for, in their words, oldest first. */
   asked: string[];
   /** The draft's version now, and the ones it can go back to (newest first). */
@@ -30,6 +36,8 @@ export interface SessionView {
   status: { kind: 'open' } | { kind: 'planning' } | { kind: 'ready' } | { kind: 'checking'; text: string } | { kind: 'sent'; proposal: string } | { kind: 'held'; text: string };
   /** Its test cases, when they're ready to run (the window opens by itself once per plan). */
   plan?: PlanView;
+  /** While its checks run: each check and scenario, and where it is. */
+  running?: ProgressLine[];
   /** When held back: the checks that failed (to fix, or bypass), and when that check ended (the window opens once per check). */
   failed?: { title: string; why: string }[];
   checkedAt?: string;
@@ -50,4 +58,6 @@ export type FromSession =
   | { type: 'bypass'; titles: string[]; reason: string }
   /** The developer ran the test cases, as they left them. */
   | { type: 'run'; choice: PlanChoice }
-  | { type: 'openReview'; proposal: string };
+  | { type: 'openReview'; proposal: string }
+  /** Make this the session Claude works in. */
+  | { type: 'workHere' };

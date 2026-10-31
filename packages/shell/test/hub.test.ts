@@ -687,7 +687,7 @@ test('hub: while a design session is open, changes go into it; Claude can open o
   let open: { draft: string; title: string } | undefined;
   const started: unknown[] = [];
   host.session = () => open;
-  host.startSession = (_root, card, asked) => {
+  host.startSession = (_root, { card, asked }) => {
     started.push({ card, asked });
     open = { draft: 'd9', title: 'Design session: Card' };
     return { draft: 'd9' };
@@ -702,7 +702,7 @@ test('hub: while a design session is open, changes go into it; Claude can open o
     // While it's open, proposing is turned away, pointing at the session's draft.
     const turned = await hub.call('propose_change', { asked: 'Bigger', title: 't', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'x' }] });
     assert.equal(turned.error, true);
-    assert.match(turned.text, /^A design session is open in the developer's editor: “Design session: Card”, draft d9\. Put this change into it with save_draft \(draft: "d9"\)/);
+    assert.match(turned.text, /^a design session is open: “Design session: Card”, draft d9\. Put every change for this request into it with save_draft \(draft: "d9"\)/);
     assert.equal(proposals.length, 0);
     // A waiting proposal: changed in a session instead of a replacement.
     open = undefined;
@@ -757,6 +757,83 @@ test('hub: running a version\'s test cases again tries again what failed before 
     await draftFlow(host).requestChecks(state, id);
     assert.equal(typeof (await runAsPlanned(host, id)), 'object');
     assert.equal(proposals.find((p) => p.status === 'proposed')?.evidence?.filter((e) => e.title.startsWith('Logic check')).length, 1, 'only the new result');
+  } finally {
+    await hub.close();
+  }
+});
+
+test('hub: Claude opens a kind of session (a new page), says what it needs, and gets the kind\'s brief', async () => {
+  const { host } = fakeHost();
+  const got: unknown[] = [];
+  host.sessionKinds = () => [{ id: 'new-page', title: 'New page', summary: 'A new page.', needs: { name: 'Its name', page: true } }];
+  host.startSession = (_root, choice) => {
+    got.push(choice);
+    if (choice.kind === 'new-page' && !choice.page) return 'A "New page" session needs: page.';
+    return { draft: 'd5', brief: `This session makes a NEW PAGE, ${choice.name}, at ${choice.page}.` };
+  };
+  const hub = await connect(host);
+  try {
+    const tools = await hub.client.listTools();
+    assert.match(tools.tools.find((t) => t.name === 'start_session')?.description ?? '', /"new-page" \(New page: A new page\. Needs: name, page\)/);
+    assert.match((await hub.call('start_session', { asked: 'A billing page', kind: 'new-page', name: 'Billing' })).text, /needs: page/);
+    const opened = await hub.call('start_session', { asked: 'A billing page', kind: 'new-page', name: 'Billing', page: '/billing' });
+    assert.match(opened.text, /\(draft d5\)[\s\S]*\nThis session makes a NEW PAGE, Billing, at \/billing\.$/);
+    assert.deepEqual(got.at(-1), { asked: 'A billing page', kind: 'new-page', name: 'Billing', page: '/billing' });
+  } finally {
+    await hub.close();
+  }
+});
+
+test('hub: while the checks run, each one\'s state is kept (for the live list): a failed check stops the scenarios', async () => {
+  const { host, drafts } = fakeHost();
+  let verdict = 'PROBLEMS';
+  host.tools = () => [{ plugin, tool: { name: 'judge', title: 'Judge it', description: 'A check.', checks: true, run: async () => `x\n${verdict}` } }];
+  const seen: string[] = [];
+  const save = host.saveDraft;
+  host.saveDraft = (root, d) => {
+    const running = d.check?.items?.find((i) => i.state === 'running');
+    if (running) seen.push(running.id);
+    save(root, d);
+  };
+  const hub = await connect(host);
+  try {
+    await hub.call('propose_change', { asked: 'Bigger', title: 'Card', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'x' }] });
+    const id = drafts[0].id;
+    await runAsPlanned(host, id);
+    const items = () => drafts.find((d) => d.id === id)!.check!.items!.map((i) => [i.id, i.state]);
+    assert.deepEqual(items(), [['check:judge', 'failed'], ['check:pictures', 'not run'], ['case:0', 'not run']]);
+    assert.ok(seen.includes('check:judge'), 'it was shown running');
+    // Fixed: everything passes.
+    verdict = 'PASSED';
+    await hub.call('save_draft', { draft: id, title: 'Card', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'y' }] });
+    await hub.call('submit_draft', { id });
+    await runAsPlanned(host, id);
+    assert.deepEqual(items(), [['check:judge', 'passed'], ['check:pictures', 'done'], ['case:0', 'passed']]);
+  } finally {
+    await hub.close();
+  }
+});
+
+test('hub: checks that stop before running (the project changed since) hold the change back with why; when up to date they run', async () => {
+  const { host, proposals, drafts, files } = fakeHost();
+  const hub = await connect(host);
+  try {
+    await hub.call('propose_change', { asked: 'Bigger', title: 'Card', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'x' }] });
+    const id = drafts[0].id;
+    // The file changed in the project after the test cases were written: nothing can run, and it says why.
+    files['src/Card.tsx'] = 'export const Card = () => 1;\n';
+    assert.match((await runAsPlanned(host, id)) as string, /changed in the project since the draft was saved: src\/Card\.tsx/);
+    const held = proposals.find((p) => p.id === `held-${id}`);
+    assert.equal(held?.status, 'held-back', 'not left waiting under "Checks to approve"');
+    assert.match(held?.evidence?.find((e) => e.title === 'Why its checks stopped')?.text ?? '', /src\/Card\.tsx/);
+    assert.deepEqual(drafts.find((d) => d.id === id)!.check!.items!.map((i) => i.state), ['not run', 'not run'], 'none of them ran');
+    // Saved again on top of the new file: they run, and it reaches Review.
+    await hub.call('save_draft', { draft: id, title: 'Card', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'y' }] });
+    const sent = await hub.call('submit_draft', { id });
+    assert.equal(sent.error, false, sent.text);
+    const again = await runAsPlanned(host, id);
+    assert.equal(typeof again, 'object', String(again));
+    assert.equal(proposals.find((p) => p.status === 'proposed')?.evidence?.some((e) => e.title === 'Why its checks stopped'), false, 'the old reason is gone');
   } finally {
     await hub.close();
   }

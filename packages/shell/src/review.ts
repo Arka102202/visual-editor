@@ -6,7 +6,7 @@ import * as vscode from 'vscode';
 import { DraftStore } from './drafts';
 import { PLAN_STEP, WAITING } from './hub/tools';
 import type { PlanChoice } from './ui/planWindow';
-import { asItIs } from './hub/checkPlan';
+import { asItIs, planView } from './hub/checkPlan';
 import { webviewPage } from './webviewPage';
 import { vscodeFiles } from './vscodeFiles';
 import { readFileSync } from 'node:fs';
@@ -157,8 +157,8 @@ export class Review implements vscode.Disposable {
     const step = d?.check?.revision === d?.revision ? d?.check?.step : undefined;
     const running = step && step !== 'done' && step !== WAITING && step !== PLAN_STEP ? step : undefined;
     const p = d?.plan;
-    const view = ready && p ? { means: p.means, looksOnly: p.looksOnly, checks: p.checks.map((x) => ({ id: x.id, title: x.title, why: x.why, use: x.use, ...(x.always ? { always: true } : {}) })), cases: p.cases.map((x) => ({ case: x.case, expected: x.expected, how: x.how, use: x.use })) } : undefined;
-    return { can: ready && !running, ...(running ? { running } : {}), ...(view ? { view } : {}) };
+    const view = ready && p ? planView(p) : undefined;
+    return { can: ready && !running, ...(running ? { running, ...(d?.check?.items ? { items: d.check.items } : {}) } : {}), ...(view ? { view } : {}) };
   }
 
   /** Where a change waiting for its checks is: its test cases being written, ready (to show), or running. */
@@ -166,11 +166,13 @@ export class Review implements vscode.Disposable {
     const d = new DraftStore(root).list().find((x) => `held-${x.id}` === id);
     const c = d?.check;
     if (!d || !c || c.step === PLAN_STEP || c.step === 'starting') return { state: 'writing' };
+    // (Ended: what's left to show is its result, not a run.)
+    if (c.step === 'done' && d.plan) return { state: 'ready', view: planView(d.plan) };
     if (c.step === WAITING && d.plan) {
       const p = d.plan;
-      return { state: 'ready', view: { means: p.means, looksOnly: p.looksOnly, checks: p.checks.map((x) => ({ id: x.id, title: x.title, why: x.why, use: x.use, ...(x.always ? { always: true } : {}) })), cases: p.cases.map((x) => ({ case: x.case, expected: x.expected, how: x.how, use: x.use })) } };
+      return { state: 'ready', view: planView(p) };
     }
-    return { state: 'running', step: c.step };
+    return { state: 'running', step: c.step, ...(c.items ? { items: c.items } : {}) };
   }
 
   /** Marks a proposal as being changed in a design session (that session's draft), or not any more. */

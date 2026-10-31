@@ -10,12 +10,30 @@ import type { Item } from '@visual-editor/contract';
 import { cardsTouched, draftItems } from './draftItems';
 import { DRAFTS_DIR, DraftStore, type Draft } from './drafts';
 import { bypassProof, failedChecks, whyFailed } from './proposals';
-import { asItIs, type PlanEdits } from './hub/checkPlan';
+import { asItIs, planView, type PlanEdits } from './hub/checkPlan';
 import { PLAN_STEP, WAITING } from './hub/tools';
 import type { ProjectState } from './projectIndex';
 import type { Proposal } from './proposals';
 import type { FromSession, SessionCard, SessionView, ToSession } from './sessionMessages';
 import { webviewPage } from './webviewPage';
+
+/** A kind of session, as started: the plugin's kind, its brief for what was chosen, and the choices. */
+export interface StartKind {
+  id: string;
+  title: string;
+  brief: string;
+  name?: string;
+  page?: string;
+  design?: string;
+}
+
+/** The session Claude works in for a project (with its kind's brief), and the others open. */
+export interface OpenSessions {
+  draft: string;
+  title: string;
+  brief?: string;
+  others?: { draft: string; title: string }[];
+}
 
 export interface SessionHost {
   project(root: string): ProjectState | undefined;
@@ -66,12 +84,13 @@ export class Sessions implements vscode.Disposable {
   ) {}
 
   /** Starts a design session: a new draft (nothing changed yet), about a card if one is given, shown in its tab. */
-  start(root: string, card?: Item, asked?: string): Draft {
+  start(root: string, card?: Item, asked?: string, kind?: StartKind): Draft {
     const now = new Date().toISOString();
     const id = `${now.replace(/\D/g, '').slice(0, 14)}-${Math.random().toString(36).slice(2, 7)}`;
+    const about = card?.label ?? kind?.name ?? kind?.page;
     const draft: Draft = {
       id,
-      title: card ? `Design session: ${card.label}` : 'Design session',
+      title: kind ? `${kind.title}${about ? `: ${about}` : ''}` : card ? `Design session: ${card.label}` : 'Design session',
       why: '',
       by: { kind: 'assistant', name: 'Design session' },
       createdAt: now,
@@ -82,7 +101,14 @@ export class Sessions implements vscode.Disposable {
       asked: asked ? [asked] : [],
       revision: 1,
       evidence: [],
-      session: { ...(card ? { card: card.id } : {}), openedAt: now },
+      session: {
+        ...(card ? { card: card.id } : {}),
+        openedAt: now,
+        ...(kind ? { kind: { id: kind.id, title: kind.title, brief: kind.brief } } : {}),
+        ...(kind?.name ? { name: kind.name } : {}),
+        ...(kind?.page ? { page: kind.page } : {}),
+        ...(kind?.design ? { design: kind.design } : {}),
+      },
     };
     new DraftStore(root).save(draft);
     this.open(root, id);
@@ -157,17 +183,32 @@ export class Sessions implements vscode.Disposable {
   }
 
   /** The session Claude works in for a project: the open one looked at last (its draft and title). */
-  current(root: string): { draft: string; title: string } | undefined {
+  current(root: string): OpenSessions | undefined {
     const id = this.latest.get(root) ?? [...this.tabs.values()].find((t) => t.root === root)?.id;
     if (!id || !this.tabs.has(`${root}#${id}`)) return undefined;
-    const d = new DraftStore(root).list().find((x) => x.id === id);
-    return d && d.status === 'draft' ? { draft: d.id, title: d.title } : undefined;
+    const drafts = new DraftStore(root).list();
+    const d = drafts.find((x) => x.id === id);
+    if (!d || d.status !== 'draft') return undefined;
+    // The other sessions open in this project, so Claude can tell which one a message is about.
+    const others = [...this.tabs.values()].filter((t) => t.root === root && t.id !== id).flatMap((t) => {
+      const o = drafts.find((x) => x.id === t.id && x.status === 'draft');
+      return o ? [{ draft: o.id, title: o.title }] : [];
+    });
+    return { draft: d.id, title: d.title, ...(d.session?.kind ? { brief: d.session.kind.brief } : {}), ...(others.length ? { others } : {}) };
+  }
+
+  /** Makes a session the one Claude works in (its tab's "Work here"). */
+  workIn(root: string, id: string) {
+    this.latest.set(root, id);
+    this.note(root);
   }
 
   /** Notes the current session for Claude Code's check (or that there's none). */
   private note(root: string) {
     const file = join(root, SESSION_NOTE);
     const now = this.current(root);
+    // Every open session's tab shows whether Claude works in it.
+    for (const t of this.tabs.values()) if (t.root === root) void this.send(t);
     try {
       if (now) {
         mkdirSync(join(root, DRAFTS_DIR), { recursive: true });
@@ -201,6 +242,7 @@ export class Sessions implements vscode.Disposable {
     const store = new DraftStore(tab.root);
     const draft = store.list().find((d) => d.id === tab.id);
     if (m.type === 'openReview') return this.host.openReview(m.proposal);
+    if (m.type === 'workHere') return this.workIn(tab.root, tab.id);
     if (!draft) return;
     if (m.type === 'back') {
       // Going back is a new version with that version's files (nothing is lost: the newer ones stay in the list).
@@ -307,6 +349,9 @@ export class Sessions implements vscode.Disposable {
     const session: SessionView = {
       id: tab.id,
       title: draft?.title ?? 'Design session',
+      ...(draft?.session?.kind ? { kind: draft.session.kind.title } : {}),
+      ...(draft?.session?.page ? { page: draft.session.page } : {}),
+      current: this.current(tab.root)?.draft === tab.id,
       ...(draft?.session?.proposal ? { proposal: draft.session.proposal } : {}),
       asked: draft?.asked ?? [],
       revision: tab.revision ?? draft?.revision ?? 1,
@@ -321,8 +366,9 @@ export class Sessions implements vscode.Disposable {
         : {}),
       // Its test cases: ready to run, or (held back) to look at, change and run again.
       ...((tab.status.kind === 'ready' || tab.status.kind === 'held') && draft?.plan?.revision === draft?.revision && draft?.plan
-        ? { plan: { means: draft.plan.means, looksOnly: draft.plan.looksOnly, checks: draft.plan.checks.map((x) => ({ id: x.id, title: x.title, why: x.why, use: x.use, ...(x.always ? { always: true } : {}) })), cases: draft.plan.cases.map((x) => ({ case: x.case, expected: x.expected, how: x.how, use: x.use })) } }
+        ? { plan: planView(draft.plan) }
         : {}),
+      ...(tab.status.kind === 'checking' && draft?.check?.items ? { running: draft.check.items } : {}),
       ...(tab.status.kind === 'ready' ? { checkedAt: `${draft?.check?.at ?? ''}${tab.showPlan ? `#${Date.now()}` : ''}` } : {}),
     };
     await tab.panel.webview.postMessage({ type: 'show', session } satisfies ToSession);

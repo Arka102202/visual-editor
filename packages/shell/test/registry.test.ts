@@ -62,3 +62,13 @@ test('registry: tools, skills and agents are checked and collected from every pl
   assert.match(check({ agents: [{ ...agent, checker: { prompt: '' } }] })!, /checker's instructions/);
   assert.match(check({ agents: [{ ...agent, rounds: 5 }] })!, /1 to 3 times, not 5/);
 });
+
+test('registry: kinds of design session are checked (ids apart from other plugins\') and collected', () => {
+  const registry = new PluginRegistry();
+  const kind = (id: string) => ({ id, title: 'New page', summary: 's', needs: { page: true }, brief: () => 'b' });
+  registry.register(plugin({ id: 'a', name: 'A', sessions: [kind('new-page')] }));
+  assert.throws(() => registry.register(plugin({ id: 'b', name: 'B', sessions: [kind('new-page')] })), /same id as another plugin's/);
+  assert.match(checkPlugin(plugin({ id: 'c', sessions: [kind('New Page')] }), () => false)!, /lowercase letters, digits and dashes/);
+  assert.match(checkPlugin(plugin({ id: 'd', sessions: [{ ...kind('x'), brief: undefined as never }] }), () => false)!, /missing a title, a summary, what it needs or brief\(\)/);
+  assert.deepEqual(registry.sessionKinds().map((k) => [k.plugin.id, k.kind.id]), [['a', 'new-page']]);
+});

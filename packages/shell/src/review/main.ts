@@ -7,6 +7,7 @@ import { addStyles, ago, el } from '../ui/dom';
 import { iconButton, installTips, tray, type Icon } from '../ui/buttons';
 import { openBypass } from '../ui/bypass';
 import { openPlan } from '../ui/planWindow';
+import { drawProgress } from '../ui/progress';
 
 declare function acquireVsCodeApi(): { postMessage(message: FromReview): void };
 const vscode = acquireVsCodeApi();
@@ -197,11 +198,14 @@ function drawDetail(item: ReviewItem) {
     const box = el('div', 'warn');
     const p = item.plan;
     if (p.state === 'writing') box.append(el('b', undefined, 'Its test cases are being written.'), el('div', undefined, 'The check planner is reading the change and what was asked (a minute or so). Nothing has run yet.'));
-    else if (p.state === 'running') box.append(el('b', undefined, 'Its checks are running.'), el('div', undefined, `Now: ${p.step ?? '…'}. It reaches Review when they pass; if not, you see what failed.`));
+    else if (p.state === 'running') {
+      box.append(el('b', undefined, 'Its checks are running.'), el('div', undefined, `Now: ${p.step ?? '…'}. It reaches Review when they pass; if not, you see what failed.`));
+      if (p.items?.length) box.append(drawProgress(p.items));
+    }
     else if (p.view) {
       const v = p.view;
       box.append(el('b', undefined, 'Its test cases are ready: nothing has run yet.'), el('div', undefined, `${v.checks.filter((c) => c.use).length} checks and ${v.cases.length} scenarios. Look at them, change them if you like, and run them.`));
-      const look = iconButton('play', 'Look at the test cases and run them', { cls: 'primary' });
+      const look = iconButton('preview', 'See the test cases: everything that will be checked (change them, then run them)', { cls: 'primary' });
       look.addEventListener('click', () => askPlan(item));
       box.append(look);
     }
@@ -210,6 +214,7 @@ function drawDetail(item: ReviewItem) {
   if (item.status === 'held-back' && item.rerun?.running) {
     const box = el('div', 'warn');
     box.append(el('b', undefined, 'Running its checks again.'), el('div', undefined, `Now: ${item.rerun.running}. It goes to Review if they pass; if not, you see what failed.`));
+    if (item.rerun.items?.length) box.append(drawProgress(item.rerun.items));
     detail.append(box);
   } else if (item.status === 'held-back') {
     const warn = el('div', 'warn');
@@ -256,7 +261,7 @@ function drawDetail(item: ReviewItem) {
     const busy = running ? `Its checks are running (now ${running}): wait for them to finish` : undefined;
     if (item.rerun) {
       // Its test cases, to look at, change or add to, and run again.
-      const again = iconButton('play', busy ?? 'Look at its test cases (change them, add your own) and run them again');
+      const again = iconButton('preview', busy ?? 'See its test cases: change them, add your own, and run them again');
       again.disabled = !item.rerun.can || !item.rerun.view;
       again.addEventListener('click', () => item.rerun?.view && openPlan(item.title, item.rerun.view, (choice) => vscode.postMessage({ type: 'runPlan', id: item.id, choice })));
       const fresh = button('reload', busy ?? 'Write new test cases (the check planner reads the change again), then look at them and run them', undefined, { type: 'replan', id: item.id });
@@ -279,7 +284,8 @@ function drawDetail(item: ReviewItem) {
   }
   if (actions.childElementCount) detail.append(actions);
 
-  if (item.evidence) detail.append(...drawProof(item));
+  // (Waiting for its checks: nothing is checked yet, as planned; its proof comes when they run.)
+  if (item.evidence && item.status !== 'awaiting-checks') detail.append(...drawProof(item));
   // Cards it changes that can be tried live, unless a picture in its proof already shows them.
   const pictured = new Set((item.evidence ?? []).flatMap((e) => (e.card ? [e.card] : [])));
   const tryable = (item.cards ?? []).filter((c) => !pictured.has(c.id));

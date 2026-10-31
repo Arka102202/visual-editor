@@ -37,14 +37,39 @@ export interface Draft {
    * A design session works in this draft (a tab shows it live while it changes): the card it's about, if one, and the
    * proposal it continues, if one (Done puts the result back into that proposal instead of making a new one).
    */
-  session?: { card?: string; proposal?: string; openedAt: string };
+  session?: SessionInfo;
   /**
    * Its check on the way to Review (it runs in the background: the logic check takes a minute or two): which version,
    * the step it's on, and how it ended: sent (the proposal) or held (why).
    */
-  check?: { at: string; revision: number; step: string; sent?: string; held?: string };
+  check?: { at: string; revision: number; step: string; sent?: string; held?: string; items?: ProgressItem[] };
   /** Its check plan (written when it was finished; what the developer approved, once they ran it). */
   plan?: CheckPlan;
+}
+
+/** One check or scenario of a run, and where it is (shown live while the checks run). */
+export interface ProgressItem {
+  id: string;
+  title: string;
+  kind: 'check' | 'scenario';
+  /** "done": it ran, as information (it doesn't pass or fail); "not run": an earlier check stopped the run first. */
+  state: 'waiting' | 'running' | 'passed' | 'failed' | 'done' | 'skipped' | 'not run';
+  /** When it started running, and how long it took (seconds), once it ended. */
+  at?: string;
+  took?: number;
+}
+
+/** A design session's draft: what it's about, and its kind (with the plugin's brief for the assistant). */
+export interface SessionInfo {
+  card?: string;
+  proposal?: string;
+  openedAt: string;
+  /** Its kind (a plugin's: "new-design", "new-page"…), and how to build it, for the assistant. */
+  kind?: { id: string; title: string; brief: string };
+  /** What the developer chose for it: a name, a page's address, a design of the card. */
+  name?: string;
+  page?: string;
+  design?: string;
 }
 
 /** One version of a draft, kept so a session can go back to it. */
@@ -89,18 +114,26 @@ export function parseDraft(text: string, fallbackId: string): Draft | string {
     revision: typeof raw.revision === 'number' ? raw.revision : 1,
     evidence: Array.isArray(raw.evidence) ? parseEvidence(raw.evidence) : [],
     ...(raw.session && typeof raw.session === 'object'
-      ? {
-          session: {
-            ...(typeof (raw.session as Record<string, unknown>).card === 'string' ? { card: (raw.session as Record<string, string>).card } : {}),
-            ...(typeof (raw.session as Record<string, unknown>).proposal === 'string' ? { proposal: (raw.session as Record<string, string>).proposal } : {}),
-            openedAt: String((raw.session as Record<string, unknown>).openedAt ?? now),
-          },
-        }
+      ? { session: parseSession(raw.session as Record<string, unknown>, now) }
       : {}),
     ...(raw.check && typeof raw.check === 'object' && typeof (raw.check as Record<string, unknown>).step === 'string'
       ? { check: raw.check as Draft['check'] }
       : {}),
     ...(raw.plan && typeof raw.plan === 'object' && Array.isArray((raw.plan as Record<string, unknown>).checks) ? { plan: raw.plan as CheckPlan } : {}),
+  };
+}
+
+function parseSession(x: Record<string, unknown>, now: string): SessionInfo {
+  const str = (k: string) => (typeof x[k] === 'string' ? { [k]: x[k] as string } : {});
+  const kind = x.kind as Record<string, unknown> | undefined;
+  return {
+    ...str('card'),
+    ...str('proposal'),
+    openedAt: String(x.openedAt ?? now),
+    ...(kind && typeof kind.id === 'string' && typeof kind.title === 'string' && typeof kind.brief === 'string' ? { kind: { id: kind.id, title: kind.title, brief: kind.brief } } : {}),
+    ...str('name'),
+    ...str('page'),
+    ...str('design'),
   };
 }
 
