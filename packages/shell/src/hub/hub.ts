@@ -284,6 +284,8 @@ function safeRealpath(path: string): string {
 /** Runs a shell command in a folder; says whether it worked, and whether the command wasn't found at all. */
 /** `claude`, found where it's usually installed even when VS Code's own PATH doesn't have it (for a shell command). */
 export function claudeCommand(): string {
+  // (The VS Code test can put a stand-in in its place, so running an agent costs nothing.)
+  if (process.env.VISUAL_EDITOR_TEST === '1' && process.env.VISUAL_EDITOR_CLAUDE_BIN) return JSON.stringify(process.env.VISUAL_EDITOR_CLAUDE_BIN);
   return `PATH="${CLAUDE_DIRS.join(':')}:$PATH" claude`;
 }
 
