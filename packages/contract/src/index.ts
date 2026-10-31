@@ -189,6 +189,35 @@ export interface Plugin {
   skills?: PluginSkill[];
   /** Contract 8: jobs an assistant does for the developer: a worker makes a change, a checker proves it. */
   agents?: PluginAgent[];
+  /** Contract 8: kinds of design session it offers (React: a new design for a component, a new page…). */
+  sessions?: PluginSessionKind[];
+}
+
+/**
+ * Contract 8: a kind of design session: what the developer chooses when starting one, and how to build it, for the
+ * assistant (given when the session opens, and with each of the developer's messages while it's open).
+ */
+export interface PluginSessionKind {
+  /** Lowercase letters, digits and dashes, unique across every plugin, e.g. "new-design". */
+  id: string;
+  /** A few words, e.g. "New design". */
+  title: string;
+  /** What it makes, in very simple words, for the developer. */
+  summary: string;
+  /** What the developer chooses: a component (previewable or any), which of its designs, a name, a page's address. */
+  needs: { card?: 'previewable' | 'any'; design?: boolean; name?: string; page?: boolean };
+  /** How to build it, for the assistant, given what the developer chose. */
+  brief(chosen: SessionChoice): string;
+}
+
+/** What the developer chose when starting a design session. */
+export interface SessionChoice {
+  card?: Item;
+  /** A design of the card (its id). */
+  design?: string;
+  name?: string;
+  /** A page's address, e.g. "/settings". */
+  page?: string;
 }
 
 // ---------------------------------------------------------------------------

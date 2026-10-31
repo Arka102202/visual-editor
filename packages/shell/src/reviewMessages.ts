@@ -3,6 +3,7 @@
 import type { Hunk } from './diff';
 import type { Evidence, Proposal } from './proposals';
 import type { PlanChoice, PlanView } from './ui/planWindow';
+import type { ProgressLine } from './ui/progress';
 
 export interface ReviewFile {
   path: string;
@@ -40,9 +41,9 @@ export interface ReviewItem {
   /** Held back: the checks that failed (to fix, or bypass). */
   failed?: { title: string; why: string }[];
   /** Held back: its test cases can be run again as they are (they were written for this version), or are running now. */
-  rerun?: { can: boolean; running?: string; view?: PlanView };
+  rerun?: { can: boolean; running?: string; view?: PlanView; items?: ProgressLine[] };
   /** Waiting for its checks: its test cases being written, ready for the developer, or running (the step it's on). */
-  plan?: { state: 'writing' | 'ready' | 'running'; step?: string; view?: PlanView };
+  plan?: { state: 'writing' | 'ready' | 'running'; step?: string; view?: PlanView; items?: ProgressLine[] };
 }
 
 /** Shell → review page. */

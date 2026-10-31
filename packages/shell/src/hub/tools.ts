@@ -9,8 +9,9 @@ import type { Item, Plugin, PluginAgent, PluginTool, ToolAnswer, ToolInput } fro
 import { forCard, rulesText, type MemoryEntry } from '../memory';
 import type { ProjectState } from '../projectIndex';
 import { holdsBack, LOOKS_SAME, newId, parseProposal, safePath, type Evidence, type FileChange, type Proposal } from '../proposals';
-import { applyEdits, BUILT_IN_CHECKS, choicesText, type AvailableCheck, type CheckPlan, type PlanEdits } from './checkPlan';
-import { draftView, type Draft } from '../drafts';
+import { applyEdits, BUILT_IN_CHECKS, choicesText, progressOf, type AvailableCheck, type CheckPlan, type PlanEdits } from './checkPlan';
+import { sessionWords as sessionText, type OpenSession } from './claudeLock';
+import { draftView, type Draft, type ProgressItem } from '../drafts';
 import { current, JOB_MINUTES, newJob, nextStep, type Job } from '../jobs';
 import { logicText, type LogicVerdict } from './logicCheck';
 
@@ -54,15 +55,20 @@ export interface HubHost {
   /** The check planner (checkPlan.ts): the plan for a finished change (which checks apply, the scenarios); or why none. */
   planChecks?(root: string, draft: Draft, available: AvailableCheck[]): Promise<CheckPlan | string>;
   /** Runs a plan's scenarios: the developer's own read in the code, then those that can be tried in the app. */
-  runPlannedCases?(root: string, draft: Draft, plan: CheckPlan): Promise<LogicVerdict | string>;
+  runPlannedCases?(root: string, draft: Draft, plan: CheckPlan, progress?: (index: number, state: ProgressItem['state']) => void): Promise<LogicVerdict | string>;
   /** A finished change's test cases are written: the developer looks at them and runs them. */
   planned?(root: string, draft: Draft): void;
   /** How long a call waits for a check before saying it goes on in the background (default CHECK_WAIT_MS). */
   checkWaitMs?: number;
-  /** The design session open in the developer's editor for a project, if one: its draft and title. */
-  session?(root: string): { draft: string; title: string } | undefined;
-  /** Opens a design session (about a card, if given) with what was asked; its draft, or why it couldn't. */
-  startSession?(root: string, card: string | undefined, asked: string): { draft: string } | string;
+  /** The design session open in the developer's editor for a project, if one: its draft, title and its kind's brief. */
+  session?(root: string): OpenSession | undefined;
+  /**
+   * Opens a design session with what was asked: of a kind (a plugin's), about a card, with a name, page or design as
+   * the kind needs. Its draft and its kind's brief, or why it couldn't.
+   */
+  startSession?(root: string, choice: { asked: string; kind?: string; card?: string; name?: string; page?: string; design?: string }): { draft: string; brief?: string } | string;
+  /** The kinds of design session the project's plugins offer. */
+  sessionKinds?(root: string): { id: string; title: string; summary: string; needs: { card?: string; design?: boolean; name?: string; page?: boolean } }[];
   /** Continues a waiting (or sent-back, held-back) proposal in a design session; its draft, or why it couldn't. */
   continueProposal?(root: string, id: string): { draft: string } | string;
   /** A draft's check ended (sent: its proposal; or why it was held back). */
@@ -369,8 +375,7 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
   const { picture, runTool, requestChecks, compare, lookMustStay, stale } = draftFlow(host);
   const sentForChecks = (id: string) =>
     `Sent. Visual Editor's check planner is writing its test cases; the developer looks at them and presses Run, then it reaches Review (or comes back with what to fix). Nothing to wait for and don't send it again: call proposal_status with id "${id}" later to see where it is.`;
-  const sessionWords = (open: { draft: string; title: string }) =>
-    `A design session is open in the developer's editor: “${open.title}”, draft ${open.draft}. Put this change into it with save_draft (draft: "${open.draft}"), adding what the developer asked as asked; don't propose it. It shows in the session live; nothing is checked until the developer is done (they press Done, or say "done" and you call submit_draft with id "${open.draft}").`;
+  const sessionWords = (open: OpenSession) => sessionText(open).replace(/^Visual Editor: /, '');
 
   server.registerTool(
     'save_draft',
@@ -400,8 +405,9 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       for (const c of changes) {
         const path = c.path.replace(/\\/g, '/').replace(/^\.\//, '');
         if (!safePath(path)) return fail(`${c.path} isn't a place in the project a change can go.`);
-        // What the file was when the draft first touched it (submit_draft checks it's still so).
-        const before = files.get(path)?.before ?? (await host.readFile(root, path)) ?? null;
+        // What the file is in the project now, as this content was written on top of it (submit_draft checks it's still
+        // so). Saving a file again after it changed in the project takes the new one: that's how a draft catches up.
+        const before = (await host.readFile(root, path)) ?? null;
         if (before === null && c.content === null) return fail(`${path} doesn't exist, so it can't be removed.`);
         if (before === c.content) files.delete(path);
         else files.set(path, { path, before, after: c.content });
@@ -490,27 +496,37 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
     },
   );
 
+  // (The kinds of session the plugins offer, for start_session's description.)
+  const KIND_WORDS = (() => {
+    const s = host.current();
+    const kinds = s && host.sessionKinds ? host.sessionKinds(s.project.root) : [];
+    return kinds.length ? kinds.map((k) => `"${k.id}" (${k.title}: ${k.summary} Needs: ${[k.needs.card ? 'card' : '', k.needs.design ? 'design' : '', k.needs.name ? 'name' : '', k.needs.page ? 'page' : ''].filter(Boolean).join(', ') || 'nothing'})`).join('; ') : 'none here.';
+  })();
   server.registerTool(
     'start_session',
     {
       title: 'Open a design session',
       description:
-        'Opens a design session in the developer\'s editor: a tab that shows a draft live (a component\'s Playground, or the app) while you and the developer shape a change together. Put every change for it into its draft with save_draft (draft: the id this returns); nothing is checked until the developer is done. Use it when the developer wants to design or try something out ("let\'s design a new look for ProjectCard").',
+        `Opens a design session in the developer\'s editor: a tab that shows a draft live (a component\'s Playground, or the app) while you and the developer shape a change together. Put every change for it into its draft with save_draft (draft: the id this returns); nothing is checked until the developer is done. Use it when the developer wants to design or try something out ("let\'s design a new look for ProjectCard", "a new Billing page"). Give its kind when one fits: ${KIND_WORDS}`,
       inputSchema: {
         asked: z.string().describe('What the developer asked for, in their own words'),
+        kind: z.string().optional().describe('The kind of session, by id (see the description), when one fits'),
         card: z.string().optional().describe('The component\'s card id (or name) it is about, if one'),
+        name: z.string().optional().describe('For a new component or page: its name, e.g. "Billing"'),
+        page: z.string().optional().describe('For a new page: its address, e.g. "/billing"'),
+        design: z.string().optional().describe('For changing a design: its id'),
         project: projectArg,
       },
     },
-    async ({ asked, card, project }) => {
+    async ({ asked, kind, card, name, page, design, project }) => {
       const s = await pick(project);
       if (typeof s === 'string') return fail(s);
       if (!host.startSession) return fail('Design sessions can\'t be opened here.');
       const item = card ? s.items.find((i) => i.id === card) ?? s.items.find((i) => i.label === card && i.preview) ?? s.items.find((i) => i.label === card) : undefined;
       if (card && !item) return fail(`No card "${card}" (use list_cards to find its id).`);
-      const r = host.startSession(s.project.root, item?.id, asked.trim());
+      const r = host.startSession(s.project.root, { asked: asked.trim(), ...(kind ? { kind } : {}), ...(item ? { card: item.id } : {}), ...(name ? { name } : {}), ...(page ? { page } : {}), ...(design ? { design } : {}) });
       if (typeof r === 'string') return fail(r);
-      return reply(`A design session is open in the developer's editor (draft ${r.draft}). Put each change into it with save_draft (draft: "${r.draft}"), giving each file's whole new content and each new request as asked; it shows live. Don't propose it: when the developer is done they press Done (or say "done", and you call submit_draft with id "${r.draft}").`);
+      return reply(`A design session is open in the developer's editor (draft ${r.draft}). Put each change into it with save_draft (draft: "${r.draft}"), giving each file's whole new content and each new request as asked; it shows live. Don't propose it: when the developer is done they press Done (or say "done", and you call submit_draft with id "${r.draft}").${r.brief ? `\n${r.brief}` : ''}`);
     },
   );
 
@@ -814,7 +830,7 @@ export function draftFlow(host: HubHost) {
    * The one rule for reaching Review: the checks the developer approved in this version's plan ran, and nothing that
    * holds a change back failed (or they bypassed it). Undefined when it may go; else why not, with the problems to fix.
    */
-  const provenOrWhy = async (s: ProjectState, d: Draft, again = 'save_draft with the draft id, then submit_draft again', step: (what: string) => void = () => {}): Promise<string | undefined> => {
+  const provenOrWhy = async (s: ProjectState, d: Draft, again = 'save_draft with the draft id, then submit_draft again', step: (what: string) => void = () => {}, mark: (id: string, state: ProgressItem['state']) => void = () => {}): Promise<string | undefined> => {
     const root = s.project.root;
     const latest = () => host.drafts(root).find((x) => x.id === d.id) ?? d;
     const plan = latest().plan;
@@ -833,10 +849,16 @@ export function draftFlow(host: HubHost) {
     const kept = () => latest().evidence.filter((e) => e.revision === d.revision);
     // (What already ran on this version isn't run again.)
     const ran = (title: string) => kept().some((e) => e.by.startsWith('Visual Editor') && (e.title === title || e.title.startsWith(`${title} (`)));
+    // How a check came out, from its proof on this version (for the live list).
+    const outcome = (found: Evidence[]): ProgressItem['state'] => (found.some((e) => e.passed === false && !e.bypassed) ? 'failed' : found.some((e) => e.passed === true) ? 'passed' : 'done');
     for (const c of plan.checks.filter((x) => x.use)) {
+      mark(`check:${c.id}`, 'running');
       if (c.id === 'pictures') {
         // (Pictures only for a change that passed its checks so far: a failed one goes back to be fixed first.)
-        if (kept().some((e) => holdsBack(e, false))) continue;
+        if (kept().some((e) => holdsBack(e, false))) {
+          mark(`check:${c.id}`, 'not run');
+          continue;
+        }
         step('pictures in the Playground');
         const cards = (await host.cardsTouched?.(root, d).catch(() => [])) ?? [];
         for (const card of cards.slice(0, 3)) {
@@ -845,31 +867,45 @@ export function draftFlow(host: HubHost) {
           const p = await picture(root, d, card);
           if (typeof p === 'string') note(`No picture of ${card.split('#').pop()}`, p);
         }
+        mark(`check:${c.id}`, outcome(kept().filter((e) => e.kind === 'picture')));
       } else if (c.id === 'looks_same') {
-        if (!c.page || ran(`${LOOKS_SAME}: ${c.page}`)) continue;
-        step('comparing the app');
-        const r = await compare(root, d, c.page, true);
-        if (typeof r === 'string') note(`${LOOKS_SAME}: ${c.page} couldn't run`, r);
+        if (c.page && !ran(`${LOOKS_SAME}: ${c.page}`)) {
+          step('comparing the app');
+          const r = await compare(root, d, c.page, true);
+          if (typeof r === 'string') note(`${LOOKS_SAME}: ${c.page} couldn't run`, r);
+        }
+        mark(`check:${c.id}`, outcome(kept().filter((e) => e.title === `${LOOKS_SAME}: ${c.page}`)));
       } else {
         const found = host.tools().find(({ tool }) => tool.name === c.id);
-        if (!found || ran(found.tool.title)) continue;
-        step(found.tool.title);
-        try {
-          await runTool(s, found.tool, {}, d);
-        } catch (e) {
-          note(`${found.tool.title}: couldn't run`, `A bug in the ${found.plugin.name} plugin: ${e instanceof Error ? e.message : e}`);
+        if (found && !ran(found.tool.title)) {
+          step(found.tool.title);
+          try {
+            await runTool(s, found.tool, {}, d);
+          } catch (e) {
+            note(`${found.tool.title}: couldn't run`, `A bug in the ${found.plugin.name} plugin: ${e instanceof Error ? e.message : e}`);
+          }
         }
+        mark(`check:${c.id}`, found ? outcome(kept().filter((e) => e.title === found.tool.title || e.title.startsWith(`${found.tool.title} (`))) : 'done');
       }
     }
     const mustStay = plan.checks.some((c) => c.id === 'looks_same' && c.use) || lookMustStay(root, d);
     const failed = kept().filter((e) => holdsBack(e, mustStay));
-    if (failed.length) return blocked(failed);
+    const used = plan.cases.filter((c) => c.use);
+    if (failed.length) {
+      // (Stopped before the scenarios.)
+      used.forEach((_, i) => mark(`case:${i}`, 'not run'));
+      return blocked(failed);
+    }
     // Then the scenarios: read in the code, and tried in the app where they can be (once per version).
     if (plan.cases.some((c) => c.use) && !kept().some((e) => e.title === LOGIC && (e.passed === true || e.bypassed))) {
       const asked = d.asked?.length ? d.asked : [d.title];
       step('the scenarios (read in the code, and tried in the app)');
-      const verdict = host.runPlannedCases ? await host.runPlannedCases(root, { ...d, asked }, plan) : 'The scenarios can\'t be run here.';
-      if (typeof verdict === 'string') return `Not sent to Review: ${verdict} Press Run again in a moment.`;
+      const verdict = host.runPlannedCases ? await host.runPlannedCases(root, { ...d, asked }, plan, (i, state) => mark(`case:${i}`, state)) : 'The scenarios can\'t be run here.';
+      if (typeof verdict === 'string') {
+        used.forEach((_, i) => mark(`case:${i}`, 'not run'));
+        return `Not sent to Review: ${verdict} Press Run again in a moment.`;
+      }
+      verdict.cases.forEach((c, i) => mark(`case:${i}`, c.ok || c.overruled ? 'passed' : 'failed'));
       const { passed, cost: _cost, ...logic } = verdict;
       const e: Evidence = { kind: 'check', title: LOGIC, text: logicText(asked, logic), passed, by: 'Visual Editor (logic checker)', at: now(), revision: d.revision, logic };
       addProof(root, d, e, (x) => x.title === LOGIC);
@@ -1099,7 +1135,7 @@ export function draftFlow(host: HubHost) {
   };
 
   /** Sends a draft to Review the one way: files that moved on first, then its proof (checks, logic check), then Review. */
-  const finish = async (s: ProjectState, id: string, again?: string, step?: (what: string) => void): Promise<Finished> => {
+  const finish = async (s: ProjectState, id: string, again?: string, step?: (what: string) => void, mark?: (id: string, state: ProgressItem['state']) => void): Promise<Finished> => {
     const root = s.project.root;
     const d = host.drafts(root).find((x) => x.id === id);
     if (!d) return `No draft "${id}" in ${s.project.name}.`;
@@ -1107,7 +1143,7 @@ export function draftFlow(host: HubHost) {
     // (Files that moved on first: no checks, least of all the logic check, on a draft that can't be sent as it is.)
     const moved = await stale(root, d);
     if (moved) return moved;
-    const blocked = await provenOrWhy(s, d, again, step);
+    const blocked = await provenOrWhy(s, d, again, step, mark);
     if (blocked) return blocked;
     return submit(root, host.drafts(root).find((x) => x.id === d.id) ?? d);
   };
@@ -1124,16 +1160,40 @@ export function draftFlow(host: HubHost) {
     const had = RUNNING.get(key);
     if (had) return { promise: had, already: true };
     const at = new Date().toISOString();
-    const revision = host.drafts(root).find((x) => x.id === id)?.revision ?? 1;
+    const d0 = host.drafts(root).find((x) => x.id === id);
+    const revision = d0?.revision ?? 1;
+    // The run's list (each check and scenario, and where it is), kept with the check for Review and the session.
+    let items = d0?.plan?.revision === revision ? progressOf(d0.plan) : [];
+    let step = 'starting';
     const record = (check: Partial<NonNullable<Draft['check']>>) => {
       const now = host.drafts(root).find((x) => x.id === id);
-      if (now) host.saveDraft(root, { ...now, check: { at, revision, step: 'starting', ...check } });
+      if (now) host.saveDraft(root, { ...now, check: { at, revision, step, ...(items.length ? { items } : {}), ...check } });
     };
-    record({ step: 'starting' });
-    const promise = finish(s, id, again, (step) => record({ step }))
+    const mark = (itemId: string, state: ProgressItem['state']) => {
+      const now = new Date();
+      items = items.map((i) => {
+        if (i.id !== itemId) return i;
+        // When it started, and (once it ends) how long it took.
+        if (state === 'running') return { ...i, state, at: i.at ?? now.toISOString() };
+        const took = i.at && i.state === 'running' ? Math.max(0, Math.round((now.getTime() - Date.parse(i.at)) / 1000)) : i.took;
+        return { ...i, state, ...(took !== undefined ? { took } : {}) };
+      });
+      record({});
+    };
+    record({});
+    const promise = finish(s, id, again, (what) => ((step = what), record({})), mark)
       .catch((e: unknown) => `The check couldn't finish: ${e instanceof Error ? e.message : String(e)}`)
       .then((r) => {
-        record(typeof r === 'string' ? { step: 'done', held: r } : { step: 'done', sent: r.proposal.id });
+        items = items.map((i) => (i.state === 'waiting' || i.state === 'running' ? { ...i, state: 'not run' } : i));
+        step = 'done';
+        record(typeof r === 'string' ? { held: r } : { sent: r.proposal.id });
+        // Stopped before its checks could say anything (out of date, its test cases missing, an error): held back
+        // with the reason, so the developer sees why (a session shows it in its tab).
+        const stopped = host.drafts(root).find((x) => x.id === id);
+        if (typeof r === 'string' && stopped && !stopped.session && host.proposals(root).find((p) => p.id === `held-${id}`)?.status === 'awaiting-checks') {
+          addProof(root, stopped, { kind: 'note', title: 'Why its checks stopped', text: r, by: 'Visual Editor', at: new Date().toISOString(), revision: stopped.revision }, (x) => x.title === 'Why its checks stopped');
+          holdBack(root, host.drafts(root).find((x) => x.id === id) ?? stopped);
+        }
         after?.(r);
         const d = host.drafts(root).find((x) => x.id === id);
         if (d) host.checked?.(root, d, r);

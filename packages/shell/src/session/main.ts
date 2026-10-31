@@ -7,6 +7,7 @@ import { addStyles, ago, el } from '../ui/dom';
 import { iconButton, installTips, setIcon, tray, type Icon } from '../ui/buttons';
 import { openBypass } from '../ui/bypass';
 import { openPlan, type PlanView } from '../ui/planWindow';
+import { drawProgress } from '../ui/progress';
 
 declare function acquireVsCodeApi(): { postMessage(message: FromSession): void };
 const vscode = acquireVsCodeApi();
@@ -19,6 +20,7 @@ addStyles(`
   .chip { font-size: 11px; padding: 1px 8px; border-radius: 10px; border: 1px solid currentColor; opacity: .85; white-space: nowrap; }
   .chip.checking { color: var(--vscode-charts-yellow, #cca700); }
   .chip.sent { color: var(--vscode-testing-iconPassed, #73c991); }
+  .chip.here { color: var(--vscode-charts-purple, #b180d7); }
   .chip.held { color: var(--vscode-errorForeground, #f48771); }
   .body { flex: 1; display: flex; min-height: 0; }
   aside { width: 260px; min-width: 200px; border-right: 1px solid var(--vscode-panel-border, #8883); overflow-y: auto; padding: 10px 14px 20px; }
@@ -59,7 +61,7 @@ const DEVICES: { id: string; icon: Icon; name: string; width: number; height: nu
 let session: SessionView | undefined;
 // What is shown: a card (none: the app's first page), all its designs or one design in one state, at a size.
 let card = '';
-let mode: 'board' | 'single' = 'board';
+let mode: 'board' | 'single' | 'page' = 'board';
 let design = '';
 let stateName = '';
 let size: string = 'fill';
@@ -73,12 +75,18 @@ const chip = el('span', 'chip');
 const done = iconButton('choose', 'Done: check it (Visual Editor’s checks and the logic check), then send it to Review');
 const discard = iconButton('trash', 'Discard this session: its changes are thrown away (nothing in your files changes)');
 const forClaude = iconButton('note', 'Copy a line for your Claude Code chat, so Claude works in this session');
+// Several sessions open: Claude works in one (the one looked at last); another can be chosen here.
+const workHere = iconButton('focus', 'Work here: make this the session Claude works in (you have others open)');
+workHere.addEventListener('click', () => vscode.postMessage({ type: 'workHere' }));
+const claudeHere = el('span', 'chip here', 'Claude works here');
+claudeHere.title = 'Your messages to Claude go to this session (the one you looked at last)';
 forClaude.addEventListener('click', () => vscode.postMessage({ type: 'copyForClaude' }));
 done.addEventListener('click', () => vscode.postMessage({ type: 'done' }));
 discard.addEventListener('click', () => vscode.postMessage({ type: 'discard' }));
 const top = el('div', 'top');
 top.append(title, chip, tray(el('div')));
-(top.lastElementChild as HTMLElement).append(forClaude, done, discard);
+top.insertBefore(claudeHere, chip);
+(top.lastElementChild as HTMLElement).append(workHere, forClaude, done, discard);
 
 const aside = el('aside');
 const main = el('main');
@@ -100,6 +108,9 @@ const boardButton = iconButton('board', 'Every design in every state (the Playgr
 const singleButton = iconButton('single', 'One design in one state, at a screen size');
 boardButton.addEventListener('click', () => ((mode = 'board'), show()));
 singleButton.addEventListener('click', () => ((mode = 'single'), show()));
+// A page session: the page in the app, at its address (with real data), besides its Playground.
+const pageButton = iconButton('preview', 'The page in the app, at its address');
+pageButton.addEventListener('click', () => ((mode = 'page'), show()));
 const cardSelect = el('select');
 cardSelect.title = 'Which component';
 cardSelect.addEventListener('change', () => ((card = cardSelect.value), (design = ''), (stateName = ''), show()));
@@ -143,7 +154,7 @@ const step = (by: number) => {
 };
 zoomOut.addEventListener('click', () => step(-1));
 zoomIn.addEventListener('click', () => step(1));
-bar.append(boardButton, singleButton, viewSep, cardSelect, designSelect, stateSelect, ...sizeGroup, el('span', 'sep'), zoomOut, zoomText, zoomIn, el('span', 'sep'), reload);
+bar.append(boardButton, singleButton, pageButton, viewSep, cardSelect, designSelect, stateSelect, ...sizeGroup, el('span', 'sep'), zoomOut, zoomText, zoomIn, el('span', 'sep'), reload);
 
 window.addEventListener('message', (e: MessageEvent<ToSession>) => {
   if (e.data?.type !== 'show') return;
@@ -165,6 +176,8 @@ function drawAside() {
   const s = session;
   title.textContent = s.title;
   chip.className = `chip ${s.status.kind}`;
+  claudeHere.hidden = !s.current || s.status.kind === 'sent';
+  workHere.hidden = !!s.current || s.status.kind === 'sent';
   chip.textContent = { open: `version ${s.revision}`, planning: 'writing the test cases…', ready: 'test cases ready', checking: 'checking…', sent: 'in Review', held: 'held back' }[s.status.kind];
   done.disabled = s.status.kind === 'planning' || s.status.kind === 'checking' || s.status.kind === 'sent';
   setIcon(done, 'choose', s.proposal ? 'Done: check it again, then put the changes back into the proposal in Review' : 'Done: write its test cases (you see them, change them, then run them); passing, it goes to Review');
@@ -176,7 +189,7 @@ function drawAside() {
   else if (s.status.kind === 'ready' && s.plan) {
     const plan = s.plan;
     const note = el('div', 'note ok', `Test cases ready: ${plan.checks.filter((c) => c.use).length} checks and ${plan.cases.length} scenarios. Nothing has run yet.`);
-    const look = iconButton('play', 'Look at the test cases and run them');
+    const look = iconButton('preview', 'See the test cases: everything that will be checked (change them, then run them)');
     look.addEventListener('click', () => askPlan(s.title, plan));
     note.append(el('div'), look);
     aside.append(note);
@@ -203,7 +216,7 @@ function drawAside() {
       // Or its test cases again: as they are (changed, added to), or new ones written.
       if (s.plan) {
         const plan = s.plan;
-        const again = iconButton('play', 'Look at its test cases (change them, add your own) and run them again');
+        const again = iconButton('preview', 'See its test cases: change them, add your own, and run them again');
         again.addEventListener('click', () => askPlan(s.title, plan));
         row.append(again);
       }
@@ -218,7 +231,10 @@ function drawAside() {
       }
     }
   }
-  else if (s.status.kind === 'checking') aside.append(el('div', 'note ok', s.status.text));
+  else if (s.status.kind === 'checking') {
+    aside.append(el('div', 'note ok', s.status.text));
+    if (s.running?.length) aside.append(drawProgress(s.running));
+  }
   aside.append(el('div', 'head', 'What you asked'));
   if (s.asked.length) for (const a of s.asked) aside.append(el('div', 'askline', a));
   else aside.append(el('div', 'hint', 'Nothing yet. Tell Claude in your Claude Code chat what you want: each change shows here by itself.'));
@@ -260,13 +276,19 @@ function show(again = false) {
   if (c && !c.states.includes(stateName)) stateName = c.states[0] ?? '';
   designSelect.replaceChildren(...(c?.designs ?? []).map((d) => new Option(`${d.name}${d.inUse ? ' (in use)' : ''}`, d.id, false, d.id === design)));
   stateSelect.replaceChildren(...(c?.states ?? []).map((x) => new Option(x, x, false, x === stateName)));
-  const single = mode === 'single' && !!c;
-  boardButton.classList.toggle('on', !single);
+  // The app's page: when there's no component to show yet, or when chosen in a page session.
+  const inPage = !c || (mode === 'page' && !!s.page);
+  const single = mode === 'single' && !!c && !inPage;
+  boardButton.classList.toggle('on', !single && !inPage);
   singleButton.classList.toggle('on', single);
+  pageButton.classList.toggle('on', inPage);
   boardButton.hidden = singleButton.hidden = !c;
+  pageButton.hidden = !c || !s.page;
+  pageButton.dataset.tip = `The page in the app, at ${s.page ?? '/'}`;
+  if (inPage) cardSelect.hidden = true;
   viewSep.hidden = !c || (cardSelect.hidden && !single);
   designSelect.hidden = stateSelect.hidden = !single;
-  for (const x of sizeGroup) x.hidden = !single && !!c;
+  for (const x of sizeGroup) x.hidden = !single && !inPage;
   // (The first thing on the bar needs no line before it.)
   sizeSep.hidden ||= !c && cardSelect.hidden;
   wait.textContent = s.error ? `It can’t be shown: ${s.error}` : s.progress ?? (s.app ? '' : 'Starting…');
@@ -274,7 +296,8 @@ function show(again = false) {
   device.hidden = !s.app || !!s.error;
   if (!s.app) return;
   const q = new URLSearchParams({ item: c?.id ?? '', ...(single ? { variant: design, state: stateName } : {}), ...(again ? { v: String(s.revision) } : {}) });
-  const url = c ? `${s.app}/__ve/preview?${q}` : `${s.app}/${again ? `?ve-v=${s.revision}` : ''}`;
+  const at = s.page ?? '/';
+  const url = !inPage ? `${s.app}/__ve/preview?${q}` : `${s.app}${at}${again ? `${at.includes('?') ? '&' : '?'}ve-v=${s.revision}` : ''}`;
   if (iframe.src !== url) iframe.src = url;
   layout();
 }

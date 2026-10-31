@@ -248,6 +248,21 @@ export async function runCase(url: string, spec: RunSpec, timeoutMs = 30_000): P
   }
 }
 
+/**
+ * How a case will be tried, in words, for the developer: where it starts, its steps, and what it looks for. E.g.
+ * "In ProjectCard's Playground (design compact, state empty): click the button “Delete”; then: “Delete this project?” is
+ * shown".
+ */
+export function describeRun(spec: RunSpec, cardName?: string): string {
+  const where = spec.where === 'playground'
+    ? `In ${cardName ?? 'the component'}'s Playground${spec.design || spec.state ? ` (${[spec.design ? `design ${spec.design}` : '', spec.state ? `state ${spec.state}` : ''].filter(Boolean).join(', ')})` : ''}`
+    : `On the page ${spec.page ?? '/'}`;
+  const fakes = spec.api?.length ? `, with ${spec.api.map((f) => `${f.method} ${f.path} answering ${f.network ? 'nothing (the network fails)' : f.status ?? 200}${f.delay ? ` after ${f.delay} ms` : ''}`).join(', ')}` : '';
+  const steps = spec.steps.map((s) => (s.do === 'click' ? `click ${describe(s.target)}` : s.do === 'type' ? `type “${s.text}” into ${describe(s.target)}` : s.do === 'press' ? `press ${s.key}` : `wait ${s.ms} ms`));
+  const looks = spec.expect.map((e) => ('see' in e ? `“${e.see}” is shown${e.within ? ` in ${describe(e.within)}` : ''}` : 'notSee' in e ? `“${e.notSee}” isn't shown${e.within ? ` in ${describe(e.within)}` : ''}` : `${describe(e.attr.target)} has ${e.attr.name}=${JSON.stringify(e.attr.value)}`));
+  return `${where}${fakes}: ${steps.length ? steps.join('; ') : 'as it opens'}; then ${looks.join(', and ') || 'nothing in particular'}.`;
+}
+
 /** A target in words: "the button “Delete”". */
 export function describe(t: Target): string {
   if (t.selector) return `“${t.selector}”`;

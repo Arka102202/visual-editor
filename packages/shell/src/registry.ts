@@ -1,7 +1,7 @@
 // The plugins the shell knows about: added and removed at any time, checked before they're accepted.
 // No VS Code APIs here, so it can be tested on its own.
 
-import { CONTRACT_VERSION, type Disposable, type Plugin, type PluginAgent, type PluginSkill, type PluginTool } from '@visual-editor/contract';
+import { CONTRACT_VERSION, type Disposable, type Plugin, type PluginAgent, type PluginSessionKind, type PluginSkill, type PluginTool } from '@visual-editor/contract';
 
 /** The hub's own tools (hub/tools.ts): a plugin's tool can't take one of these names. */
 export const HUB_TOOLS = ['overview', 'list_cards', 'card', 'memory', 'propose_change', 'proposal_status', 'remember', 'save_draft', 'read_draft', 'submit_draft', 'start_session', 'continue_proposal', 'add_evidence', 'draft_pictures', 'compare_app', 'job_start', 'job_status', 'job_hand_in', 'job_verdict'];
@@ -40,7 +40,7 @@ export function checkPlugin(plugin: Partial<Plugin> | undefined, taken: (id: str
   return checkHelpers(plugin, others);
 }
 
-/** Its tools, skills and agents: well formed, and named apart from the hub's tools and every other plugin's. */
+/** Its tools, skills, agents and kinds of session: well formed, and named apart from the hub's tools and every other plugin's. */
 function checkHelpers(plugin: Partial<Plugin>, others: Plugin[]): string | undefined {
   const toolNames = new Set([...HUB_TOOLS, ...others.flatMap((o) => (o.tools ?? []).map((t) => t.name))]);
   for (const t of plugin.tools ?? []) {
@@ -67,6 +67,13 @@ function checkHelpers(plugin: Partial<Plugin>, others: Plugin[]): string | undef
     skillNames.add(a.name);
     if (!a.title || !a.description || !a.worker?.prompt || !a.checker?.prompt) return `Its agent "${a.name}" is missing a title, a description, or the worker's or checker's instructions.`;
     if (a.rounds !== undefined && (!Number.isInteger(a.rounds) || a.rounds < 1 || a.rounds > 3)) return `Its agent "${a.name}" can send work back 1 to 3 times, not ${a.rounds}.`;
+  }
+  const kindIds = new Set(others.flatMap((o) => (o.sessions ?? []).map((k) => k.id)));
+  for (const k of plugin.sessions ?? []) {
+    if (!k?.id || !NAME.test(k.id)) return 'Each of its kinds of session needs an id of lowercase letters, digits and dashes, like "new-design".';
+    if (kindIds.has(k.id)) return `Its kind of session "${k.id}" has the same id as another plugin's.`;
+    kindIds.add(k.id);
+    if (!k.title || !k.summary || !k.needs || typeof k.brief !== 'function') return `Its kind of session "${k.id}" is missing a title, a summary, what it needs or brief().`;
   }
   return undefined;
 }
@@ -117,6 +124,11 @@ export class PluginRegistry {
 
   agents(): { plugin: Plugin; agent: PluginAgent }[] {
     return this.list().flatMap((plugin) => (plugin.agents ?? []).map((agent) => ({ plugin, agent })));
+  }
+
+  /** Every plugin's kinds of design session, each with its plugin. */
+  sessionKinds(): { plugin: Plugin; kind: PluginSessionKind }[] {
+    return this.list().flatMap((plugin) => (plugin.sessions ?? []).map((kind) => ({ plugin, kind })));
   }
 
   /** Called whenever plugins are added or removed, or one is refused. */

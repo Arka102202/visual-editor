@@ -6,7 +6,10 @@
 // (with why), and press Run. Some checks are always planned (the planner can't drop them; the developer can). No VS
 // Code APIs.
 
+import type { ProgressItem } from '../drafts';
 import type { FileChange } from '../proposals';
+import { describeRun } from '../caseRunner';
+import type { PlanView } from '../ui/planWindow';
 import { logicPrompt, readVerdict, type LogicCase, type RunPlaces } from './logicCheck';
 
 /** A check Visual Editor can run on a change: a plugin's check, pictures, or comparing the app. */
@@ -29,6 +32,8 @@ export const BUILT_IN_CHECKS: AvailableCheck[] = [
 export interface PlanCheck {
   id: string;
   title: string;
+  /** What it checks, for the developer. */
+  does?: string;
   /** Why it applies (or doesn't), in plain words. */
   why: string;
   use: boolean;
@@ -84,7 +89,7 @@ export function readPlan(reply: string, available: AvailableCheck[], revision: n
     const page = typeof s?.page === 'string' && s.page.startsWith('/') ? s.page : undefined;
     // "Looks the same" needs a page to compare.
     const use = a.always || (s?.use === true && (a.id !== 'looks_same' || !!page));
-    return { id: a.id, title: a.title, why, use, ...(a.always ? { always: true } : {}), ...(page ? { page } : {}) };
+    return { id: a.id, title: a.title, does: a.description, why, use, ...(a.always ? { always: true } : {}), ...(page ? { page } : {}) };
   });
   return { revision, at, means: v.means, looksOnly: v.looksOnly, checks, cases: v.cases.map((c) => ({ ...c, use: true })), fixes: v.fixes };
 }
@@ -95,12 +100,32 @@ export interface PlanEdits {
   checks: Record<string, boolean>;
   /** Each of the plan's scenarios (in order): used or not, and what it should expect. */
   cases: { use: boolean; expected?: string }[];
-  /** Scenarios of their own, in plain words. */
-  added: string[];
+  /** Scenarios of their own: what to try, in plain words, and what it should do (a line alone: just what to try). */
+  added: (string | { case: string; expected?: string })[];
   /** Why they took anything out (needed when they did). */
   reason?: string;
   /** Send it without any checks (with reason). */
   skipAll?: boolean;
+}
+
+/** A plan as the test cases' window shows it: each check (what it does, why), each scenario (and how it's tried). */
+export function planView(plan: CheckPlan): PlanView {
+  return {
+    means: plan.means,
+    looksOnly: plan.looksOnly,
+    checks: plan.checks.map((x) => ({ id: x.id, title: x.title, why: x.why, use: x.use, ...(x.does ? { does: x.does } : {}), ...(x.always ? { always: true } : {}) })),
+    cases: plan.cases.map((x) => ({ case: x.case, expected: x.expected, how: x.how === 'run' || x.run ? 'run' : 'traced', use: x.use, ...(x.run ? { detail: describeRun(x.run, x.run.card?.split('#').pop()) } : {}) })),
+  };
+}
+
+/** A run's list, before it starts: each check and scenario the developer approved (waiting), and those they took out. */
+export function progressOf(plan: CheckPlan): ProgressItem[] {
+  const used = plan.cases.filter((c) => c.use);
+  return [
+    ...plan.checks.filter((c) => c.use || c.skipped !== undefined).map((c): ProgressItem => ({ id: `check:${c.id}`, title: c.title, kind: 'check', state: c.use ? 'waiting' : 'skipped' })),
+    ...used.map((c, i): ProgressItem => ({ id: `case:${i}`, title: c.case, kind: 'scenario', state: 'waiting' })),
+    ...plan.cases.filter((c) => !c.use && c.skipped !== undefined).map((c, i): ProgressItem => ({ id: `skipped:${i}`, title: c.case, kind: 'scenario', state: 'skipped' })),
+  ];
 }
 
 /** Edits that keep a plan as it is (to run it again, e.g. after bypassing a check that failed). */
@@ -125,7 +150,10 @@ export function applyEdits(plan: CheckPlan, edits: PlanEdits): CheckPlan | strin
     const next: PlanCase = { ...c, use: e.use, expected, ...(changed ? { by: 'developer' as const, added: true, found: '', run: undefined } : {}) };
     return c.use && !e.use ? { ...next, skipped: reason ?? '' } : next;
   });
-  const added = edits.added.map((t) => t.trim()).filter(Boolean).map((t): PlanCase => ({ case: t, expected: '', found: '', ok: false, by: 'developer', how: 'traced', use: true, added: true }));
+  const added = edits.added
+    .map((a) => (typeof a === 'string' ? { case: a.trim(), expected: '' } : { case: a.case.trim(), expected: a.expected?.trim() ?? '' }))
+    .filter((a) => a.case)
+    .map((a): PlanCase => ({ case: a.case, expected: a.expected, found: '', ok: false, by: 'developer', how: 'traced', use: true, added: true }));
   const tookOut = checks.some((c) => c.skipped !== undefined) || cases.some((c) => c.skipped !== undefined);
   if (tookOut && !reason) return 'Say why you took those out (it is kept with the change).';
   return { ...plan, checks, cases: [...cases, ...added] };

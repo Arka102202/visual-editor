@@ -2,7 +2,7 @@
 // memory and the assistant hub. Plugins find it through its exported API (see @visual-editor/contract).
 
 import * as vscode from 'vscode';
-import { CONTRACT_VERSION, type Item, type Plugin, type ShellApi } from '@visual-editor/contract';
+import { CONTRACT_VERSION, type Item, type Plugin, type PluginSessionKind, type ShellApi } from '@visual-editor/contract';
 import { PluginRegistry } from './registry';
 import { PluginsView } from './pluginsView';
 import { ProjectIndex } from './projectIndex';
@@ -23,7 +23,7 @@ import { askClaude, otherState, runCases, runLogicCheck, type LogicCase, type Lo
 import { runTester } from './hub/tester';
 import { planPrompt, readPlan } from './hub/checkPlan';
 import { glance, runCase, startUrl, type RunSpec } from './caseRunner';
-import { DRAFTS_DIR, DraftStore, type Draft } from './drafts';
+import { DRAFTS_DIR, DraftStore, type Draft, type ProgressItem } from './drafts';
 import { Sessions } from './session';
 import { failedChecks } from './proposals';
 import { JobStore, finished } from './jobs';
@@ -289,15 +289,15 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
   // The cases the checker gave steps for, run in the change's own app (each with its fake answers, if any).
   // The scenarios run (and the tester) in the change's own app, which is held for them till they're done: nothing else
   // stops it, or swaps it for another version, meanwhile.
-  const runInApp = async (root: string, asked: string[], shown: { id: string; revision: number; changes: Draft['changes'] }, seen: Parameters<typeof runInAppHeld>[3], v: LogicVerdict): Promise<LogicVerdict> => {
+  const runInApp = async (root: string, asked: string[], shown: { id: string; revision: number; changes: Draft['changes'] }, seen: Parameters<typeof runInAppHeld>[3], v: LogicVerdict, progress?: (index: number, state: ProgressItem['state']) => void): Promise<LogicVerdict> => {
     let release = () => {};
     try {
-      return await runInAppHeld(root, asked, shown, seen, v, (r) => (release = r));
+      return await runInAppHeld(root, asked, shown, seen, v, (r) => (release = r), progress);
     } finally {
       release();
     }
   };
-  const runInAppHeld = async (root: string, asked: string[], shown: { id: string; revision: number; changes: Draft['changes'] }, seen: { items: Item[]; pageOf: (id: string) => string | undefined; texts: Map<string, Record<string, string>> }, v: LogicVerdict, held?: (release: () => void) => void): Promise<LogicVerdict> => {
+  const runInAppHeld = async (root: string, asked: string[], shown: { id: string; revision: number; changes: Draft['changes'] }, seen: { items: Item[]; pageOf: (id: string) => string | undefined; texts: Map<string, Record<string, string>> }, v: LogicVerdict, held?: (release: () => void) => void, progress?: (index: number, state: ProgressItem['state']) => void): Promise<LogicVerdict> => {
     const runnable = v.cases.filter((c) => c.run).length;
     if (!runnable) return v;
     let origin: string;
@@ -317,7 +317,11 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     };
     // (What each run's page showed at the end, by its spec.)
     const afters = new Map<RunSpec, string>();
+    // (Which case a run is, for the live list.)
+    const indexOf = new Map(v.cases.map((c, i) => [c.run, i]));
     const out = await runCases(v, async (spec) => {
+      const i = indexOf.get(spec);
+      if (i !== undefined) progress?.(i, 'running');
       const run = prepared(spec);
       draftApps.fake(root, shown.id, run.api);
       try {
@@ -327,6 +331,7 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
         const other = !r.ok && r.missing && run.card && run.state ? otherState(r.missing, run.state, seen.texts.get(run.card) ?? {}) : undefined;
         if (other) return { ok: false, ran: false, found: `it expected ${r.missing!.map((t) => `“${t}”`).join(', ')} in the “${run.state}” state, but that is in the “${other}” state's data, not this one's` };
         if (r.after) afters.set(spec, r.after);
+        if (i !== undefined && (r.ok || !v.cases[i].ok)) progress?.(i, r.ok ? 'passed' : 'failed');
         return r;
       } finally {
         draftApps.fake(root, shown.id, undefined);
@@ -349,12 +354,14 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
       const c = cases[i];
       const run = prepared(c.run!);
       draftApps.fake(root, shown.id, run.api);
+      progress?.(i, 'running');
       try {
         const t = await runTester(claudeCommand(), root, model, asked, { case: c.case, expected: c.expected, run, found: c.found, url: startUrl(origin, run), ...(real ? { baseline: startUrl(real, run) } : {}) }, dir);
         if (typeof t === 'string') {
           log.appendLine(`The tester couldn't try “${c.case}”: ${t}`);
           continue;
         }
+        progress?.(i, t.ok || t.already ? 'passed' : 'failed');
         // Wrong in the same way without the change: not the change's doing (it doesn't hold the change back).
         cases[i] = t.already ? { ...c, ok: true, how: 'run', found: `tried by the tester: not caused by this change (the app does the same without it). ${t.found}` } : { ...c, ok: t.ok, how: 'run', found: `tried by the tester: ${t.found}` };
         log.appendLine(`Tester: “${c.case}” ${t.ok ? 'works' : 'broke'}${t.cost !== undefined ? ` (at pay-per-use prices $${t.cost.toFixed(2)})` : ''}.`);
@@ -417,9 +424,26 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     agents: () => registry.agents(),
     // Design sessions, for Claude in the developer's chat: the open one, opening one, continuing a proposal in one.
     session: (root) => sessions.current(root),
-    startSession: (root, card, asked) => {
-      const item = card ? index.snapshot().find((s) => s.project.root === root)?.items.find((i) => i.id === card) : undefined;
-      return { draft: sessions.start(root, item, asked).id };
+    // (A kind of session: what it needs must be given; the brief for Claude is made from it.)
+    startSession: (root, choice) => {
+      const state = index.snapshot().find((x) => x.project.root === root);
+      const item = choice.card ? state?.items.find((i) => i.id === choice.card) : undefined;
+      const found = choice.kind ? registry.sessionKinds().find(({ kind }) => kind.id === choice.kind)?.kind : undefined;
+      if (choice.kind && !found) return `No kind of session "${choice.kind}". Kinds: ${registry.sessionKinds().map(({ kind }) => kind.id).join(', ') || 'none'}.`;
+      if (found) {
+        const missing = [found.needs.card && !item ? 'card' : '', found.needs.design && !choice.design ? 'design' : '', found.needs.name && !choice.name ? 'name' : '', found.needs.page && !choice.page ? 'page' : ''].filter(Boolean);
+        if (missing.length) return `A "${found.title}" session needs: ${missing.join(', ')}.`;
+        if (found.needs.card === 'previewable' && !item?.preview) return `${item?.label} can't be shown in the Playground yet (it isn't previewable): make it previewable first.`;
+        if (choice.design && !item?.preview?.variants.some((v) => v.id === choice.design)) return `${item?.label} has no design "${choice.design}": ${item?.preview?.variants.map((v) => v.id).join(', ')}.`;
+      }
+      const picked = { ...(item ? { card: item } : {}), ...(choice.design ? { design: choice.design } : {}), ...(choice.name ? { name: choice.name } : {}), ...(choice.page ? { page: choice.page } : {}) };
+      const brief = found?.brief(picked);
+      const draft = sessions.start(root, item, choice.asked, found && brief ? { id: found.id, title: found.title, brief, ...(choice.name ? { name: choice.name } : {}), ...(choice.page ? { page: choice.page } : {}), ...(choice.design ? { design: choice.design } : {}) } : undefined);
+      return { draft: draft.id, ...(brief ? { brief } : {}) };
+    },
+    sessionKinds: (root) => {
+      const state = index.snapshot().find((x) => x.project.root === root);
+      return registry.sessionKinds().filter(({ plugin }) => state?.detected.some((d) => d.plugin.id === plugin.id)).map(({ kind }) => ({ id: kind.id, title: kind.title, summary: kind.summary, needs: kind.needs }));
     },
     continueProposal: (root, id) => {
       const p = review.proposals(root).find((x) => x.id === id);
@@ -454,25 +478,31 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     },
     // The scenarios the developer approved: their own read in the code (one short run), then every one that can be
     // tried in the app is, with a second look where the run and the reading disagree.
-    runPlannedCases: async (root, draft, plan) => {
+    runPlannedCases: async (root, draft, plan, progress) => {
       const model = vscode.workspace.getConfiguration('visualEditor.logicCheck').get<string>('model', 'sonnet');
       const asked = draft.asked ?? [draft.title];
       const seen = seenFor.get(`${root}#${draft.id}#${draft.revision}`) ?? (await changeSeen(root, draft));
       const used = plan.cases.filter((c) => c.use);
+      // What the planner read in the code is known now (those tried in the app wait for their turn).
+      used.forEach((c, i) => !c.added && !c.run && progress?.(i, c.ok ? 'passed' : 'failed'));
       const theirs = used.filter((c) => c.added);
       let read: LogicCase[] = [];
       let fixes = plan.fixes;
       if (theirs.length) {
         log.appendLine(`Reading ${theirs.length} scenario(s) of yours in the code…`);
+        used.forEach((c, i) => c.added && progress?.(i, 'running'));
         const v = await runLogicCheck(claudeCommand(), root, asked, draft.changes, model, theirs.map((c) => (c.expected ? `${c.case} (it should: ${c.expected})` : c.case)), { means: plan.means }, seen?.places);
         if (typeof v === 'string') return v;
         read = v.cases.map((c) => ({ ...c, by: 'developer' as const }));
         fixes = [...fixes, ...v.fixes];
       }
-      const cases: LogicCase[] = [...used.filter((c) => !c.added).map(({ use: _u, skipped: _s, added: _a, ...c }) => c), ...read];
+      // In the order the developer saw them (theirs, read now, in their places).
+      let k = 0;
+      const cases: LogicCase[] = used.map(({ use: _u, skipped: _s, added, ...c }) => (added ? read[k++] ?? { ...c, ok: false, found: 'It couldn’t be read in the code.' } : c));
+      cases.forEach((c, i) => used[i].added && !c.run && progress?.(i, c.ok ? 'passed' : 'failed'));
       const broke = cases.filter((c) => !c.ok);
       const v: LogicVerdict = { passed: !broke.length, looksOnly: plan.looksOnly, means: plan.means, cases, fixes: broke.length ? fixes : [] };
-      return seen ? runInApp(root, asked, draft, seen, v) : v;
+      return seen ? runInApp(root, asked, draft, seen, v, progress) : v;
     },
     // A finished change's test cases are ready: the developer looks at them and runs them (a session shows them itself).
     planned: (root, draft) => {
@@ -616,20 +646,51 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     }),
     vscode.commands.registerCommand('visualEditor.openAgents', () => agentsView.openPanel()),
     // A design session, about a component (from the Playground, or chosen here) or the whole app.
+    // A design session: its kind first (a plugin's: new design, new page…), then what that kind needs; or just a session.
     vscode.commands.registerCommand('visualEditor.startSession', async (arg?: { card?: string }) => {
       const state = current.get();
       if (!state) return void vscode.window.showInformationMessage('Open a project on the map first.');
-      let card = arg?.card ? state.items.find((i) => i.id === arg.card) : undefined;
-      if (!arg?.card) {
+      const given = arg?.card ? state.items.find((i) => i.id === arg.card) : undefined;
+      const kinds = registry.sessionKinds().filter(({ plugin, kind }) => state.detected.some((d) => d.plugin.id === plugin.id) && (!given || kind.needs.card));
+      const choices: (vscode.QuickPickItem & { sessionKind?: PluginSessionKind })[] = [...kinds.map(({ kind }) => ({ label: kind.title, detail: kind.summary, sessionKind: kind })), { label: 'Just a session', detail: 'No particular kind: tell Claude what you want.' }];
+      const which = await vscode.window.showQuickPick(
+        choices,
+        { title: given ? `Design session: ${given.label}` : 'Start a design session', placeHolder: 'What kind of session?' },
+      );
+      if (!which) return;
+      const kind = which.sessionKind;
+      let card = given;
+      if (!card && (kind?.needs.card || !kind)) {
+        const items = state.items.filter((i) => (kind?.needs.card === 'any' ? i.source : i.preview));
         const pick = await vscode.window.showQuickPick(
-          [{ label: '$(globe) The whole app', description: 'no one component', item: undefined }, ...state.items.filter((i) => i.preview).map((i) => ({ label: i.label, description: i.source?.path, item: i }))],
-          { title: 'Start a design session', placeHolder: 'Which component is it about?' },
+          [...(kind ? [] : [{ label: '$(globe) The whole app', description: 'no one component', item: undefined as Item | undefined }]), ...items.map((i) => ({ label: i.label, description: i.source?.path, item: i as Item | undefined }))],
+          { title: which.label, placeHolder: 'Which component is it about?' },
         );
         if (!pick) return;
         card = pick.item;
       }
-      const draft = sessions.start(state.project.root, card);
-      void vscode.window.showInformationMessage(`Design session started (draft ${draft.id}). Tell Claude in your Claude Code chat what you want; each change shows in the session by itself.`);
+      let design: string | undefined;
+      if (kind?.needs.design && card?.preview) {
+        const pick = await vscode.window.showQuickPick(card.preview.variants.map((v) => ({ label: v.name, description: v.inUse ? 'in use' : '', id: v.id })), { title: `${which.label}: ${card.label}`, placeHolder: 'Which design?' });
+        if (!pick) return;
+        design = pick.id;
+      }
+      let name: string | undefined;
+      if (kind?.needs.name) {
+        name = await vscode.window.showInputBox({ title: which.label, prompt: kind.needs.name, validateInput: (v) => (/^[A-Z][A-Za-z0-9]*$/.test(v.trim()) ? undefined : 'A name like ProjectBadge: letters and digits, starting with a capital.') });
+        if (!name) return;
+        name = name.trim();
+      }
+      let page: string | undefined;
+      if (kind?.needs.page) {
+        const suggested = name ? `/${name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase()}` : '/';
+        page = await vscode.window.showInputBox({ title: which.label, prompt: 'Its address in the app, e.g. /billing', value: suggested, validateInput: (v) => (/^\/[\w\-/:]*$/.test(v.trim()) ? undefined : 'An address starting with /, like /billing.') });
+        if (!page) return;
+        page = page.trim();
+      }
+      const chosen = { ...(card ? { card } : {}), ...(design ? { design } : {}), ...(name ? { name } : {}), ...(page ? { page } : {}) };
+      const draft = sessions.start(state.project.root, card, undefined, kind ? { id: kind.id, title: kind.title, brief: kind.brief(chosen), ...(name ? { name } : {}), ...(page ? { page } : {}), ...(design ? { design } : {}) } : undefined);
+      void vscode.window.showInformationMessage(`${draft.title}: started. Tell Claude in your Claude Code chat what you want; each change shows in the session by itself.`);
     }),
     vscode.commands.registerCommand('visualEditor.openSession', async () => {
       const root = current.get()?.project.root;

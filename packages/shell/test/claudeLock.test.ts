@@ -114,3 +114,10 @@ test('through Visual Editor only: while a design session is open, each message s
   assert.ok(said.endsWith(sessionWords(open)));
   assert.match(said, /save_draft \(draft: "d1"\)[\s\S]*don't call propose_change/);
 });
+
+test('through Visual Editor only: with several sessions open, Claude is told them all, and to ask when it isn\'t clear which', () => {
+  const said = sessionWords({ draft: 'd2', title: 'New page: Billing', others: [{ draft: 'd1', title: 'New design: ProjectCard' }], brief: 'This session makes a NEW PAGE, Billing, at /billing.' });
+  assert.match(said, /draft d2 \(the one the developer looked at last\)/);
+  assert.match(said, /Other sessions are open too: “New design: ProjectCard” \(draft d1\)\. If the developer's message is clearly about one of those, work in that draft instead; if it isn't clear which session they mean, ask them/);
+  assert.match(said, /\nThis session makes a NEW PAGE, Billing, at \/billing\.$/);
+});
