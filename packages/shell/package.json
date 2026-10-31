@@ -245,6 +245,11 @@
         "title": "Open a design session",
         "category": "Visual Editor",
         "icon": "$(window)"
+      },
+      {
+        "command": "visualEditor.showClosedHints",
+        "title": "Show closed hints again",
+        "category": "Visual Editor"
       }
     ],
     "menus": {

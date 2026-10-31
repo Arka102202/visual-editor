@@ -2,7 +2,7 @@
 // and when another project is chosen.
 
 import * as vscode from 'vscode';
-import type { MapDefinition, ProposedChange } from '@visual-editor/contract';
+import type { MapDefinition, PluginNudge, ProposedChange } from '@visual-editor/contract';
 import { webviewPage } from './webviewPage';
 import { isAbsolute, join } from 'node:path';
 import { cardMarks, type OutsideChanges } from './changes';
@@ -220,6 +220,12 @@ export class MapPanel {
       if (state && item && plugin?.previewFix) this.proposeChange(state.project.root, plugin.previewFix(state.project, m.need), item.id);
     } else if (m.type === 'session') {
       void vscode.commands.executeCommand('visualEditor.startSession', { card: m.id });
+    } else if (m.type === 'nudge') {
+      const nudge = this.nudgesFor(this.current.get())?.find((n) => n.key === m.key);
+      // Closed, or its agent started: it doesn't come back for this project.
+      const close = () => void this.layouts?.update('closedNudges', [...(this.layouts.get<string[]>('closedNudges') ?? []), m.key]).then(() => this.update());
+      if (nudge && m.act === 'run') void vscode.commands.executeCommand<boolean>('visualEditor.runAgent', nudge.agent, undefined, nudge.text).then((started) => started && close());
+      else if (nudge) close();
     } else if (m.type === 'window') {
       void this.toggleWindow();
     } else if (m.type === 'clearChanged') {
@@ -426,6 +432,29 @@ export class MapPanel {
     this.timer = setTimeout(() => this.send(), 80);
   }
 
+  /** The nudges closed for this project come back (the developer asked). */
+  async showClosedHints(root: string) {
+    await this.layouts?.update('closedNudges', (this.layouts.get<string[]>('closedNudges') ?? []).filter((k) => !k.startsWith(`${root}#`)));
+    this.update();
+  }
+
+  /** The plugins' nudges for the project, without the ones the developer closed (kept per project). */
+  private nudgesFor(state: ReturnType<CurrentProject['get']>): ShowMap['nudges'] {
+    if (!state) return [];
+    const closed = new Set(this.layouts?.get<string[]>('closedNudges') ?? []);
+    return state.detected.flatMap(({ plugin }) => {
+      let nudges: PluginNudge[] = [];
+      try {
+        nudges = plugin.nudges?.(state.project, state.items) ?? [];
+      } catch {
+        // (A plugin's mistake doesn't stop the map.)
+      }
+      return nudges
+        .map((n) => ({ key: `${state.project.root}#${plugin.id}:${n.id}`, text: n.text, agent: n.agent, title: plugin.agents?.find((a) => a.name === n.agent)?.title ?? n.agent }))
+        .filter((n) => !closed.has(n.key) && plugin.agents?.some((a) => a.name === n.agent));
+    });
+  }
+
   private send() {
     this.timer = undefined;
     if (!this.panel || !this.ready) return;
@@ -459,6 +488,7 @@ export class MapPanel {
       usedBy: usedBy(shownLinks),
       meanings: meaningsOf(maps.filter((m) => m.id === shownMap)),
       floating: this.floating,
+      nudges: this.nudgesFor(state),
       marks: cardMarks(state?.items ?? [], proposals, changed),
       proposed: proposals.filter((p) => p.status === 'proposed').length,
       changed: changed.size,
