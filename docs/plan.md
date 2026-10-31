@@ -349,9 +349,16 @@ Claude.
   own AppRouter counted as the app; its theme set on the page flagged), and on the two sample shops (Auth0, Apollo,
   Redux, a theme made in a component: each flagged). Tried by hand on a fresh Vite app, nudge and agent.
 
-### 2.17 Tested
+### 2.17 Tested (scripted part done)
 - **Done when:** each kind of session and each agent works from a button and from the chat on the archFlow copy, with
   small requests (to spare the plan's allowance).
+- **Checked (scripted, no Claude):** `TEST=kinds` opens the archFlow copy in a real VS Code. Each of the four kinds of
+  session starts from the button and from the chat (start_session) with its brief. A New page (Help at /help) saved
+  into its session shows in the tab, passes its checks (preview setup, TypeScript, the Playground) and reaches Review;
+  the same page with a mistake is held back by TypeScript. Each agent starts from the button (Claude Code given its
+  skill, the job and the request; a stand-in for `claude`) and from the chat (job_start).
+- **Left for real Claude (by hand, small requests):** Claude building each kind from its brief, and each agent's
+  worker and checker doing their work.
 
 ---
 
