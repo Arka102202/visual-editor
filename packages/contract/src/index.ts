@@ -191,6 +191,20 @@ export interface Plugin {
   agents?: PluginAgent[];
   /** Contract 8: kinds of design session it offers (React: a new design for a component, a new page…). */
   sessions?: PluginSessionKind[];
+  /**
+   * Contract 8: what a project still needs that one of its agents can do, shown on the map as a nudge (React: "not
+   * set up for Preview yet" → Set up project). Closed by the developer, it stays closed for that project.
+   */
+  nudges?(project: ProjectInfo, items: Item[]): PluginNudge[];
+}
+
+export interface PluginNudge {
+  /** Lowercase letters, digits and dashes, unique in the plugin, e.g. "set-up". */
+  id: string;
+  /** What's missing, in very simple words. */
+  text: string;
+  /** The agent (by name) that does it. */
+  agent: string;
 }
 
 /**

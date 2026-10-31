@@ -368,6 +368,39 @@ export async function run() {
     require('node:fs').rmSync(join(root, '.visual-editor', 'proposals', `held-${id}.json`), { force: true });
   });
 
+  await step('a plugin\'s nudge shows on the map; ▶ keeps it while its agent can\'t start; ✕ closes it for good (for this project)', async () => {
+    await t.map.layouts?.update('closedNudges', []);
+    const agent = { name: 'nudge-setup', title: 'Set it up', description: 'D', worker: { prompt: 'Do' }, checker: { prompt: 'Check' } };
+    const registration = api.register({ id: 'nudger', name: 'Nudger', version: '0.1.0', contract: api.contract, detect: () => ({ reason: 'test' }), agents: [agent], nudges: () => [{ id: 'set-up', text: 'This project isn’t set up yet.', agent: 'nudge-setup' }] });
+    try {
+      t.map.show();
+      const seen = listen(t.map.panel);
+      const nudgesNow = () => seen.filter((m) => m.type === 'show').at(-1)?.nudges ?? [];
+      await until(() => { t.map.send(); return nudgesNow().length === 1; }, 'the nudge on the map', 15_000);
+      const n = nudgesNow()[0];
+      if (n.title !== 'Set it up' || n.agent !== 'nudge-setup' || !n.key.endsWith('#nudger:set-up')) throw new Error(`the nudge was ${JSON.stringify(n)}`);
+      await wait(800);
+      await shot('17-nudge');
+      // Claude Code isn't connected here: the agent can't start, so the nudge stays.
+      t.map.receive({ type: 'nudge', key: n.key, act: 'run' });
+      await wait(800);
+      t.map.send();
+      if (nudgesNow().length !== 1) throw new Error('the nudge went away though its agent never started');
+      t.map.receive({ type: 'nudge', key: n.key, act: 'close' });
+      await until(() => nudgesNow().length === 0, 'the nudge closed');
+      t.map.send();
+      await wait(300);
+      if (nudgesNow().length) throw new Error('a closed nudge came back');
+      if (!(t.map.layouts.get('closedNudges') ?? []).includes(n.key)) throw new Error('closing it was not kept');
+      // Asked for again: it's back.
+      await vscode.commands.executeCommand('visualEditor.showClosedHints');
+      await until(() => nudgesNow().length === 1, 'the closed nudge back');
+    } finally {
+      registration.dispose();
+      await vscode.commands.executeCommand('notifications.clearAll');
+    }
+  });
+
   await step('the map pops out into its own window and comes back', async () => {
     t.map.show();
     const mapSeen2 = listen(t.map.panel);

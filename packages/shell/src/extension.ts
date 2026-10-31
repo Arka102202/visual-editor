@@ -692,6 +692,13 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
       const draft = sessions.start(state.project.root, card, undefined, kind ? { id: kind.id, title: kind.title, brief: kind.brief(chosen), ...(name ? { name } : {}), ...(page ? { page } : {}), ...(design ? { design } : {}) } : undefined);
       void vscode.window.showInformationMessage(`${draft.title}: started. Tell Claude in your Claude Code chat what you want; each change shows in the session by itself.`);
     }),
+    // Hints on the map closed for this project ("Not now") show again.
+    vscode.commands.registerCommand('visualEditor.showClosedHints', async () => {
+      const root = current.get()?.project.root;
+      if (!root) return void vscode.window.showInformationMessage('Open a project first.');
+      await map.showClosedHints(root);
+      map.show();
+    }),
     vscode.commands.registerCommand('visualEditor.openSession', async () => {
       const root = current.get()?.project.root;
       if (!root) return;
@@ -715,7 +722,7 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
       void vscode.window.showInformationMessage(`${j.title} is stopping: it stops at its next step.`);
     }),
     // Run an agent: which one, what it should do (in the developer's words), and where (the setting, or the button's).
-    vscode.commands.registerCommand('visualEditor.runAgent', async (name?: string, way?: RunWay) => {
+    vscode.commands.registerCommand('visualEditor.runAgent', async (name?: string, way?: RunWay, asked?: string) => {
       const state = current.get();
       if (!state) return void vscode.window.showInformationMessage('Open a project first.');
       const mine = registry.agents().filter(({ plugin }) => state.detected.some((d) => d.plugin.id === plugin.id));
@@ -736,10 +743,11 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
         if (pick) await hub.addAgents();
         return;
       }
-      const request = await vscode.window.showInputBox({
+      // (A nudge says what it's for already.)
+      const request = asked ?? await vscode.window.showInputBox({
         title: `${agent.title}: what should it do?`,
         prompt: agent.summary ?? agent.description,
-        placeHolder: agent.name === 'new-variant' ? 'e.g. ProjectCard: a big coloured initial with the name under it' : 'In your own words',
+        placeHolder: agent.name === 'new-variant' ? 'e.g. ProjectCard: a big coloured initial with the name under it' : agent.name === 'set-up-project' ? 'e.g. Set it up (or: start with ProjectCard)' : 'In your own words',
         ignoreFocusOut: true,
       });
       if (!request?.trim()) return;
@@ -748,6 +756,7 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
       agentRuns.start(state.project.root, agent, request, where, config.get<number>('maxCostUsd', 0));
       agentsView.refresh();
       if (where === 'background') void vscode.window.showInformationMessage(`${agent.title} is working in the background: follow it in the Agents section (Stop is there too). The result comes to Review.`);
+      return true;
     }),
     registry.onChange(refreshAgents),
     { dispose: () => clearTimeout(agentsTimer) },

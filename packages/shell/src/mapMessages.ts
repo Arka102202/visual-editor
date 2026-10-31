@@ -113,6 +113,8 @@ export type ShowMap = {
   empty?: { title: string; detail: string };
   /** The tab is in its own floating window. */
   floating: boolean;
+  /** What the project still needs that an agent can do (the plugins' nudges the developer hasn't closed). */
+  nudges?: { key: string; text: string; agent: string; title: string }[];
 };
 
 /** Map page → shell. */
@@ -138,6 +140,8 @@ export type FromMap =
   | { type: 'previewFix'; id: string; need: string }
   /** Start a design session about this card. */
   | { type: 'session'; id: string }
+  /** A nudge: run its agent, or close it (for this project). */
+  | { type: 'nudge'; key: string; act: 'run' | 'close' }
   /** Open the developer's own file for a place in the code the browser runs (a console message's). */
   | { type: 'openSource'; url: string; line: number; column: number }
   /** Open the stylesheet a CSS rule comes from, at that rule. */

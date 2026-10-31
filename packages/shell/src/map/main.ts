@@ -43,6 +43,13 @@ addStyles(`
   .world.picked .card.near { opacity: 1; }
   .zoom { font-size: 11px; opacity: .7; min-width: 36px; text-align: right; }
   .stage { position: absolute; inset: 40px 0 0 0; }
+  /* What the project still needs that an agent can do: a note under the bar, with its agent's button. */
+  .nudges { position: absolute; top: 52px; left: 50%; transform: translateX(-50%); z-index: 3; display: flex; flex-direction: column; gap: 6px; width: min(640px, calc(100% - 32px)); }
+  .nudge { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 14px; border-radius: 8px; font-size: 12px; line-height: 1.4; background: var(--vscode-editorWidget-background, var(--vscode-editor-background)); border: 1px solid var(--vscode-focusBorder, #8886); box-shadow: 0 2px 8px #0003; }
+  .nudge .words { flex: 1; min-width: 0; }
+  .nudge .tray { display: flex; gap: 4px; flex: none; }
+  .nudge button { font: inherit; cursor: pointer; border-radius: 4px; padding: 3px 8px; border: 1px solid transparent; color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); }
+  .nudge button.go { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
   .mv { overflow: hidden; cursor: grab; touch-action: none; }
   .mv.dragging { cursor: grabbing; }
   .world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
@@ -241,7 +248,26 @@ const emptyDetail = el('p');
 empty.append(emptyTitle, emptyDetail);
 const drawer = el('div', 'drawer');
 drawer.hidden = true;
-document.body.append(bar, stage, empty, drawer, legend, tip);
+const nudges = el('div', 'nudges');
+document.body.append(bar, stage, empty, nudges, drawer, legend, tip);
+
+/** The plugins' nudges: what the project still needs, with the agent that does it (or close it for this project). */
+function drawNudges(list: NonNullable<ShowMap['nudges']>) {
+  nudges.replaceChildren(
+    ...list.map((n) => {
+      const box = el('div', 'nudge');
+      box.dataset.key = n.key;
+      const go = iconButton('play', `${n.title}: start it (it works in the background; its change comes to Review)`, { cls: 'go' });
+      go.addEventListener('click', () => vscode.postMessage({ type: 'nudge', key: n.key, act: 'run' }));
+      const close = iconButton('close', 'Not now: don’t show this again for this project (the agent stays in the Agents section)');
+      close.addEventListener('click', () => vscode.postMessage({ type: 'nudge', key: n.key, act: 'close' }));
+      box.append(el('span', 'words', n.text), tray(el('div', 'tray')));
+      box.lastElementChild!.append(go, close);
+      return box;
+    }),
+  );
+  nudges.hidden = !list.length;
+}
 
 /** The project and map last fitted; a new one starts fitted, updates to the same one keep the view. */
 let shownKey: string | undefined;
@@ -979,6 +1005,7 @@ function show(m: ShowMap) {
   for (const b of arrangeGroup.querySelectorAll('button')) b.classList.toggle('on', b.dataset.mode === m.arrange);
   setIcon(windowButton, m.floating ? 'back' : 'popOut', m.floating ? 'Back into the main window' : 'Pop out: the map in its own window (full screen there, or on another screen)');
   drawLegend(m);
+  drawNudges(m.empty ? [] : (m.nudges ?? []));
   setIcon(proposedBadge, 'proposed', `${m.proposed} change${m.proposed === 1 ? '' : 's'} waiting for your OK: open Review`, m.proposed);
   proposedBadge.hidden = !m.proposed;
   setIcon(changedBadge, 'changed', `${m.changed} file${m.changed === 1 ? '' : 's'} changed outside review (by hand, a formatter, git…): click to clear the marks`, m.changed);
