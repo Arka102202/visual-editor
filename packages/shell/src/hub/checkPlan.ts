@@ -98,11 +98,13 @@ export function readPlan(reply: string, available: AvailableCheck[], revision: n
 export interface PlanEdits {
   /** Each check by id: used or not. */
   checks: Record<string, boolean>;
-  /** Each of the plan's scenarios (in order): used or not, and what it should expect. */
-  cases: { use: boolean; expected?: string }[];
+  /** Why each check taken out was taken out, by id. */
+  checkWhy?: Record<string, string>;
+  /** Each of the plan's scenarios (in order): used or not, what it should expect, and (taken out) why. */
+  cases: { use: boolean; expected?: string; why?: string }[];
   /** Scenarios of their own: what to try, in plain words, and what it should do (a line alone: just what to try). */
   added: (string | { case: string; expected?: string })[];
-  /** Why they took anything out (needed when they did). */
+  /** Why they took anything out, for all of it (each item's own why wins); why it goes without checks (skipAll). */
   reason?: string;
   /** Send it without any checks (with reason). */
   skipAll?: boolean;
@@ -137,9 +139,16 @@ export function asItIs(plan: CheckPlan): PlanEdits {
 export function applyEdits(plan: CheckPlan, edits: PlanEdits): CheckPlan | string {
   const reason = edits.reason?.trim();
   if (edits.skipAll) return reason ? { ...plan, skipAll: reason } : 'Say why it should go without any checks.';
+  // Each thing taken out needs its why: its own, or the one for all of it.
+  const missing: string[] = [];
+  const whyOf = (own: string | undefined, title: string) => {
+    const why = own?.trim() || reason;
+    if (!why) missing.push(title);
+    return why ?? '';
+  };
   const checks = plan.checks.map((c) => {
     const use = edits.checks[c.id] ?? c.use;
-    return c.use && !use ? { ...c, use, skipped: reason ?? '' } : { ...c, use };
+    return c.use && !use ? { ...c, use, skipped: whyOf(edits.checkWhy?.[c.id], c.title) } : { ...c, use };
   });
   const cases = plan.cases.map((c, i) => {
     const e = edits.cases[i];
@@ -148,25 +157,25 @@ export function applyEdits(plan: CheckPlan, edits: PlanEdits): CheckPlan | strin
     // A changed expectation is the developer's: the code reading (and any run) is redone for it.
     const changed = expected !== c.expected;
     const next: PlanCase = { ...c, use: e.use, expected, ...(changed ? { by: 'developer' as const, added: true, found: '', run: undefined } : {}) };
-    return c.use && !e.use ? { ...next, skipped: reason ?? '' } : next;
+    return c.use && !e.use ? { ...next, skipped: whyOf(e.why, c.case) } : next;
   });
   const added = edits.added
     .map((a) => (typeof a === 'string' ? { case: a.trim(), expected: '' } : { case: a.case.trim(), expected: a.expected?.trim() ?? '' }))
     .filter((a) => a.case)
     .map((a): PlanCase => ({ case: a.case, expected: a.expected, found: '', ok: false, by: 'developer', how: 'traced', use: true, added: true }));
-  const tookOut = checks.some((c) => c.skipped !== undefined) || cases.some((c) => c.skipped !== undefined);
-  if (tookOut && !reason) return 'Say why you took those out (it is kept with the change).';
+  if (missing.length) return `Say why you took ${missing.length === 1 ? `out “${missing[0]}”` : `these out: ${missing.map((m) => `“${m}”`).join(', ')}`} (it is kept with the change).`;
   return { ...plan, checks, cases: [...cases, ...added] };
 }
 
 /** The developer's choices on a plan, in words (kept in the proof). */
 export function choicesText(plan: CheckPlan): string | undefined {
   if (plan.skipAll) return `Sent without any checks, by the developer. Why: ${plan.skipAll}`;
+  // Each thing taken out with its own why.
+  const why = (w: string | undefined) => (w ? `. Why: ${w}` : '');
   const lines = [
-    ...plan.checks.filter((c) => c.skipped !== undefined).map((c) => `Check skipped: ${c.title}`),
-    ...plan.cases.filter((c) => c.skipped !== undefined).map((c) => `Scenario skipped: ${c.case}`),
+    ...plan.checks.filter((c) => c.skipped !== undefined).map((c) => `Check skipped: ${c.title}${why(c.skipped)}`),
+    ...plan.cases.filter((c) => c.skipped !== undefined).map((c) => `Scenario skipped: ${c.case}${why(c.skipped)}`),
     ...plan.cases.filter((c) => c.added).map((c) => `Scenario added: ${c.case}${c.expected ? ` (expects: ${c.expected})` : ''}`),
   ];
-  const why = [...plan.checks, ...plan.cases].find((x) => x.skipped)?.skipped;
-  return lines.length ? `${lines.join('\n')}${why ? `\nWhy: ${why}` : ''}` : undefined;
+  return lines.length ? lines.join('\n') : undefined;
 }

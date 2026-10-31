@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import type { Item } from '@visual-editor/contract';
 import { cardMarks, OutsideChanges } from '../src/changes';
 import { counts, diffLines, hunks } from '../src/diff';
-import { apply, conflicts, parseProposal, ProposalStore, safePath, undo, undoConflicts, type Files, type Proposal } from '../src/proposals';
+import { apply, conflicts, needsYou, needsYouWords, parseProposal, ProposalStore, safePath, undo, undoConflicts, type Files, type Proposal } from '../src/proposals';
 
 /** Files kept in memory; `failOn` makes writing that path fail. */
 function memoryFiles(start: Record<string, string>, failOn?: string): Files & { all: Record<string, string> } {
@@ -156,4 +156,15 @@ test('a file that comes and goes at once (a tool’s temporary file) isn’t a c
   // A file that was there and is deleted is a change.
   outside.note('/p', 'src/b.tsx', '/p/src/b.tsx', 'deleted');
   assert.deepEqual([...outside.get('/p')].sort(), ['src/a.tsx', 'src/b.tsx']);
+});
+
+test('needs you: changes to approve, test cases to run and held back are all counted and marked yellow; decided ones aren\'t', () => {
+  const item = (id: string, path: string): Item => ({ id, map: 'm', kind: 'k', label: id, source: { path } });
+  const at = (path: string, status: Proposal['status']) => proposal([{ path, before: 'x', after: 'y' }], { status });
+  const list = [at('src/a.tsx', 'proposed'), at('src/b.tsx', 'awaiting-checks'), at('src/c.tsx', 'awaiting-checks'), at('src/d.tsx', 'held-back'), at('src/e.tsx', 'applied'), at('src/f.tsx', 'rejected')];
+  assert.deepEqual(needsYou(list), { approve: 1, run: 2, held: 1, total: 4 });
+  assert.equal(needsYouWords(needsYou(list)), '1 to approve · 2 test cases to run · 1 held back');
+  assert.equal(needsYouWords(needsYou([at('src/e.tsx', 'applied')])), '', 'nothing needs you: no words');
+  const items = ['a', 'b', 'd', 'e', 'f'].map((x) => item(x, `src/${x}.tsx`));
+  assert.deepEqual(cardMarks(items, list, new Set()), { a: 'proposed', b: 'proposed', d: 'proposed' });
 });

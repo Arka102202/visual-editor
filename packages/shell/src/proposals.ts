@@ -152,6 +152,22 @@ export function failedChecks(list: Evidence[], revision: number, lookMustStay = 
   return list.filter((e) => e.revision === revision && holdsBack(e, lookMustStay));
 }
 
+/**
+ * What needs the developer, by kind: changes waiting for their OK, changes whose test cases wait for them to run, and
+ * changes held back by a check (to fix, bypass or run again).
+ */
+export function needsYou(list: Proposal[]): { approve: number; run: number; held: number; total: number } {
+  const approve = list.filter((p) => p.status === 'proposed').length;
+  const run = list.filter((p) => p.status === 'awaiting-checks').length;
+  const held = list.filter((p) => p.status === 'held-back').length;
+  return { approve, run, held, total: approve + run + held };
+}
+
+/** The same, in a few words: "2 to approve · 1 test cases to run · 1 held back" ('' when nothing does). */
+export function needsYouWords(n: { approve: number; run: number; held: number }): string {
+  return [n.approve ? `${n.approve} to approve` : '', n.run ? `${n.run} test cases to run` : '', n.held ? `${n.held} held back` : ''].filter(Boolean).join(' · ');
+}
+
 /** Why a check failed, in words for the developer: the logic check's broken cases, or the check's own text. */
 export function whyFailed(e: Evidence): string {
   if (!e.logic) return e.text;

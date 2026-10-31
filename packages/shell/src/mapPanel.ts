@@ -491,6 +491,8 @@ export class MapPanel {
       nudges: this.nudgesFor(state),
       marks: cardMarks(state?.items ?? [], proposals, changed),
       proposed: proposals.filter((p) => p.status === 'proposed').length,
+      toRun: { count: proposals.filter((p) => p.status === 'awaiting-checks').length, first: proposals.find((p) => p.status === 'awaiting-checks')?.id },
+      held: { count: proposals.filter((p) => p.status === 'held-back').length, first: proposals.find((p) => p.status === 'held-back')?.id },
       changed: changed.size,
       empty: !state
         ? { title: 'Open a folder', detail: 'Visual Editor draws the projects in the folder you open.' }

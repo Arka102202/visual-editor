@@ -19,7 +19,7 @@ import type { OutsideChanges } from './changes';
 import type { CurrentProject } from './currentProject';
 import type { ProjectMemory } from './memoryView';
 import { counts, hunks } from './diff';
-import { apply, conflicts, newId, ProposalStore, undo, undoConflicts, type Evidence, type Files, type Proposal, overruleProof, bypassProof, failedChecks, whyFailed } from './proposals';
+import { apply, conflicts, newId, ProposalStore, undo, undoConflicts, type Evidence, type Files, type Proposal, overruleProof, bypassProof, failedChecks, whyFailed, needsYou } from './proposals';
 import type { ProjectIndex } from './projectIndex';
 import type { FromReview, ReviewItem, ToReview } from './reviewMessages';
 
@@ -204,6 +204,11 @@ export class Review implements vscode.Disposable {
     let n = 0;
     for (const list of this.cache.values()) n += list.filter((p) => p.status === 'proposed').length;
     return n;
+  }
+
+  /** What needs the developer in every project: to approve, test cases to run, held back. */
+  needsYou(): ReturnType<typeof needsYou> {
+    return needsYou([...this.cache.values()].flat());
   }
 
   /** Called whenever proposals come, go or change status. */

@@ -250,6 +250,35 @@
         "command": "visualEditor.showClosedHints",
         "title": "Show closed hints again",
         "category": "Visual Editor"
+      },
+      {
+        "command": "visualEditor.deleteSession",
+        "title": "Delete this session for good",
+        "category": "Visual Editor",
+        "icon": "$(close)"
+      },
+      {
+        "command": "visualEditor.cleanUpSessions",
+        "title": "Clean up sessions: suggest which to delete",
+        "category": "Visual Editor",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "visualEditor.deleteSuggestedSessions",
+        "title": "See the sessions suggested to delete (delete one, or all)",
+        "category": "Visual Editor",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "visualEditor.clearSessionSuggestions",
+        "title": "Clear the suggestions (keep them all)",
+        "category": "Visual Editor",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "visualEditor.showOlderSessions",
+        "title": "Show older sessions",
+        "category": "Visual Editor"
       }
     ],
     "menus": {
@@ -335,6 +364,26 @@
           "command": "visualEditor.disconnectAssistant",
           "when": "view == visualEditor.assistants && viewItem =~ /^assistant-on/",
           "group": "inline@2"
+        },
+        {
+          "command": "visualEditor.deleteSession",
+          "when": "view == visualEditor.memory && viewItem =~ /^session(-suggested)?$/",
+          "group": "inline"
+        },
+        {
+          "command": "visualEditor.cleanUpSessions",
+          "when": "view == visualEditor.memory && viewItem =~ /^sessions(-suggested)?$/",
+          "group": "inline@0"
+        },
+        {
+          "command": "visualEditor.deleteSuggestedSessions",
+          "when": "view == visualEditor.memory && viewItem == sessions-suggested",
+          "group": "inline@1"
+        },
+        {
+          "command": "visualEditor.clearSessionSuggestions",
+          "when": "view == visualEditor.memory && viewItem == sessions-suggested",
+          "group": "inline@2"
         }
       ],
       "commandPalette": [
@@ -360,6 +409,22 @@
         },
         {
           "command": "visualEditor.reviewOnlyOn",
+          "when": "false"
+        },
+        {
+          "command": "visualEditor.deleteSession",
+          "when": "false"
+        },
+        {
+          "command": "visualEditor.deleteSuggestedSessions",
+          "when": "false"
+        },
+        {
+          "command": "visualEditor.clearSessionSuggestions",
+          "when": "false"
+        },
+        {
+          "command": "visualEditor.showOlderSessions",
           "when": "false"
         }
       ]

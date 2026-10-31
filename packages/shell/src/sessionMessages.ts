@@ -18,6 +18,8 @@ export interface SessionView {
   proposal?: string;
   /** Claude works in this session now (the one looked at last, or chosen with "Work here"). */
   current?: boolean;
+  /** Claude is told about open sessions by itself (connected, with Visual Editor's hooks): no line to copy. */
+  told?: boolean;
   /** Its kind ("New page"…), and the page it makes, if a page. */
   kind?: string;
   page?: string;
@@ -33,7 +35,7 @@ export interface SessionView {
   progress?: string;
   error?: string;
   /** Where it stands: being worked on, being checked (Done), in Review, or held back (with why). */
-  status: { kind: 'open' } | { kind: 'planning' } | { kind: 'ready' } | { kind: 'checking'; text: string } | { kind: 'sent'; proposal: string } | { kind: 'held'; text: string };
+  status: { kind: 'open' } | { kind: 'planning' } | { kind: 'ready' } | { kind: 'checking'; text: string } | { kind: 'sent'; proposal: string } | { kind: 'held'; text: string } | { kind: 'discarded'; at: string };
   /** Its test cases, when they're ready to run (the window opens by itself once per plan). */
   plan?: PlanView;
   /** While its checks run: each check and scenario, and where it is. */

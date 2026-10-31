@@ -82,7 +82,10 @@ addStyles(`
   .card .mark { font-size: 10px; font-weight: 600; padding: 0 6px; border-radius: 6px; }
   .card.proposed .mark { background: #d9a400; color: #1e1e1e; }
   .card.changed .mark { background: #2f6fdb; color: #fff; }
-  .bar .chip.proposed, .bar .chip.changed { cursor: pointer; border: 0; font: inherit; font-size: 11px; padding: 0 8px; height: 22px; }
+  .bar .chip.proposed, .bar .chip.changed, .bar .chip.to-run, .bar .chip.held-back { cursor: pointer; border: 0; font: inherit; font-size: 11px; padding: 0 8px; height: 22px; }
+  /* Test cases waiting for you (purple, like the test cases' window), held back by a check (red). */
+  .bar .chip.to-run { background: #8a63d2; color: #fff; }
+  .bar .chip.held-back { background: #c74e39; color: #fff; }
   .drawer { position: absolute; top: 40px; right: 0; bottom: 0; width: 300px; box-sizing: border-box; padding: 16px; overflow-y: auto; background: var(--vscode-sideBar-background, var(--vscode-editor-background)); border-left: 1px solid var(--vscode-panel-border, #8883); z-index: 3; }
   .drawer h2 { font-size: 15px; margin: 0 24px 2px 0; word-break: break-word; }
   .drawer .close { position: absolute; top: 10px; right: 10px; }
@@ -180,6 +183,11 @@ const chips = el('div', 'chips');
 const zoomText = el('span', 'zoom');
 const fitButton = iconButton('fitMap', 'Fit: show the whole map');
 const proposedBadge = iconButton('proposed', 'Changes waiting for your OK: open Review', { cls: 'chip proposed' });
+// Changes whose test cases wait for you to run them, and changes held back by a check: each opens Review at the first.
+const toRunBadge = iconButton('preview', 'Test cases waiting for you to run: open Review', { cls: 'chip to-run' });
+const heldBadge = iconButton('levelWarn', 'Held back by a check: open Review', { cls: 'chip held-back' });
+let firstToRun: string | undefined;
+let firstHeld: string | undefined;
 const changedBadge = iconButton('changed', 'Changed outside review: click to clear the marks', { cls: 'chip changed' });
 const tabs = el('div', 'tabs');
 const find = el('input', 'find');
@@ -205,7 +213,7 @@ const webviewButton = iconButton('preview', 'Webview: your running app, to try w
 webviewButton.addEventListener('click', () => webview.open());
 const windowButton = iconButton('popOut', 'Pop out: the map in its own window');
 windowButton.addEventListener('click', () => vscode.postMessage({ type: 'window' }));
-bar.append(picker, projectName, chips, tabs, find, arrangeGroup, proposedBadge, changedBadge, webviewButton, zoomText, fitButton, windowButton);
+bar.append(picker, projectName, chips, tabs, find, arrangeGroup, proposedBadge, toRunBadge, heldBadge, changedBadge, webviewButton, zoomText, fitButton, windowButton);
 // One line always: when there's no room, the bar scrolls sideways (no scrollbar). Every button names itself on hover.
 tray(bar);
 installTips();
@@ -1008,6 +1016,12 @@ function show(m: ShowMap) {
   drawNudges(m.empty ? [] : (m.nudges ?? []));
   setIcon(proposedBadge, 'proposed', `${m.proposed} change${m.proposed === 1 ? '' : 's'} waiting for your OK: open Review`, m.proposed);
   proposedBadge.hidden = !m.proposed;
+  setIcon(toRunBadge, 'preview', `${m.toRun.count} change${m.toRun.count === 1 ? '' : 's'} with test cases waiting for you to look at and run: open Review`, m.toRun.count);
+  toRunBadge.hidden = !m.toRun.count;
+  firstToRun = m.toRun.first;
+  setIcon(heldBadge, 'levelWarn', `${m.held.count} change${m.held.count === 1 ? '' : 's'} held back by a check (fix it, bypass it or run it again): open Review`, m.held.count);
+  heldBadge.hidden = !m.held.count;
+  firstHeld = m.held.first;
   setIcon(changedBadge, 'changed', `${m.changed} file${m.changed === 1 ? '' : 's'} changed outside review (by hand, a formatter, git…): click to clear the marks`, m.changed);
   changedBadge.hidden = !m.changed;
   mv.setLayout(m.layout);
@@ -1048,6 +1062,8 @@ find.addEventListener('keydown', (e) => {
   }
 });
 proposedBadge.addEventListener('click', () => vscode.postMessage({ type: 'openReview' }));
+toRunBadge.addEventListener('click', () => vscode.postMessage({ type: 'openReview', proposal: firstToRun }));
+heldBadge.addEventListener('click', () => vscode.postMessage({ type: 'openReview', proposal: firstHeld }));
 changedBadge.addEventListener('click', () => vscode.postMessage({ type: 'clearChanged' }));
 picker.addEventListener('change', () => vscode.postMessage({ type: 'choose', root: picker.value }));
 

@@ -25,14 +25,20 @@ test('check plans: the developer\'s changes: unticked (with why), expectations e
   const same = applyEdits(plan, asItIs(plan));
   assert.deepEqual(same, plan, 'as it is: unchanged');
   assert.equal(choicesText(plan), undefined);
-  assert.match(applyEdits(plan, { ...asItIs(plan), checks: { ...asItIs(plan).checks, pictures: false } }) as string, /Say why you took those out/);
+  assert.match(applyEdits(plan, { ...asItIs(plan), checks: { ...asItIs(plan).checks, pictures: false } }) as string, /Say why you took out “Pictures in the Playground”/);
   const edited = applyEdits(plan, { checks: { ...asItIs(plan).checks, pictures: false }, cases: [{ use: false }, { use: true, expected: 'B, twice' }], added: ['  C  ', ''], reason: 'Not needed' });
   assert.ok(typeof edited !== 'string');
   const { does, ...pictures } = edited.checks.find((c) => c.id === 'pictures')!;
   assert.deepEqual(pictures, { id: 'pictures', title: 'Pictures in the Playground', why: 'Not chosen by the planner.', use: false, skipped: 'Not needed' });
   assert.match(does ?? '', /^Draws each previewable component/, 'what it does, for the developer');
   assert.deepEqual(edited.cases.map((c) => [c.case, c.use, c.expected, c.by, !!c.added, c.skipped]), [['A', false, 'a', 'checker', false, 'Not needed'], ['B', true, 'B, twice', 'developer', true, undefined], ['C', true, '', 'developer', true, undefined]]);
-  assert.equal(choicesText(edited), 'Check skipped: Pictures in the Playground\nScenario skipped: A\nScenario added: B (expects: B, twice)\nScenario added: C\nWhy: Not needed');
+  assert.equal(choicesText(edited), 'Check skipped: Pictures in the Playground. Why: Not needed\nScenario skipped: A. Why: Not needed\nScenario added: B (expects: B, twice)\nScenario added: C');
+  // Each its own why (in the window, under each one): one missing is named; all given, each is kept with its own.
+  const both = { checks: { ...asItIs(plan).checks, pictures: false }, cases: [{ use: false }, { use: true }], added: [] };
+  assert.match(applyEdits(plan, { ...both, checkWhy: { pictures: 'Only words changed' } }) as string, /Say why you took out “A”/);
+  const own = applyEdits(plan, { ...both, checkWhy: { pictures: 'Only words changed' }, cases: [{ use: false, why: 'A is about another page' }, { use: true }] });
+  assert.ok(typeof own !== 'string');
+  assert.equal(choicesText(own), 'Check skipped: Pictures in the Playground. Why: Only words changed\nScenario skipped: A. Why: A is about another page');
   assert.match(applyEdits(plan, { ...asItIs(plan), skipAll: true }) as string, /Say why it should go without any checks/);
   const none = applyEdits(plan, { ...asItIs(plan), skipAll: true, reason: 'Trying it' });
   assert.equal(choicesText(none as typeof plan), 'Sent without any checks, by the developer. Why: Trying it');

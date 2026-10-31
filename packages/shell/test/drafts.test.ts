@@ -53,3 +53,24 @@ test('drafts: each version is kept (a design session goes back to one); discardi
   store.remove('../escape');
   rmSync(root, { recursive: true, force: true });
 });
+
+test('drafts: a discarded session is kept (its history); finished, only its last version\'s pictures stay', () => {
+  const root = mkdtempSync(join(tmpdir(), 've-drafts-'));
+  try {
+    const store = new DraftStore(root);
+    const d = { ...draft('s1', '2026-10-31T10:00:00.000Z'), revision: 3, evidence: [{ kind: 'picture' as const, title: 'Tester', text: 'tester-17-1.png', by: 'Visual Editor', at: '', revision: 3 }] };
+    store.save(d);
+    const dir = join(root, '.visual-editor', 'drafts', 's1');
+    for (const n of ['Card-v1.png', 'Card-v2.png', 'Card-v3.png', 'app-home-v2-after.png', 'app-home-v3-after.png', 'tester-11-1.png', 'tester-17-1.png']) writeFileSync(join(dir, n), 'png');
+    // Still being worked on: every picture stays.
+    store.save(d);
+    assert.equal(['Card-v1.png', 'tester-11-1.png'].every((n) => existsSync(join(dir, n))), true);
+    store.save({ ...d, status: 'discarded' });
+    assert.equal(store.list()[0].status, 'discarded', 'kept, as discarded');
+    assert.deepEqual(['Card-v1.png', 'Card-v2.png', 'Card-v3.png', 'app-home-v2-after.png', 'app-home-v3-after.png', 'tester-11-1.png', 'tester-17-1.png'].filter((n) => existsSync(join(dir, n))), ['Card-v3.png', 'app-home-v3-after.png', 'tester-17-1.png'], 'its last version\'s and what its proof shows');
+    assert.equal(existsSync(join(dir, 'versions', 'v3.json')), true, 'its versions stay');
+    assert.equal(parseDraft(readFileSync(join(root, '.visual-editor', 'drafts', 's1.json'), 'utf8'), 's1').valueOf() !== undefined, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

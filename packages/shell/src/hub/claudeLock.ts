@@ -138,8 +138,8 @@ export interface Turn {
  * message, and the session's `turn` as it is now (to remember). `turn` is what was remembered (undefined: nothing yet);
  * `free`: reading isn't held (Visual Editor's own checker).
  */
-export function guard(call: ToolCall, folder: string, turn: Turn | undefined, free = false, session?: OpenSession): { stop?: string; say?: string; turn?: Turn } {
-  if (call.hook_event_name === 'UserPromptSubmit') return { say: session ? `${MAP_FIRST_WORDS}\n${sessionWords(session)}` : MAP_FIRST_WORDS, turn: { asked: false } };
+export function guard(call: ToolCall, folder: string, turn: Turn | undefined, free = false, session?: OpenSession, closed: ClosedSession[] = []): { stop?: string; say?: string; turn?: Turn } {
+  if (call.hook_event_name === 'UserPromptSubmit') return { say: [MAP_FIRST_WORDS, ...(session ? [sessionWords(session)] : []), ...(closed.length ? [closedWords(closed, !!session)] : [])].join('\n'), turn: { asked: false } };
   if (HUB_TOOL.test(call.tool_name ?? '')) return { turn: { asked: true } };
   const why = blocked(call, folder);
   if (why) return { stop: `${REVIEW_ONLY_WORDS} (Stopped: ${why}.)` };
@@ -155,13 +155,46 @@ export interface OpenSession {
   title: string;
   brief?: string;
   others?: { draft: string; title: string }[];
+  /** Its version now was held back by its checks: why (what failed). */
+  held?: string;
+}
+
+/** A design session not finished, whose tab is closed: not worked in, only asked about. */
+export interface ClosedSession {
+  draft: string;
+  title: string;
+  /** Its page, for a page session. */
+  page?: string;
+}
+
+/** What Visual Editor notes for Claude Code's check (drafts/.session): the session open in a tab, and the closed ones. */
+export interface SessionNote {
+  open?: OpenSession;
+  closed?: ClosedSession[];
+}
+
+/** The note as written (an older one held the open session alone). */
+export function readNote(raw: unknown): SessionNote {
+  const n = raw as SessionNote & Partial<OpenSession>;
+  if (!n || typeof n !== 'object') return {};
+  if (typeof n.draft === 'string') return { open: n as OpenSession };
+  return { ...(n.open ? { open: n.open } : {}), ...(Array.isArray(n.closed) ? { closed: n.closed } : {}) };
+}
+
+/**
+ * Said with each message while design sessions are left unfinished with their tabs closed: they're not worked in; a
+ * message that clearly continues one is asked about first (open it, or a normal change).
+ */
+export function closedWords(closed: ClosedSession[], oneOpen: boolean): string {
+  const list = closed.map((c) => `“${c.title}”${c.page ? ` (${c.page})` : ''} (draft ${c.draft})`).join(', ');
+  return `Visual Editor: these design sessions are closed (their tabs aren't open): ${list}. Don't work in them, and don't save_draft into their drafts. If the developer's message clearly continues one of them, ask first: "This looks like part of your closed session “…”: shall I open it and continue there, or make it ${oneOpen ? 'in the open session' : 'a normal change'}?" Only when they say to open it, call open_session with its draft id, then work in it. Otherwise ${oneOpen ? 'work in the open session' : 'work the normal way (propose_change)'}.`;
 }
 
 export function sessionWords(s: OpenSession): string {
   const others = s.others?.length
     ? `\nOther sessions are open too: ${s.others.map((o) => `“${o.title}” (draft ${o.draft})`).join(', ')}. If the developer's message is clearly about one of those, work in that draft instead; if it isn't clear which session they mean, ask them before changing anything.`
     : '';
-  return `Visual Editor: a design session is open: “${s.title}”, draft ${s.draft}${s.others?.length ? ' (the one the developer looked at last)' : ''}. Put every change for this request into it with save_draft (draft: "${s.draft}"), adding the request as asked; don't call propose_change. It shows live in the session; nothing is checked until the developer is done (they press Done, or say "done" and you call submit_draft with the session's draft id).${others}${s.brief ? `\n${s.brief}` : ''}`;
+  return `Visual Editor: a design session is open: “${s.title}”, draft ${s.draft}${s.others?.length ? ' (the one the developer looked at last)' : ''}. Put every change for this request into it with save_draft (draft: "${s.draft}"), adding the request as asked; don't call propose_change. It shows live in the session; nothing is checked until the developer is done (they press Done, or say "done" and you call submit_draft with the session's draft id).${others}${s.held ? `\nIts checks held this version back: ${s.held}\nWhen the developer asks to fix it, fix what failed, save_draft, and tell them to press Done again.` : ''}${s.brief ? `\n${s.brief}` : ''}`;
 }
 
 /** Commands that only look at files. */
