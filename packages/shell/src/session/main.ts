@@ -22,6 +22,8 @@ addStyles(`
   .chip.sent { color: var(--vscode-testing-iconPassed, #73c991); }
   .chip.here { color: var(--vscode-charts-purple, #b180d7); }
   .chip.held { color: var(--vscode-errorForeground, #f48771); }
+  /* A coloured chip on a faint wash of its own colour (not the light badge background: its text would barely show). */
+  .chip.checking, .chip.sent, .chip.here, .chip.held { opacity: 1; font-weight: 600; background: color-mix(in srgb, currentColor 18%, var(--vscode-editor-background, #1e1e1e)); }
   .body { flex: 1; display: flex; min-height: 0; }
   aside { width: 260px; min-width: 200px; border-right: 1px solid var(--vscode-panel-border, #8883); overflow-y: auto; padding: 10px 14px 20px; }
   .head { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; opacity: .6; margin: 12px 0 6px; }
@@ -29,6 +31,14 @@ addStyles(`
   .askline { padding: 2px 0 2px 10px; border-left: 2px solid var(--vscode-charts-blue, #3794ff); margin-bottom: 4px; }
   .hint { opacity: .7; font-size: 12px; line-height: 1.45; }
   .heldrow { display: flex; gap: 6px; margin: 6px 0; }
+  /* Held back: each failed check in its card, then what can be done, each way next to its button. */
+  .failcard { margin: 6px 0; padding: 8px 10px; border-radius: 4px; font-size: 12px; line-height: 1.45; border: 1px solid color-mix(in srgb, var(--vscode-errorForeground, #f48771) 55%, transparent); background: color-mix(in srgb, var(--vscode-errorForeground, #f48771) 8%, var(--vscode-editor-background)); }
+  .failtitle { font-weight: 600; color: var(--vscode-errorForeground, #f48771); margin-bottom: 3px; }
+  .failwhy { white-space: pre-wrap; max-height: 160px; overflow-y: auto; }
+  .failhint { margin-top: 6px; opacity: .8; font-style: italic; }
+  .way { display: flex; align-items: flex-start; gap: 8px; margin: 6px 0; font-size: 12px; line-height: 1.45; }
+  .way > button, .way > .waymark { flex: none; }
+  .waymark { width: 26px; text-align: center; }
   .version { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 12px; }
   .version .v { font-weight: 600; min-width: 28px; }
   .version .when { opacity: .65; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -74,7 +84,7 @@ const title = el('h1');
 const chip = el('span', 'chip');
 const done = iconButton('choose', 'Done: check it (Visual Editor’s checks and the logic check), then send it to Review');
 const discard = iconButton('trash', 'Discard this session: its changes are thrown away (nothing in your files changes)');
-const forClaude = iconButton('note', 'Copy a line for your Claude Code chat, so Claude works in this session');
+const forClaude = iconButton('note', 'Claude isn’t connected to Visual Editor here, so it isn’t told about this session: copy a line to paste in your Claude Code chat');
 // Several sessions open: Claude works in one (the one looked at last); another can be chosen here.
 const workHere = iconButton('focus', 'Work here: make this the session Claude works in (you have others open)');
 workHere.addEventListener('click', () => vscode.postMessage({ type: 'workHere' }));
@@ -176,10 +186,16 @@ function drawAside() {
   const s = session;
   title.textContent = s.title;
   chip.className = `chip ${s.status.kind}`;
-  claudeHere.hidden = !s.current || s.status.kind === 'sent';
-  workHere.hidden = !!s.current || s.status.kind === 'sent';
-  chip.textContent = { open: `version ${s.revision}`, planning: 'writing the test cases…', ready: 'test cases ready', checking: 'checking…', sent: 'in Review', held: 'held back' }[s.status.kind];
-  done.disabled = s.status.kind === 'planning' || s.status.kind === 'checking' || s.status.kind === 'sent';
+  // Finished (sent to Review, or discarded): its history, to look at only.
+  const ended = s.status.kind === 'sent' || s.status.kind === 'discarded';
+  claudeHere.hidden = !s.current || ended;
+  // Told by itself: nothing to copy.
+  forClaude.hidden = !!s.told || ended;
+  workHere.hidden = !!s.current || ended;
+  done.hidden = ended;
+  discard.hidden = ended;
+  chip.textContent = { open: `version ${s.revision}`, planning: 'writing the test cases…', ready: 'test cases ready', checking: 'checking…', sent: 'in Review', held: 'held back', discarded: 'discarded' }[s.status.kind];
+  done.disabled = s.status.kind === 'planning' || s.status.kind === 'checking' || ended;
   setIcon(done, 'choose', s.proposal ? 'Done: check it again, then put the changes back into the proposal in Review' : 'Done: write its test cases (you see them, change them, then run them); passing, it goes to Review');
   setIcon(discard, 'trash', s.proposal ? 'Discard this session: the proposal in Review stays as it was' : 'Discard this session: its changes are thrown away (nothing in your files changes)');
   forClaude.disabled = s.status.kind === 'sent';
@@ -199,6 +215,8 @@ function drawAside() {
       askPlan(s.title, plan);
     }
   }
+  if (s.status.kind === 'discarded')
+    aside.append(el('div', 'note', `Discarded ${new Date(s.status.at).toLocaleString()}. This is its history, to look at only: what you asked and each version. Delete it for good from Memory → Sessions.`));
   if (s.status.kind === 'sent') {
     const note = el('div', 'note ok', s.proposal ? 'The proposal in Review is updated with these changes and their proof. Nothing in your files changes until you approve it there.' : 'Sent to Review with its proof. Nothing in your files changes until you approve it there.');
     const open = iconButton('proposed', 'Open it in Review');
@@ -206,29 +224,46 @@ function drawAside() {
     note.append(el('div'), open);
     aside.append(note);
   } else if (s.status.kind === 'held') {
-    aside.append(el('div', 'head', 'Not sent: what to fix'), el('div', 'note', s.status.text), el('div', 'hint', 'Ask Claude in your Claude Code chat to fix it, then press Done again; or, if a check is wrong or means nothing for this change, bypass it:'));
     const failed = s.failed ?? [];
-    if (failed.length) {
-      const bypass = iconButton('overrule', 'See the failed checks, and bypass the ones that are wrong (say why)');
-      bypass.addEventListener('click', () => askBypass(failed));
-      const row = tray(el('div', 'heldrow'));
-      row.append(bypass);
-      // Or its test cases again: as they are (changed, added to), or new ones written.
-      if (s.plan) {
-        const plan = s.plan;
-        const again = iconButton('preview', 'See its test cases: change them, add your own, and run them again');
-        again.addEventListener('click', () => askPlan(s.title, plan));
-        row.append(again);
+    aside.append(el('div', 'head', failed.length ? `Held back: ${failed.length === 1 ? '1 check' : `${failed.length} checks`} failed` : 'Not sent'));
+    // Each failed check: what it found, in plain words. (Without any: why it stopped, as Visual Editor said it.)
+    if (failed.length)
+      for (const f of failed) {
+        const card = el('div', 'failcard');
+        card.append(el('div', 'failtitle', `✗ ${f.title}`), el('div', 'failwhy', f.why));
+        const tiny = /(\d[\d,]*) of ([\d,]+) pixels differ/.exec(f.why);
+        if (tiny && Number(tiny[1].replace(/,/g, '')) / Number(tiny[2].replace(/,/g, '')) < 0.001)
+          card.append(el('div', 'failhint', 'A very small difference: often a clock, an animation or a blinking cursor rather than this change. If so, bypass it.'));
+        aside.append(card);
       }
-      const fresh = iconButton('reload', 'Write new test cases (the check planner reads the change again), then look at them and run them');
-      fresh.addEventListener('click', () => vscode.postMessage({ type: 'done' }));
-      row.append(fresh);
+    else aside.append(el('div', 'note', s.status.text));
+    // What to do next: each way, with its button.
+    aside.append(el('div', 'head', 'What you can do'));
+    const way = (button: HTMLElement | undefined, words: string) => {
+      const row = el('div', 'way');
+      row.append(button ?? el('span', 'waymark', '💬'), el('span', undefined, words));
       aside.append(row);
-      // As soon as a check ends with failures, the window opens (once per check).
-      if (s.checkedAt !== shownFor) {
-        shownFor = s.checkedAt;
-        askBypass(failed);
-      }
+    };
+    way(undefined, failed.length ? 'The change is wrong: tell Claude in your Claude Code chat, e.g. “fix what the checks found”. It sees what failed. Then press Done (✓) again.' : 'Tell Claude in your Claude Code chat, e.g. “fix what stopped it”. It sees why. Then press Done (✓) again.');
+    if (failed.length) {
+      const bypass = iconButton('overrule', 'Bypass: see the failed checks, and let the wrong ones go (say why)');
+      bypass.addEventListener('click', () => askBypass(failed));
+      way(bypass, 'The check is wrong, or doesn’t matter for this change: bypass it and say why. It goes to Review marked so.');
+    }
+    // Or its test cases again: as they are (changed, added to), or new ones written.
+    if (s.plan) {
+      const plan = s.plan;
+      const again = iconButton('preview', 'See its test cases: change them, add your own, and run them again');
+      again.addEventListener('click', () => askPlan(s.title, plan));
+      way(again, 'Change the test cases (take a check out, with why, or add your own) and run them again.');
+    }
+    const fresh = iconButton('reload', 'Write new test cases (the check planner reads the change again), then look at them and run them');
+    fresh.addEventListener('click', () => vscode.postMessage({ type: 'done' }));
+    way(fresh, 'Write new test cases from scratch.');
+    // As soon as a check ends with failures, the window opens (once per check).
+    if (failed.length && s.checkedAt !== shownFor) {
+      shownFor = s.checkedAt;
+      askBypass(failed);
     }
   }
   else if (s.status.kind === 'checking') {
@@ -237,14 +272,23 @@ function drawAside() {
   }
   aside.append(el('div', 'head', 'What you asked'));
   if (s.asked.length) for (const a of s.asked) aside.append(el('div', 'askline', a));
-  else aside.append(el('div', 'hint', 'Nothing yet. Tell Claude in your Claude Code chat what you want: each change shows here by itself.'));
+  else
+    aside.append(
+      el(
+        'div',
+        'hint',
+        s.told
+          ? 'Nothing yet. Just tell Claude in your Claude Code chat what you want: it knows this session is open and works in it. Each change shows here by itself.'
+          : 'Nothing yet. Claude isn’t connected to Visual Editor here, so it isn’t told about this session: copy the line (the note button above) into your Claude Code chat, then say what you want.',
+      ),
+    );
   aside.append(el('div', 'head', 'Versions'));
   if (!s.versions.length) aside.append(el('div', 'hint', 'None yet: the first change makes version 1.'));
   for (const v of s.versions) {
     const row = el('div', `version${v.revision === s.revision ? ' now' : ''}`);
     row.append(el('span', 'v', `v${v.revision}`), el('span', 'when', `${v.revision === s.revision ? 'showing · ' : ''}${ago(v.at)} · ${v.files} file${v.files === 1 ? '' : 's'}`));
     // (Not while its checks are written or run: they're for the version shown.)
-    if (v.revision !== s.revision && !['sent', 'planning', 'checking'].includes(s.status.kind)) {
+    if (v.revision !== s.revision && !['sent', 'discarded', 'planning', 'checking'].includes(s.status.kind)) {
       const back = iconButton('undo', `Go back to version ${v.revision} (as a new version: nothing is lost)`);
       back.addEventListener('click', () => vscode.postMessage({ type: 'back', revision: v.revision }));
       row.append(back);

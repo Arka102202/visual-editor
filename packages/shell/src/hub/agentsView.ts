@@ -14,6 +14,38 @@ import type { PluginRegistry } from '../registry';
 import { webviewPage } from '../webviewPage';
 import type { Hub } from './hub';
 import { finished, type Job } from '../jobs';
+import { HUB_TOOLS } from '../registry';
+
+/** Visual Editor's own tools, in plain words (title, what it does), as the section lists them. */
+const HUB_TOOL_WORDS: Record<string, [string, string]> = {
+  overview: ['The project at a glance', 'What the project is: its plugins, maps, how many cards, and its rules.'],
+  list_cards: ['Find cards on the map', 'Finds components, pages and API calls on the map by name.'],
+  card: ['Everything about one card', 'One card: what it takes, what uses it, what it uses, its notes.'],
+  memory: ['Rules, decisions and notes', 'Reads the project’s rules, decisions and notes, so Claude follows them.'],
+  remember: ['Remember something', 'Adds a rule, decision or note to Memory, signed by Claude.'],
+  propose_change: ['Propose a change', 'Sends a change to Review: its test cases are written, you run them, and nothing changes until you approve.'],
+  proposal_status: ['Where a change stands', 'Whether a change is waiting, being checked, held back (and why), approved or sent back.'],
+  save_draft: ['Save a draft', 'Keeps a change apart as a draft (in a session, or for an agent), without touching your files.'],
+  read_draft: ['Read a draft', 'Shows a draft’s files and its proof.'],
+  submit_draft: ['Send a draft on', 'Sends a finished draft to have its test cases written, then to Review.'],
+  start_session: ['Open a design session', 'Opens a design session tab (a kind: new design, new page…) for shaping a change with you.'],
+  continue_proposal: ['Continue a change in a session', 'Opens a waiting proposal in a session; when you’re done, it goes back into the same proposal.'],
+  open_session: ['Open a closed session again', 'Opens a session whose tab you closed, only after you said yes.'],
+  add_evidence: ['Add proof', 'Adds a note to a draft’s proof, shown in Review next to the change.'],
+  draft_pictures: ['Pictures of a draft', 'Draws a draft’s components in the Playground, for Claude to look at.'],
+  compare_app: ['Does the app look the same', 'Pictures an app page with and without a draft, and compares them.'],
+  job_start: ['Start an agent’s job', 'Starts a job for an agent (its rounds, time limit and Stop are kept by Visual Editor).'],
+  job_status: ['A job’s next step', 'Says what an agent’s job should do next.'],
+  job_hand_in: ['Hand in the work', 'The worker hands its draft to the checker.'],
+  job_verdict: ['The checker’s verdict', 'The checker passes the work (on to its test cases and Review) or sends it back with reasons.'],
+};
+
+/** Claude run by Visual Editor itself, for one small job each. */
+const HELPERS: { name: string; title: string; summary: string }[] = [
+  { name: 'check-planner', title: 'Check planner', summary: 'When a change is finished, reads it and what you asked, and writes its test cases: which checks apply (and why), and scenarios that try to break it. You see them before anything runs.' },
+  { name: 'tester', title: 'Tester', summary: 'Tries a disputed scenario in the app like a person (clicks, types, looks), and tries the app without the change too before blaming it.' },
+  { name: 'clean-up', title: 'Clean-up helper', summary: 'From Memory → Sessions (✨): suggests which sessions to delete for good, each with why. It only marks them; you delete them with one click.' },
+];
 
 export class AgentsView implements vscode.WebviewViewProvider, vscode.Disposable {
   private view: vscode.WebviewView | undefined;
@@ -78,7 +110,11 @@ export class AgentsView implements vscode.WebviewViewProvider, vscode.Disposable
     const groups: ToAgents['groups'] = [
       {
         name: 'Visual Editor',
-        items: [{ kind: 'skill', name: 'visual-editor', title: 'How to use the map', summary: 'Claude reads this first: look things up on Visual Editor’s map instead of searching files, follow your project’s rules, and send every change to Review.', claudeName: 'visual-editor:visual-editor' }],
+        items: [
+          { kind: 'skill', name: 'visual-editor', title: 'How to use the map', summary: 'Claude reads this first: look things up on Visual Editor’s map instead of searching files, follow your project’s rules, and send every change to Review.', claudeName: 'visual-editor:visual-editor' },
+          ...HELPERS.map((h): AgentsEntry => ({ kind: 'helper', ...h, claudeName: h.name })),
+          ...HUB_TOOLS.map((name): AgentsEntry => ({ kind: 'tool', name, title: HUB_TOOL_WORDS[name]?.[0] ?? name, summary: HUB_TOOL_WORDS[name]?.[1] ?? '', claudeName: name })),
+        ],
       },
     ];
     for (const p of this.registry.list()) {

@@ -4,7 +4,7 @@
 // project changes before that. Each draft is a JSON file in the project's .visual-editor/drafts/ folder (kept out of git).
 // No VS Code APIs here, so it can be tested on its own.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CheckPlan } from './hub/checkPlan';
 import { parseEvidence, safePath, type Evidence, type FileChange } from './proposals';
@@ -18,8 +18,11 @@ export interface Draft {
   by: { kind: 'assistant' | 'agent'; name: string };
   createdAt: string;
   updatedAt: string;
-  /** 'submitted': it became the proposal `proposal`. */
-  status: 'draft' | 'submitted';
+  /**
+   * 'submitted': it became the proposal `proposal`. 'discarded': a session the developer discarded (kept, with its
+   * versions, for its history, until they delete it for good).
+   */
+  status: 'draft' | 'submitted' | 'discarded';
   /** Each file as it was when the draft was saved (`before`) and as the draft has it (`after`; null: removed). */
   changes: FileChange[];
   /** Cards it is about. */
@@ -105,7 +108,7 @@ export function parseDraft(text: string, fallbackId: string): Draft | string {
     by: { kind: by?.kind === 'agent' ? 'agent' : 'assistant', name: typeof by?.name === 'string' ? by.name : 'Assistant' },
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : now,
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : now,
-    status: raw.status === 'submitted' ? 'submitted' : 'draft',
+    status: raw.status === 'submitted' || raw.status === 'discarded' ? raw.status : 'draft',
     changes,
     ...(Array.isArray(raw.items) ? { items: (raw.items as unknown[]).filter((i): i is string => typeof i === 'string') } : {}),
     ...(typeof raw.proposal === 'string' ? { proposal: raw.proposal } : {}),
@@ -135,6 +138,26 @@ function parseSession(x: Record<string, unknown>, now: string): SessionInfo {
     ...str('page'),
     ...str('design'),
   };
+}
+
+/** How much room a folder takes on disk, everything in it included (0 when it isn't there). */
+export function folderBytes(dir: string): number {
+  let total = 0;
+  let names: string[] = [];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return 0;
+  }
+  for (const n of names) {
+    try {
+      const st = statSync(join(dir, n));
+      total += st.isDirectory() ? folderBytes(join(dir, n)) : st.size;
+    } catch {
+      // gone meanwhile
+    }
+  }
+  return total;
 }
 
 /** Drafts saved in one project. */
@@ -170,6 +193,8 @@ export class DraftStore {
     // Drafts are work in progress, not shared: the folder keeps itself out of git (the project's .gitignore is left alone).
     if (!existsSync(join(this.dir, '.gitignore'))) writeFileSync(join(this.dir, '.gitignore'), "# Visual Editor's drafts: work in progress, kept out of git.\n*\n");
     writeFileSync(join(this.dir, `${d.id}.json`), JSON.stringify(d, null, 2) + '\n');
+    // Finished: only its last version's pictures are kept (the rest is most of the room it takes).
+    if (d.status !== 'draft') this.trimPictures(d);
     // Each version's files are kept too, the first time it's saved (a session can go back to one).
     const version = join(this.dir, d.id, 'versions', `v${d.revision}.json`);
     if (d.changes.length && !existsSync(version)) {
@@ -197,6 +222,26 @@ export class DraftStore {
         }
       })
       .sort((a, b) => b.revision - a.revision);
+  }
+
+  /**
+   * A finished draft's pictures: only its last version's (and those its proof shows) stay; what was asked, every
+   * version's files and the proof stay as they are.
+   */
+  trimPictures(d: Draft) {
+    const dir = join(this.dir, d.id);
+    let names: string[] = [];
+    try {
+      names = readdirSync(dir).filter((n) => /\.(png|jpe?g|webp)$/i.test(n));
+    } catch {
+      return;
+    }
+    const shown = JSON.stringify(d.evidence.filter((e) => e.revision === d.revision));
+    for (const n of names) {
+      if (shown.includes(n)) continue;
+      const version = /-v(\d+)[-.]/.exec(n)?.[1];
+      if (version ? Number(version) !== d.revision : true) rmSync(join(dir, n), { force: true });
+    }
   }
 
   /** Throws a draft away, with everything kept for it (pictures, versions). */

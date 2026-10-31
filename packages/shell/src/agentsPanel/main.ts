@@ -13,6 +13,7 @@ const KINDS: Record<AgentsEntry['kind'], { label: string; means: string }> = {
   agent: { label: 'Agent', means: 'Does a job for you: a worker makes the change, a checker tests it (up to 3 rounds), and only a change that passes reaches Review.' },
   skill: { label: 'Skill', means: 'Written know-how Claude reads before it works on something, so it does things your project’s way.' },
   tool: { label: 'Tool', means: 'A quick look-up or check Claude can use while it works. It never changes your files.' },
+  helper: { label: 'Helper', means: 'Claude, run by Visual Editor itself for one small job when its step comes (no button). It only reads.' },
 };
 
 addStyles(`
@@ -25,11 +26,15 @@ addStyles(`
   .group .count { font-weight: 400; opacity: .6; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .row { display: flex; align-items: center; gap: 8px; padding: 3px 12px 3px 20px; cursor: default; outline: none; min-height: 22px; }
   .row:hover, .row:focus-visible { background: var(--vscode-list-hoverBackground); }
-  .row .title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .names { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .row .title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Its name as Claude shows it in the chat (visual-editor:variant-rules → variant-rules), to match the two. */
+  .row .cname, .pop .cname { font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; opacity: .55; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .badge { flex: none; font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 1px 6px; border-radius: 9px; border: 1px solid var(--c); color: var(--c); background: color-mix(in srgb, var(--c) 16%, transparent); }
   .badge.agent { --c: var(--vscode-charts-purple, #b180d7); }
   .badge.skill { --c: var(--vscode-charts-blue, #3794ff); }
   .badge.tool { --c: var(--vscode-charts-green, #89d185); }
+  .badge.helper { --c: var(--vscode-charts-orange, #d18616); }
   .row .buttons { display: flex; gap: 2px; }
   .row .buttons button { padding: 1px 3px; }
   .result { display: flex; align-items: baseline; gap: 6px; padding: 1px 12px 1px 30px; font-size: 12px; cursor: pointer; outline: none; }
@@ -55,6 +60,7 @@ addStyles(`
   .about.agent { --c: var(--vscode-charts-purple, #b180d7); }
   .about.skill { --c: var(--vscode-charts-blue, #3794ff); }
   .about.tool { --c: var(--vscode-charts-green, #89d185); }
+  .about.helper { --c: var(--vscode-charts-orange, #d18616); }
   .about p { margin: 0 0 4px; }
   .about p:last-child { margin: 0; }
   .about .means, .pop .means { opacity: .75; }
@@ -75,6 +81,15 @@ document.body.append(pop);
 /** What an entry is and does, in plain words (in the pop-over, or under its row). */
 function aboutOf(e: AgentsEntry): HTMLElement[] {
   const out = [el('p', undefined, e.summary), el('p', 'means', KINDS[e.kind].means)];
+  const named = el('p', 'means', e.kind === 'helper' ? 'In Claude’s chat: it doesn’t show there (Visual Editor runs it on its own).' : 'In Claude’s chat it shows as ');
+  if (e.kind !== 'helper') named.append(el('code', undefined, e.claudeName));
+  out.push(named);
+  // An agent's two parts, each its own Claude agent.
+  if (e.kind === 'agent') {
+    const parts = el('p', 'means', 'Inside it: ');
+    parts.append(el('code', undefined, `${e.name}-worker`), document.createTextNode(' makes the change, then '), el('code', undefined, `${e.name}-checker`), document.createTextNode(' checks it.'));
+    out.push(parts);
+  }
   if (e.job?.running) out.push(el('p', 'ask', `Working now (round ${e.job.round} of ${e.job.rounds}) on: “${e.job.request}”`));
   else if (e.job) out.push(el('p', 'ask', `Last job (${e.job.status}): “${e.job.request}”`));
   if (e.kind === 'agent') {
@@ -135,7 +150,9 @@ function draw(m: ToAgents) {
     for (const e of g.items) {
       const row = el('div', 'row');
       row.tabIndex = 0;
-      row.append(el('span', `badge ${e.kind}`, KINDS[e.kind].label), el('span', 'title', e.title));
+      const names = el('span', 'names');
+      names.append(el('span', 'title', e.title), el('span', 'cname', e.kind === 'helper' ? 'runs by itself' : e.claudeName.replace(/^visual-editor:/, '')));
+      row.append(el('span', `badge ${e.kind}`, KINDS[e.kind].label), names);
       if (e.job?.running) {
         row.append(el('span', 'working', `${e.job.status} · ${e.job.round}/${e.job.rounds}`));
         const id = e.job.id;

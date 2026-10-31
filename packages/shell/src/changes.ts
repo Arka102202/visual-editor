@@ -72,9 +72,12 @@ export function isVisualEditorFile(path: string): boolean {
   return /(^|[\\/])\.visual-editor[\\/]/.test(path);
 }
 
-/** The mark on each card: a waiting proposal wins over a change outside review. */
+/**
+ * The mark on each card: a change not decided yet (waiting for an OK, for its test cases to run, or held back) wins
+ * over a change outside review.
+ */
 export function cardMarks(items: Item[], proposals: Proposal[], changed: ReadonlySet<string>): Record<string, Mark> {
-  const waiting = proposals.filter((p) => p.status === 'proposed');
+  const waiting = proposals.filter((p) => p.status === 'proposed' || p.status === 'awaiting-checks' || p.status === 'held-back');
   const proposedPaths = new Set(waiting.flatMap((p) => p.changes.map((c) => c.path)));
   const proposedIds = new Set(waiting.flatMap((p) => p.items ?? []));
   const marks: Record<string, Mark> = {};

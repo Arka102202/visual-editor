@@ -1,7 +1,8 @@
 // The window with a finished change's test cases, before anything runs: what the change means, every check that will
 // run (what it does, why it's there) and every scenario (what it tries, what it should do, how it's tried). Only the
 // buttons needed to change them: don't run one (or put it back), edit what a scenario should do, add a scenario; then
-// Run, or skip all checks. Whatever is taken out needs a reason, asked once and kept with the change. Shared by the
+// Run, or skip all checks. Whatever is taken out needs a reason, asked right there in its own card and kept with the
+// change (skipping all checks: one reason, at the bottom). Shared by the
 // session tab and Review. Plain DOM.
 
 import { addStyles, el } from './dom';
@@ -19,8 +20,11 @@ export interface PlanView {
 /** What the developer decided (checkPlan.ts's PlanEdits). */
 export interface PlanChoice {
   checks: Record<string, boolean>;
-  cases: { use: boolean; expected?: string }[];
+  /** Why each check taken out was, by id. */
+  checkWhy?: Record<string, string>;
+  cases: { use: boolean; expected?: string; why?: string }[];
   added: (string | { case: string; expected?: string })[];
+  /** Why it goes without any checks (skipAll). */
   reason?: string;
   skipAll?: boolean;
 }
@@ -35,15 +39,19 @@ addStyles(`
   .pw-h span { flex: 1; }
   .pw-means { margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.5; }
   .pw-row { display: flex; gap: 8px; align-items: flex-start; padding: 7px 8px; border: 1px solid var(--vscode-panel-border, #8883); border-radius: 4px; margin-bottom: 6px; }
-  .pw-row.off { opacity: .5; }
+  .pw-row.off > .pw-main > :not(.pw-why), .pw-row.off > .pw-tools { opacity: .5; }
   .pw-row.off .pw-title { text-decoration: line-through; }
+  /* Taken out: why, asked in its own card (the card dims, the question doesn't). */
+  .pw-why { margin-top: 6px; }
+  .pw-why label { display: block; font-size: 11px; font-weight: 600; color: var(--vscode-editorWarning-foreground, #cca700); }
+  .pw-why.given label { color: inherit; opacity: .7; }
   .pw-main { flex: 1; min-width: 0; }
   .pw-title { font-weight: 600; }
   .pw-line { font-size: 12px; opacity: .85; margin-top: 3px; line-height: 1.4; }
   .pw-line b { font-weight: 600; opacity: .8; }
   .pw-tag { font-size: 10px; padding: 0 6px; border-radius: 8px; border: 1px solid currentColor; opacity: .75; margin-left: 6px; white-space: nowrap; font-weight: 400; }
   .pw-tools { display: flex; gap: 2px; flex: none; }
-  .pw-row input, .pw-reason textarea { width: 100%; box-sizing: border-box; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, #8884); border-radius: 3px; padding: 4px 6px; font: inherit; font-size: 12px; margin-top: 4px; }
+  .pw-row input, .pw-row textarea, .pw-reason textarea { width: 100%; box-sizing: border-box; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, #8884); border-radius: 3px; padding: 4px 6px; font: inherit; font-size: 12px; margin-top: 4px; }
   .pw-reason { padding: 8px 16px 0; }
   .pw-reason textarea { resize: vertical; }
   .pw-foot { display: flex; gap: 8px; justify-content: flex-end; align-items: center; padding: 10px 16px 14px; }
@@ -69,26 +77,36 @@ export function openPlan(title: string, plan: PlanView, run: (choice: PlanChoice
     body.append(means);
   }
 
-  // A row that can be taken out (✕) and put back (↩).
-  const toggleable = (row: HTMLElement, tools: HTMLElement, start: boolean, what: string, onChange: () => void) => {
+  // A row that can be taken out (✕) and put back (↩); taken out, it asks why right there.
+  const toggleable = (row: HTMLElement, main: HTMLElement, tools: HTMLElement, start: boolean, what: string, onChange: () => void) => {
     let on = start;
     const slot = el('span');
     tools.append(slot);
+    const ask = el('div', 'pw-why');
+    const why = el('textarea');
+    why.rows = 1;
+    why.placeholder = `Why don’t you want this ${what}? (kept with the change)`;
+    ask.append(el('label', undefined, `Why take this ${what} out?`), why);
+    why.addEventListener('input', () => (ask.classList.toggle('given', !!why.value.trim()), onChange()));
+    main.append(ask);
     const draw = () => {
       row.classList.toggle('off', !on);
-      const b = iconButton(on ? 'close' : 'undo', on ? `Don’t run this ${what}` : `Put this ${what} back`);
+      ask.hidden = on;
+      const b = iconButton(on ? 'close' : 'undo', on ? `Don’t run this ${what} (you’ll say why)` : `Put this ${what} back`);
       b.addEventListener('click', () => {
         on = !on;
         draw();
+        if (!on) why.focus();
         onChange();
       });
       slot.replaceChildren(b);
     };
     draw();
-    return { get on() { return on; } };
+    // (Only one taken out by the developer needs a why: one the planner left out doesn't.)
+    return { get on() { return on; }, why: () => (on || !start ? '' : why.value.trim()), needsWhy: () => start && !on && !why.value.trim() };
   };
 
-  const checks = new Map<string, { on: boolean }>();
+  const checks = new Map<string, { on: boolean; why?: () => string; needsWhy?: () => boolean }>();
   const shownChecks = plan.checks.filter((c) => c.use || c.always);
   const notPlanned = plan.checks.filter((c) => !c.use && !c.always);
   body.append(el('div', 'pw-h', `Checks that will run (${shownChecks.length})`));
@@ -102,7 +120,7 @@ export function openPlan(title: string, plan: PlanView, run: (choice: PlanChoice
     main.append(el('div', 'pw-line', `Why: ${c.why}`));
     const tools = el('div', 'pw-tools');
     row.append(main, tools);
-    checks.set(c.id, toggleable(row, tools, true, 'check', update));
+    checks.set(c.id, toggleable(row, main, tools, true, 'check', update));
     body.append(row);
   }
   if (notPlanned.length) {
@@ -130,7 +148,7 @@ export function openPlan(title: string, plan: PlanView, run: (choice: PlanChoice
     }
   }
 
-  const cases: { on: boolean; expected: () => string }[] = [];
+  const cases: { on: boolean; expected: () => string; why: () => string; needsWhy: () => boolean }[] = [];
   const caseHead = el('div', 'pw-h');
   caseHead.append(el('span', undefined, `Scenarios that try to break it (${plan.cases.length})`));
   body.append(caseHead);
@@ -161,8 +179,8 @@ export function openPlan(title: string, plan: PlanView, run: (choice: PlanChoice
     });
     tools.append(editB);
     row.append(main, tools);
-    const t = toggleable(row, tools, c.use, 'scenario', update);
-    cases.push({ get on() { return t.on; }, expected: () => expected });
+    const t = toggleable(row, main, tools, c.use, 'scenario', update);
+    cases.push({ get on() { return t.on; }, expected: () => expected, why: t.why, needsWhy: t.needsWhy });
     body.append(row);
   }
 
@@ -192,10 +210,11 @@ export function openPlan(title: string, plan: PlanView, run: (choice: PlanChoice
   };
   addB.addEventListener('click', addRow);
 
+  // Skipping all checks: one reason for all of it, at the bottom.
   const reason = el('div', 'pw-reason');
   const why = el('textarea');
   why.rows = 2;
-  why.placeholder = 'Why take those out? (kept with the change)';
+  why.placeholder = 'Why send it without any checks? (kept with the change)';
   reason.append(why);
   reason.hidden = true;
 
@@ -203,14 +222,21 @@ export function openPlan(title: string, plan: PlanView, run: (choice: PlanChoice
   const close = iconButton('close', 'Close: nothing runs yet (open it again from the change)');
   const skip = iconButton('overrule', 'Skip all checks: send it without any (say why); it goes to Review marked so');
   const go = iconButton('play', 'Run these checks', { cls: 'primary' });
-  const tookOut = () => shownChecks.some((c) => !checks.get(c.id)!.on) || cases.some((c, i) => plan.cases[i].use && !c.on);
+  /** Taken out without a why yet. */
+  const waiting = () => [...[...checks.values()].filter((c) => c.needsWhy?.()), ...cases.filter((c) => c.needsWhy())].length;
   let skipping = false;
   function update() {
-    const needWhy = (tookOut() || skipping) && !why.value.trim();
-    if (tookOut() || skipping) reason.hidden = false;
-    go.disabled = !skipping && needWhy;
+    reason.hidden = !skipping;
+    const missing = waiting();
+    go.disabled = skipping ? !why.value.trim() : missing > 0;
     const runs = [...checks.values()].filter((c) => c.on).length + cases.filter((c) => c.on).length + added.filter((a) => a.what.value.trim()).length;
-    hint.textContent = skipping ? (why.value.trim() ? 'Press ▶ to send it without any checks.' : 'Say why it goes without checks.') : needWhy ? 'Say why you took those out, then Run.' : `${runs} will run.`;
+    hint.textContent = skipping
+      ? why.value.trim()
+        ? 'Press ▶ to send it without any checks.'
+        : 'Say why it goes without checks.'
+      : missing
+        ? `Say why you took ${missing === 1 ? 'it' : `each of the ${missing}`} out (in ${missing === 1 ? 'its card' : 'their cards'}), then Run.`
+        : `${runs} will run.`;
   }
   why.addEventListener('input', update);
   close.addEventListener('click', () => veil.remove());
@@ -221,14 +247,15 @@ export function openPlan(title: string, plan: PlanView, run: (choice: PlanChoice
     why.focus();
   });
   go.addEventListener('click', () => {
-    if (go.disabled || (skipping && !why.value.trim())) return why.focus();
+    if (go.disabled) return skipping ? why.focus() : (body.querySelector('.pw-row.off .pw-why:not(.given) textarea') as HTMLElement | null)?.focus();
     veil.remove();
+    const checkWhy = Object.fromEntries([...checks].map(([id, c]) => [id, c.why?.() ?? '']).filter(([, w]) => w));
     run({
       checks: Object.fromEntries([...checks].map(([id, c]) => [id, c.on])),
-      cases: cases.map((c) => ({ use: c.on, expected: c.expected() })),
+      ...(Object.keys(checkWhy).length ? { checkWhy } : {}),
+      cases: cases.map((c) => ({ use: c.on, expected: c.expected(), ...(c.why() ? { why: c.why() } : {}) })),
       added: added.filter((a) => a.what.value.trim()).map((a) => ({ case: a.what.value.trim(), expected: a.should.value.trim() })),
-      ...(why.value.trim() ? { reason: why.value.trim() } : {}),
-      ...(skipping ? { skipAll: true } : {}),
+      ...(skipping && why.value.trim() ? { reason: why.value.trim(), skipAll: true } : {}),
     });
   });
   const foot = el('div', 'pw-foot');

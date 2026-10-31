@@ -16,16 +16,20 @@ import { AppProxies } from './proxy/appProxies';
 import { OutsideChanges } from './changes';
 import { Review } from './review';
 import { ProjectSetups } from './projectSetup';
-import { askEntry, MemoryView, ProjectMemory } from './memoryView';
+import { askEntry, MemoryView, ProjectMemory, sessionState, type SessionRow } from './memoryView';
 import type { MemoryEntry } from './memory';
 import { claudeCommand, Hub, run } from './hub/hub';
+import { locked } from './hub/claudeLock';
+import { cleanupPrompt, deletable, readCleanup, type SessionSummary } from './hub/sessionCleanup';
+import type { CleanupRow, FromCleanup, ToCleanup } from './cleanupMessages';
+import { webviewPage } from './webviewPage';
 import { askClaude, otherState, runCases, runLogicCheck, type LogicCase, type LogicVerdict, type RunPlaces } from './hub/logicCheck';
 import { runTester } from './hub/tester';
 import { planPrompt, readPlan } from './hub/checkPlan';
 import { glance, runCase, startUrl, type RunSpec } from './caseRunner';
-import { DRAFTS_DIR, DraftStore, type Draft, type ProgressItem } from './drafts';
+import { DRAFTS_DIR, DraftStore, folderBytes, type Draft, type ProgressItem } from './drafts';
 import { Sessions } from './session';
-import { failedChecks } from './proposals';
+import { failedChecks, needsYouWords, type Proposal } from './proposals';
 import { JobStore, finished } from './jobs';
 import { cardsTouched, draftItems } from './draftItems';
 import { DraftApps } from './proxy/draftApps';
@@ -153,12 +157,12 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     const n = registry.list().length;
     const projects = index.snapshot().length;
     const shown = current.get();
-    const waiting = review.waiting();
-    status.text = `$(symbol-structure) Visual Editor${projects > 1 && shown ? ` · ${shown.project.name}` : ''}${n ? ` · ${n} plugin${n === 1 ? '' : 's'}` : ''}${waiting ? ` · ${waiting} proposed` : ''}`;
-    // Waiting proposals come first: the button opens Review until they're handled.
-    status.command = waiting ? 'visualEditor.openReview' : 'visualEditor.openMap';
-    status.backgroundColor = waiting ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
-    status.tooltip = `${waiting ? `${waiting} change${waiting === 1 ? '' : 's'} waiting for your OK: open Review` : 'Open the map'}${n ? `\nPlugins: ${registry.list().map((p) => p.name).join(', ')}` : '\nNo plugins yet: add one for your project (React, Express…)'}`;
+    // What needs you (to approve, test cases to run, held back) comes first: the button opens Review until it's handled.
+    const need = review.needsYou();
+    status.text = `$(symbol-structure) Visual Editor${projects > 1 && shown ? ` · ${shown.project.name}` : ''}${n ? ` · ${n} plugin${n === 1 ? '' : 's'}` : ''}${need.total ? ` · ${need.total} need${need.total === 1 ? 's' : ''} you` : ''}`;
+    status.command = need.total ? 'visualEditor.openReview' : 'visualEditor.openMap';
+    status.backgroundColor = need.total ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
+    status.tooltip = `${need.total ? `Needs you: ${needsYouWords(need)}. Open Review` : 'Open the map'}${n ? `\nPlugins: ${registry.list().map((p) => p.name).join(', ')}` : '\nNo plugins yet: add one for your project (React, Express…)'}`;
   };
   updateStatus();
   status.show();
@@ -424,6 +428,14 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     agents: () => registry.agents(),
     // Design sessions, for Claude in the developer's chat: the open one, opening one, continuing a proposal in one.
     session: (root) => sessions.current(root),
+    // Only a session whose tab is open is worked in; a closed one is opened again when the developer agrees.
+    sessionOpen: (root, id) => sessions.isOpen(root, id),
+    openSession: (root, id) => {
+      const d = new DraftStore(root).list().find((x) => x.id === id);
+      if (!d?.session || d.status !== 'draft') return `No unfinished design session with draft "${id}".`;
+      sessions.open(root, id);
+      return undefined;
+    },
     // (A kind of session: what it needs must be given; the brief for Claude is made from it.)
     startSession: (root, choice) => {
       const state = index.snapshot().find((x) => x.project.root === root);
@@ -569,7 +581,22 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     },
     openReview: (id) => review.show(id),
     markProposal: (root, id, draft) => review.setSessionOf(root, id, draft),
+    // (The session note reaches Claude through Visual Editor's hooks, there once it's connected with the lock on.)
+    claudeTold: (root) => hub.assistants().some((a) => a.id === 'claude' && a.state === 'on') && locked(root),
   });
+  context.subscriptions.push(hub.onChange(() => sessions.claudeChanged()));
+  // A session is worked in only while its tab is open: a note left from before a reload or a quit (no tab is open now)
+  // is written again as soon as each project is found, with its sessions as closed ones.
+  const noted = new Set<string>();
+  const syncNotes = () => {
+    for (const s of index.snapshot()) {
+      if (noted.has(s.project.root)) continue;
+      noted.add(s.project.root);
+      sessions.writeNote(s.project.root);
+    }
+  };
+  syncNotes();
+  context.subscriptions.push(index.onChange(syncNotes));
   // Review: a proposal continued in a design session (its changes come back into it when the session is done).
   review.setSessions((root, p) => sessions.continueProposal(root, p));
   // Review: a change's test cases, run as the developer left them.
@@ -584,8 +611,80 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     const root = uri.fsPath.slice(0, uri.fsPath.lastIndexOf(`${sep}.visual-editor${sep}`));
     sessions.draftsChanged(root);
     review.draftsChanged(root);
+    memoryView.refresh();
   };
-  context.subscriptions.push(sessions, draftWatcher, draftWatcher.onDidCreate(onDraft), draftWatcher.onDidChange(onDraft));
+  // The Memory section lists the sessions not finished yet, with where each stands (to open again after a reload).
+  // (Finished ones too, as history: what became of their proposal, when Review knows.)
+  const OUTCOMES: Partial<Record<Proposal['status'], string>> = { proposed: 'waiting for review', applied: 'applied', rejected: 'rejected', 'sent-back': 'sent back', undone: 'undone', 'held-back': 'held back' };
+  const sizes = new Map<string, { at: number; bytes: number }>();
+  /**
+   * The clean-up helper's suggestions, in a window over its own short-lived tab: each session it suggests deleting,
+   * with why (the others aren't listed: they stay). 🗑 on a row deletes that one; 🗑 at the bottom deletes them all; a
+   * name opens that session to look at. The tab closes with the window. (Returns its actions, for the VS Code test.)
+   */
+  let cleanupPanel: vscode.WebviewPanel | undefined;
+  const showSuggested = (root: string) => {
+    const which = memoryView.suggested(root);
+    const dist = vscode.Uri.joinPath(context.extensionUri, 'dist');
+    cleanupPanel?.dispose();
+    const panel = vscode.window.createWebviewPanel('visualEditor.cleanup', 'Clean up sessions', vscode.ViewColumn.Active, { enableScripts: true, localResourceRoots: [dist] });
+    cleanupPanel = panel;
+    panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'icon.svg');
+    panel.webview.html = webviewPage(panel.webview, vscode.Uri.joinPath(dist, 'cleanup.js'), 'Clean up sessions');
+    const items = (): CleanupRow[] => {
+      const rows = new Map(sessionRows(root).map((r) => [r.id, r]));
+      return [...which]
+        .filter(([id]) => rows.has(id))
+        .map(([id, why]) => {
+          const r = rows.get(id)!;
+          return { id, title: r.title.replace(/^Design session: /, ''), state: `${r.outcome ? `${r.state} · ${r.outcome}` : r.state} · ${new Date(r.updatedAt).toLocaleDateString()}`, why };
+        });
+    };
+    const send = () => {
+      const rows = items();
+      if (!rows.length) return panel.dispose();
+      void panel.webview.postMessage({ type: 'show', rows } satisfies ToCleanup);
+    };
+    const remove = (ids: string[]) => {
+      for (const id of ids) {
+        sessions.remove(root, id);
+        which.delete(id);
+      }
+      memoryView.setSuggestions(root, which);
+      if (!which.size) void vscode.window.showInformationMessage(`Deleted ${ids.length} session${ids.length === 1 ? '' : 's'}; the others stay.`);
+      send();
+    };
+    panel.webview.onDidReceiveMessage((m: FromCleanup) => {
+      if (m.type === 'ready') send();
+      else if (m.type === 'delete') remove(m.ids.filter((id) => which.has(id)));
+      else if (m.type === 'open') sessions.open(root, m.id);
+      else if (m.type === 'close') panel.dispose();
+    });
+    panel.onDidDispose(() => cleanupPanel === panel && (cleanupPanel = undefined));
+    return { items: () => items().map((i) => ({ id: i.id, detail: `Why delete it: ${i.why}` })), deleteOne: (id: string) => remove([id]), deleteAll: () => remove([...which.keys()]), panel };
+  };
+
+  const sessionRows = (root: string): SessionRow[] => {
+    const proposals = review.proposals(root);
+    return new DraftStore(root)
+      .list()
+      .filter((d) => d.session)
+      .map((d): SessionRow => {
+        const outcome = d.status === 'submitted' ? OUTCOMES[proposals.find((p) => p.id === d.proposal || p.id === d.session?.proposal)?.status ?? 'proposed'] : undefined;
+        return { id: d.id, title: d.title, updatedAt: d.updatedAt, state: sessionState(d), ...(outcome ? { outcome } : {}) };
+      });
+  };
+  memoryView.setSessions(
+    sessionRows,
+    (root) => {
+      const had = sizes.get(root);
+      if (had && Date.now() - had.at < 60_000) return had.bytes;
+      const bytes = folderBytes(join(root, DRAFTS_DIR));
+      sizes.set(root, { at: Date.now(), bytes });
+      return bytes;
+    },
+  );
+  context.subscriptions.push(sessions, draftWatcher, draftWatcher.onDidCreate(onDraft), draftWatcher.onDidChange(onDraft), draftWatcher.onDidDelete(() => memoryView.refresh()));
   // Plugins arrive one by one as their extensions start: once they've settled, the agents follow what they give.
   let agentsTimer: ReturnType<typeof setTimeout> | undefined;
   const refreshAgents = () => {
@@ -698,15 +797,61 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
       return draft.id;
     }),
     // Hints on the map closed for this project ("Not now") show again.
+    // Memory → Sessions: delete one for good (✕, asked first), History's older ones, and the clean-up helper.
+    vscode.commands.registerCommand('visualEditor.deleteSession', async (node?: { row?: { id: string; title: string } } | string, confirmed?: boolean) => {
+      const root = current.get()?.project.root;
+      const id = typeof node === 'string' ? node : node?.row?.id;
+      const d = root && id ? new DraftStore(root).list().find((x) => x.id === id) : undefined;
+      if (!root || !d) return;
+      const ok =
+        confirmed === true ||
+        (await vscode.window.showWarningMessage(`Delete “${d.title}” for good?`, { modal: true, detail: 'Its versions, what was asked and its proof are removed. Nothing in your project’s files changes.' }, 'Delete')) === 'Delete';
+      if (!ok) return;
+      sessions.remove(root, d.id);
+      const left = memoryView.suggested(root);
+      left.delete(d.id);
+      memoryView.setSuggestions(root, left);
+      memoryView.refresh();
+    }),
+    vscode.commands.registerCommand('visualEditor.showOlderSessions', () => memoryView.showOlder()),
+    vscode.commands.registerCommand('visualEditor.cleanUpSessions', async () => {
+      const root = current.get()?.project.root;
+      if (!root) return;
+      const store = new DraftStore(root);
+      const rows = new Map(sessionRows(root).map((r) => [r.id, r]));
+      const list = store.list().filter((d) => d.session && rows.has(d.id)).map((d): SessionSummary => ({ id: d.id, title: d.title, state: rows.get(d.id)!.state, ...(rows.get(d.id)!.outcome ? { outcome: rows.get(d.id)!.outcome } : {}), asked: d.asked ?? [], versions: store.versions(d.id).length, files: d.changes.length, updatedAt: d.updatedAt }));
+      if (!list.some(deletable)) return void vscode.window.showInformationMessage('Nothing to clean up: every session is unfinished with work in it.');
+      memoryView.setCleaning(root, true);
+      const r = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'The clean-up helper is reading your sessions…' }, () =>
+        askClaude(claudeCommand(), root, vscode.workspace.getConfiguration('visualEditor.tester').get<string>('model', 'haiku'), cleanupPrompt(list, new Date().toISOString().slice(0, 10)), 180_000, 'The clean-up helper'),
+      );
+      memoryView.setCleaning(root, false);
+      const which = typeof r === 'string' ? r : readCleanup(r.result, list);
+      if (typeof which === 'string') return void vscode.window.showWarningMessage(which);
+      memoryView.setSuggestions(root, which);
+      if (!which.size) return void vscode.window.showInformationMessage('The clean-up helper suggests keeping every session.');
+      return showSuggested(root);
+    }),
+    // The suggested ones in a window: each with why; 🗑 on one deletes it, 🗑 at the top deletes them all.
+    vscode.commands.registerCommand('visualEditor.deleteSuggestedSessions', (_node?: unknown) => {
+      const root = current.get()?.project.root;
+      return root ? showSuggested(root) : undefined;
+    }),
+    vscode.commands.registerCommand('visualEditor.clearSessionSuggestions', () => {
+      const root = current.get()?.project.root;
+      if (root) memoryView.setSuggestions(root, undefined);
+    }),
     vscode.commands.registerCommand('visualEditor.showClosedHints', async () => {
       const root = current.get()?.project.root;
       if (!root) return void vscode.window.showInformationMessage('Open a project first.');
       await map.showClosedHints(root);
       map.show();
     }),
-    vscode.commands.registerCommand('visualEditor.openSession', async () => {
+    vscode.commands.registerCommand('visualEditor.openSession', async (id?: string) => {
       const root = current.get()?.project.root;
       if (!root) return;
+      // (One chosen already: from the Memory section's Sessions.)
+      if (typeof id === 'string') return void sessions.open(root, id);
       const open = new DraftStore(root).list().filter((d) => d.session && d.status === 'draft');
       if (!open.length) return void vscode.window.showInformationMessage('No design session is open in this project. Start one with “Start a design session”.');
       const pick = await vscode.window.showQuickPick(open.map((d) => ({ label: d.title, description: `version ${d.revision}`, id: d.id })), { title: 'Open a design session' });
@@ -784,7 +929,7 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     },
   };
   // The VS Code test (npm run test:vscode) reaches inside; never switched on otherwise.
-  if (process.env.VISUAL_EDITOR_TEST === '1') return Object.assign(api, { _test: { index, current, review, memory, changes, map, hub, agentsView, sessions } });
+  if (process.env.VISUAL_EDITOR_TEST === '1') return Object.assign(api, { _test: { index, current, review, memory, changes, map, hub, agentsView, sessions, memoryView } });
   return api;
 }
 

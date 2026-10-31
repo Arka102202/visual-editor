@@ -107,6 +107,9 @@ export type ShowMap = {
   marks: Record<string, Mark>;
   /** Waiting proposals in this project. */
   proposed: number;
+  /** Changes whose test cases wait for the developer to run them, and changes held back: how many, and the first. */
+  toRun: { count: number; first?: string };
+  held: { count: number; first?: string };
   /** Files changed outside review in this project. */
   changed: number;
   /** Shown instead of the map when there's nothing to draw. */

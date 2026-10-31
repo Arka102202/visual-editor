@@ -664,13 +664,13 @@ test('hub: the developer changes the test cases before they run: what they untic
     await hub.call('propose_change', { asked: 'Bigger', title: 'Card', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'x' }] });
     const id = drafts[0].id;
     // Unticking needs a reason.
-    assert.match((await runAsPlanned(host, id, (p) => ({ ...asItIs(p), checks: { ...asItIs(p).checks, judge: false } }))) as string, /Say why you took those out/);
+    assert.match((await runAsPlanned(host, id, (p) => ({ ...asItIs(p), checks: { ...asItIs(p).checks, judge: false } }))) as string, /Say why you took out “Judge it”/);
     // Unticked the judge (with why), added a scenario that breaks it: the judge doesn't run, the scenario does.
     const r = await runAsPlanned(host, id, (p) => ({ ...asItIs(p), checks: { ...asItIs(p).checks, judge: false }, added: ['Breaks it'], reason: 'Judge is for something else' }));
     assert.match(r as string, /^Not sent to Review: Logic check[\s\S]*✗ Breaks it/);
     assert.deepEqual(ran, []);
     const proof = drafts[0].evidence.find((e) => e.title === 'Your choices on the checks');
-    assert.equal(proof?.text, 'Check skipped: Judge it\nScenario added: Breaks it\nWhy: Judge is for something else');
+    assert.equal(proof?.text, 'Check skipped: Judge it. Why: Judge is for something else\nScenario added: Breaks it');
     // Sent without any checks (with why): it goes, marked so.
     await hub.call('save_draft', { draft: id, title: 'Card', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'y' }] });
     await hub.call('submit_draft', { id });
@@ -834,6 +834,38 @@ test('hub: checks that stop before running (the project changed since) hold the 
     const again = await runAsPlanned(host, id);
     assert.equal(typeof again, 'object', String(again));
     assert.equal(proposals.find((p) => p.status === 'proposed')?.evidence?.some((e) => e.title === 'Why its checks stopped'), false, 'the old reason is gone');
+  } finally {
+    await hub.close();
+  }
+});
+
+test('hub: a session is worked in only while its tab is open: a closed one is refused (ask first), open_session opens it; finished ones never', async () => {
+  const { host, drafts } = fakeHost();
+  const open = new Set<string>();
+  const opened: string[] = [];
+  host.sessionOpen = (_root, id) => open.has(id);
+  host.openSession = (_root, id) => (opened.push(id), open.add(id), undefined);
+  const now = new Date().toISOString();
+  const session = (id: string, status: Draft['status']): Draft => ({ id, title: `Session ${id}`, why: '', by: { kind: 'assistant', name: 'Design session' }, createdAt: now, updatedAt: now, status, changes: [], revision: 1, evidence: [], session: { openedAt: now }, ...(status === 'submitted' ? { proposal: 'p9' } : {}) });
+  drafts.push(session('s1', 'draft'), session('s2', 'discarded'), session('s3', 'submitted'));
+  const hub = await connect(host);
+  try {
+    const change = { title: 'Card', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'export const Card = () => 1;\n' }] };
+    // Closed: refused, with what to do.
+    const refused = await hub.call('save_draft', { draft: 's1', ...change });
+    assert.equal(refused.error, true);
+    assert.match(refused.text, /The design session “Session s1” \(draft s1\) is closed: its tab isn't open[\s\S]*Ask the developer whether to open it again \(then call open_session with draft "s1"\), or make this a normal change/);
+    assert.match((await hub.call('submit_draft', { id: 's1' })).text, /is closed/);
+    // The developer said yes: it opens, and it's worked in.
+    assert.match((await hub.call('open_session', { draft: 's1' })).text, /is open in the developer's editor again \(draft s1\)/);
+    assert.deepEqual(opened, ['s1']);
+    assert.equal((await hub.call('save_draft', { draft: 's1', ...change })).error, false, 'open: saved');
+    // Finished ones: never opened to work in, never saved into.
+    assert.match((await hub.call('open_session', { draft: 's2' })).text, /That session is finished \(discarded\)/);
+    assert.match((await hub.call('open_session', { draft: 's3' })).text, /finished \(sent to Review as proposal p9\)/);
+    assert.match((await hub.call('save_draft', { draft: 's2', ...change })).text, /a session the developer discarded/);
+    assert.match((await hub.call('open_session', { draft: 'nope' })).text, /No design session with draft "nope"/);
+    assert.deepEqual(opened, ['s1']);
   } finally {
     await hub.close();
   }

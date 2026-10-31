@@ -304,6 +304,34 @@ export async function run() {
     require('node:fs').rmSync(join(root, '.visual-editor', 'proposals', `${id}.json`), { force: true });
   });
 
+  await step('a change waiting with its test cases continues in a design session; Done and Run put the result back into the same proposal', async () => {
+    const readme = readFileSync(join(root, 'README.md'), 'utf8');
+    const at = new Date().toISOString();
+    const store = new DraftStore(root);
+    const id = `${Date.now()}-wait2`;
+    store.save({ id, title: 'Say hello there', why: 'w', by: { kind: 'assistant', name: 'Claude Code' }, createdAt: at, updatedAt: at, status: 'draft', changes: [{ path: 'README.md', before: readme, after: `${readme}\nHello there\n` }], asked: ['Say hello there'], revision: 1, evidence: [] });
+    await t.hub.planDraft(root, id);
+    const entry = () => t.review.proposals(root).find((p: { id: string }) => p.id === `held-${id}`);
+    await until(() => entry()?.status === 'awaiting-checks', 'it to wait with its test cases', 5000);
+    t.sessions.continueProposal(root, entry());
+    await until(() => !!entry()?.session, 'it to be marked as in a session', 5000);
+    const session = store.list().find((d) => d.id === entry().session)!;
+    if (session.changes[0]?.after !== `${readme}\nHello there\n` || session.session?.proposal !== `held-${id}`) throw new Error(`the session's draft: ${JSON.stringify(session)}`);
+    store.save({ ...session, asked: [...(session.asked ?? []), 'And wave'], changes: [{ path: 'README.md', before: readme, after: `${readme}\nHello there, waving\n` }], revision: 2, updatedAt: new Date().toISOString() });
+    const plan = await t.hub.planDraft(root, session.id);
+    if (typeof plan === 'string') throw new Error(`test cases: ${plan}`);
+    const run = t.hub.runChecks(root, session.id, asItIs(plan));
+    if (typeof run === 'string') throw new Error(`Run: ${run}`);
+    const sent = await run.promise;
+    if (typeof sent === 'string') throw new Error(`Done: ${sent}`);
+    await until(() => entry()?.status === 'proposed' && entry()?.changes[0].after.endsWith('waving\n'), 'the same proposal to come back with the new changes', 5000);
+    if (t.review.proposals(root).filter((x: { title: string }) => x.title === 'Say hello there').length !== 1) throw new Error('a second proposal was made');
+    t.sessions.panel(root, session.id)?.dispose();
+    store.remove(session.id);
+    store.remove(id);
+    require('node:fs').rmSync(join(root, '.visual-editor', 'proposals', `held-${id}.json`), { force: true });
+  });
+
   await step('a held-back change: its failed checks can be bypassed (with why), and it goes to Review marked so', async () => {
     const readme = readFileSync(join(root, 'README.md'), 'utf8');
     const at = new Date().toISOString();
@@ -330,6 +358,15 @@ export async function run() {
     await t.hub.planDraft(root, id);
     const entry = () => t.review.proposals(root).find((p: { id: string }) => p.id === `held-${id}`);
     await until(() => entry()?.status === 'awaiting-checks', 'it to wait in Review with its test cases', 5000);
+    // It's said wherever waiting changes are: the map's bar (its own chip, opening it) and Memory's Recent changes.
+    t.map.show();
+    const onMap = listen(t.map.panel);
+    t.map.send();
+    await until(() => onMap.some((m) => m.type === 'show' && m.toRun?.count === 1 && m.toRun.first === `held-${id}`), 'the map to say its test cases wait', 5000);
+    const recent = t.memoryView.getChildren().find((n: any) => n.kind === 'group' && n.group === 'change');
+    if (!recent?.waiting.some((p: { id: string }) => p.id === `held-${id}`)) throw new Error('Memory does not list it as needing you');
+    const row = t.memoryView.getTreeItem({ kind: 'waiting', proposal: entry() });
+    if (!/test cases waiting for you to run/.test(String(row.description))) throw new Error(`Memory says: ${row.description}`);
     await vscode.commands.executeCommand('visualEditor.openReview');
     const seen = listen(t.review.panel);
     t.review.askPlan(root, `held-${id}`);
@@ -399,6 +436,76 @@ export async function run() {
       registration.dispose();
       await vscode.commands.executeCommand('notifications.clearAll');
     }
+  });
+
+  await step('Memory → Sessions: unfinished ones with where each stands, History (sent, discarded), ✕ and the helper\'s suggestions delete; only an open tab is worked in', async () => {
+    const { PLAN_STEP, WAITING } = await import('../packages/shell/src/hub/tools');
+    const note = () => { try { return JSON.parse(readFileSync(join(root, '.visual-editor', 'drafts', '.session'), 'utf8')); } catch { return {}; } };
+    const draft = t.sessions.start(root);
+    // Open in a tab: the one worked in.
+    if (note().open?.draft !== draft.id) throw new Error(`open tab, note: ${JSON.stringify(note())}`);
+    t.sessions.panel(root, draft.id)?.dispose();
+    // Closed: not worked in, only listed as closed.
+    if (note().open || !note().closed?.some((c: { draft: string }) => c.draft === draft.id)) throw new Error(`closed tab, note: ${JSON.stringify(note())}`);
+    // A note left from before a reload (a tab open then): written again at startup, with nothing open.
+    require('node:fs').writeFileSync(join(root, '.visual-editor', 'drafts', '.session'), JSON.stringify({ open: { draft: draft.id, title: 'stale' } }));
+    t.sessions.writeNote(root);
+    if (note().open) throw new Error('a stale note still says a session is open');
+    const store = new DraftStore(root);
+    const top = () => t.memoryView.getChildren().find((n: any) => n.kind === 'sessions');
+    const rows = () => (top()?.rows ?? []) as { id: string; state: string }[];
+    const history = () => (top()?.history ?? []) as { id: string; state: string }[];
+    const stateOf = () => rows().find((r) => r.id === draft.id)?.state;
+    if (stateOf() !== 'no changes yet') throw new Error(`a new session: ${stateOf()}`);
+    const readmeNow = readFileSync(join(root, 'README.md'), 'utf8');
+    const at = () => new Date().toISOString();
+    const saved = { ...store.list().find((d) => d.id === draft.id)!, changes: [{ path: 'README.md', before: readmeNow, after: `${readmeNow}\nHi\n` }], revision: 2, updatedAt: at() };
+    const states: [any, string][] = [
+      [undefined, 'being worked on'],
+      [{ at: at(), revision: 2, step: PLAN_STEP }, 'writing its test cases'],
+      [{ at: at(), revision: 2, step: WAITING }, 'test cases waiting for you'],
+      [{ at: at(), revision: 2, step: 'running TypeScript' }, 'checks running'],
+      [{ at: at(), revision: 2, step: 'done', held: 'Check TypeScript failed' }, 'held back'],
+      [{ at: at(), revision: 1, step: 'done', held: 'An older version' }, 'being worked on'],
+    ];
+    for (const [check, want] of states) {
+      store.save({ ...saved, ...(check ? { check } : {}) });
+      if (stateOf() !== want) throw new Error(`with ${JSON.stringify(check)}: ${stateOf()}, not ${want}`);
+    }
+    await vscode.commands.executeCommand('visualEditor.openSession', draft.id);
+    if (!t.sessions.panel(root, draft.id)) throw new Error('a click did not open it');
+    t.sessions.panel(root, draft.id)?.dispose();
+    // Finished: in History, not among the unfinished; sent and discarded alike.
+    store.save({ ...saved, status: 'submitted', proposal: 'p1' });
+    const other = { ...saved, id: `${draft.id}x`, title: 'Another try', status: 'discarded' as const };
+    store.save(other);
+    if (rows().some((r) => r.id === draft.id) || history().find((r) => r.id === draft.id)?.state !== 'sent to Review' || history().find((r) => r.id === other.id)?.state !== 'discarded') throw new Error(`history: ${JSON.stringify(history())}`);
+    // (The note follows the drafts folder, a moment after a save.)
+    await until(() => !note().closed?.some((c: { draft: string }) => c.draft === draft.id), 'a finished session not to be told about as closed', 5000);
+    // The helper's suggestions: marked (the heading offers to delete them); deleting them leaves the others.
+    t.memoryView.setSuggestions(root, new Map([[other.id, 'an earlier try']]));
+    const head = t.memoryView.getTreeItem(top());
+    const historyNode = t.memoryView.getChildren(top()).find((n: any) => n.kind === 'history');
+    const marked = t.memoryView.getChildren(historyNode).map((n: any) => t.memoryView.getTreeItem(n)).find((i: any) => i.contextValue === 'session-suggested');
+    if (head.contextValue !== 'sessions-suggested' || !/an earlier try/.test(String(marked?.description))) throw new Error(`marks: ${head.contextValue}, ${marked?.description}`);
+    await shot('19-sessions');
+    // Their window: only the suggested ones, each with why; 🗑 on one deletes it, 🗑 at the top the rest.
+    const third = { ...saved, id: `${draft.id}y`, title: 'A third try', status: 'discarded' as const };
+    store.save(third);
+    t.memoryView.setSuggestions(root, new Map([[other.id, 'an earlier try'], [third.id, 'empty']]));
+    const win: any = await vscode.commands.executeCommand('visualEditor.deleteSuggestedSessions');
+    if (JSON.stringify(win.items()) !== JSON.stringify([{ id: other.id, detail: 'Why delete it: an earlier try' }, { id: third.id, detail: 'Why delete it: empty' }].sort((a, b) => win.items().findIndex((i: any) => i.id === a.id) - win.items().findIndex((i: any) => i.id === b.id)))) throw new Error(`the window lists: ${JSON.stringify(win.items())}`);
+    if (win.items().some((i: any) => i.id === draft.id)) throw new Error('a session not suggested is in the window');
+    if (!win.panel?.visible) throw new Error('the window did not open');
+    win.deleteOne(third.id);
+    if (win.items().length !== 1 || store.list().some((d) => d.id === third.id) || !store.list().some((d) => d.id === other.id)) throw new Error('🗑 on one deleted the wrong ones');
+    win.deleteAll();
+    await until(() => !t.sessions.panel(root, other.id) && (() => { try { return !win.panel.visible; } catch { return true; } })(), 'the window to close once they are all deleted', 5000);
+    await vscode.commands.executeCommand('notifications.clearAll');
+    if (history().some((r) => r.id === other.id) || !history().some((r) => r.id === draft.id)) throw new Error('🗑 at the top deleted the wrong ones');
+    // ✕: one, for good.
+    await vscode.commands.executeCommand('visualEditor.deleteSession', draft.id, true);
+    if (history().some((r) => r.id === draft.id) || store.list().some((d) => d.id === draft.id)) throw new Error('✕ did not delete it');
   });
 
   await step('the map pops out into its own window and comes back', async () => {

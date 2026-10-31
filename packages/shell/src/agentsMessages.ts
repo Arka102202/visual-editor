@@ -1,8 +1,11 @@
 // What the shell and the Agents section say to each other. Shared by both sides, so they can't drift apart.
 
-/** One thing an assistant gets from Visual Editor: an agent (does a job), a skill (know-how it reads) or a tool. */
+/**
+ * One thing Claude gets from Visual Editor: an agent (does a job), a skill (know-how it reads), a tool, or a helper
+ * (Claude run by Visual Editor itself for one small job: the check planner, the tester, the clean-up helper).
+ */
 export interface AgentsEntry {
-  kind: 'agent' | 'skill' | 'tool';
+  kind: 'agent' | 'skill' | 'tool' | 'helper';
   /** Its name (an agent's, to run it). */
   name: string;
   title: string;

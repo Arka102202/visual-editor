@@ -12,6 +12,7 @@ import { DRAFTS_DIR, DraftStore, type Draft } from './drafts';
 import { bypassProof, failedChecks, whyFailed } from './proposals';
 import { asItIs, planView, type PlanEdits } from './hub/checkPlan';
 import { PLAN_STEP, WAITING } from './hub/tools';
+import type { ClosedSession, SessionNote } from './hub/claudeLock';
 import type { ProjectState } from './projectIndex';
 import type { Proposal } from './proposals';
 import type { FromSession, SessionCard, SessionView, ToSession } from './sessionMessages';
@@ -33,6 +34,8 @@ export interface OpenSessions {
   title: string;
   brief?: string;
   others?: { draft: string; title: string }[];
+  /** Its version now was held back by its checks: why. */
+  held?: string;
 }
 
 export interface SessionHost {
@@ -48,6 +51,8 @@ export interface SessionHost {
   openReview(proposal: string): void;
   /** Marks a proposal as being changed in a session (its draft), or not any more. */
   markProposal(root: string, proposal: string, draft: string | undefined): void;
+  /** Whether Claude Code is told about open sessions by itself (connected, with Visual Editor's hooks in the folder). */
+  claudeTold?(root: string): boolean;
 }
 
 interface Tab {
@@ -163,7 +168,7 @@ export class Sessions implements vscode.Disposable {
     panel.iconPath = vscode.Uri.joinPath(this.extensionUri, 'media', 'icon.svg');
     // The draft runs in its own app (its dev server, through the proxy), shown in a frame.
     panel.webview.html = webviewPage(panel.webview, vscode.Uri.joinPath(dist, 'session.js'), 'Design session', 'frame-src http://127.0.0.1:* http://localhost:*;');
-    const tab: Tab = { root, id, panel, ready: false, cards: [], queue: Promise.resolve(), status: draft?.status === 'submitted' && draft.proposal ? { kind: 'sent', proposal: draft.proposal } : { kind: 'open' } };
+    const tab: Tab = { root, id, panel, ready: false, cards: [], queue: Promise.resolve(), status: draft?.status === 'submitted' && draft.proposal ? { kind: 'sent', proposal: draft.proposal } : draft?.status === 'discarded' ? { kind: 'discarded', at: draft.updatedAt } : { kind: 'open' } };
     panel.webview.onDidReceiveMessage((m: FromSession) => void this.receive(tab, m), undefined, this.subscriptions);
     panel.onDidDispose(() => {
       this.tabs.delete(key);
@@ -194,7 +199,9 @@ export class Sessions implements vscode.Disposable {
       const o = drafts.find((x) => x.id === t.id && x.status === 'draft');
       return o ? [{ draft: o.id, title: o.title }] : [];
     });
-    return { draft: d.id, title: d.title, ...(d.session?.kind ? { brief: d.session.kind.brief } : {}), ...(others.length ? { others } : {}) };
+    // Held back by its checks (this version): Claude is told what failed.
+    const held = d.check?.step === 'done' && d.check.revision === d.revision ? d.check.held : undefined;
+    return { draft: d.id, title: d.title, ...(d.session?.kind ? { brief: d.session.kind.brief } : {}), ...(others.length ? { others } : {}), ...(held ? { held } : {}) };
   }
 
   /** Makes a session the one Claude works in (its tab's "Work here"). */
@@ -205,18 +212,50 @@ export class Sessions implements vscode.Disposable {
 
   /** Notes the current session for Claude Code's check (or that there's none). */
   private note(root: string) {
-    const file = join(root, SESSION_NOTE);
-    const now = this.current(root);
     // Every open session's tab shows whether Claude works in it.
     for (const t of this.tabs.values()) if (t.root === root) void this.send(t);
+    this.writeNote(root);
+  }
+
+  /**
+   * Notes for Claude Code's check which session is open in a tab (the one it works in) and which are left unfinished
+   * with their tabs closed (only asked about). Also at startup: a note left from before a reload goes.
+   */
+  writeNote(root: string) {
+    const file = join(root, SESSION_NOTE);
+    const open = this.current(root);
+    const closed = this.closed(root);
     try {
-      if (now) {
+      if (open || closed.length) {
         mkdirSync(join(root, DRAFTS_DIR), { recursive: true });
-        writeFileSync(file, JSON.stringify(now));
+        writeFileSync(file, JSON.stringify({ ...(open ? { open } : {}), ...(closed.length ? { closed } : {}) } satisfies SessionNote));
       } else rmSync(file, { force: true });
     } catch {
       // (Claude is told about the session through the hub's tools anyway.)
     }
+  }
+
+  /** Sessions left unfinished with their tabs closed: not worked in (Claude asks before opening one). */
+  closed(root: string): ClosedSession[] {
+    return new DraftStore(root)
+      .list()
+      .filter((d) => d.session && d.status === 'draft' && !this.tabs.has(`${root}#${d.id}`))
+      .map((d) => ({ draft: d.id, title: d.title, ...(d.session?.page ? { page: d.session.page } : {}) }));
+  }
+
+  /** Whether a session's tab is open (only then is it worked in). */
+  isOpen(root: string, id: string): boolean {
+    return this.tabs.has(`${root}#${id}`);
+  }
+
+  /** Deletes a session for good (its tab closes; a proposal it continued is as it was). */
+  remove(root: string, id: string) {
+    const store = new DraftStore(root);
+    const d = store.list().find((x) => x.id === id);
+    this.tabs.get(`${root}#${id}`)?.panel.dispose();
+    if (d?.status === 'draft' && d.session?.proposal) this.host.markProposal(root, d.session.proposal, undefined);
+    store.remove(id);
+    this.writeNote(root);
   }
 
   /** A session's tab, when it's open. */
@@ -232,6 +271,8 @@ export class Sessions implements vscode.Disposable {
   /** A project's drafts changed (saved by Claude, an agent, going back…): its open sessions follow. */
   draftsChanged(root: string) {
     for (const tab of this.tabs.values()) if (tab.root === root) void this.refresh(tab);
+    // (What Claude is told follows too: held back by its checks, or not any more.)
+    this.writeNote(root);
   }
 
   private async receive(tab: Tab, m: FromSession): Promise<void> {
@@ -253,12 +294,13 @@ export class Sessions implements vscode.Disposable {
     }
     if (m.type === 'discard') {
       const pick = await vscode.window.showWarningMessage(
-        draft.session?.proposal ? `Discard this session? The proposal in Review stays as it was before the session.` : `Discard “${draft.title}”? Its changes and versions are thrown away; nothing in your files changes.`,
+        draft.session?.proposal ? `Discard this session? The proposal in Review stays as it was before the session.` : `Discard “${draft.title}”? It ends here: nothing in your files changes. It stays in Memory → Sessions (history), where you can look at it or delete it for good.`,
         { modal: true },
         'Discard',
       );
       if (!pick) return;
-      store.remove(tab.id);
+      // Kept for its history (Memory → Sessions), until deleted for good there.
+      store.save({ ...draft, status: 'discarded', updatedAt: new Date().toISOString() });
       // A proposal it continued is as it was, and can be decided on again.
       if (draft.session?.proposal) this.host.markProposal(tab.root, draft.session.proposal, undefined);
       tab.panel.dispose();
@@ -296,6 +338,11 @@ export class Sessions implements vscode.Disposable {
   }
 
   /** Reads the draft again; a newer version is put in its app; the tab is told. */
+  /** Claude Code connected or not: the tabs say whether there's a line to copy. */
+  claudeChanged() {
+    for (const tab of this.tabs.values()) void this.send(tab);
+  }
+
   private refresh(tab: Tab, showPlan = false): Promise<void> {
     tab.queue = tab.queue.then(() => this.update(tab, showPlan)).catch(() => undefined);
     return tab.queue;
@@ -311,6 +358,7 @@ export class Sessions implements vscode.Disposable {
     // Where its check is (from Done here, or "done" in the chat), for this version.
     const c = draft.check?.revision === draft.revision ? draft.check : undefined;
     if (draft.status === 'submitted' && draft.proposal) tab.status = { kind: 'sent', proposal: draft.proposal };
+    else if (draft.status === 'discarded') tab.status = { kind: 'discarded', at: draft.updatedAt };
     else if (c?.held) tab.status = { kind: 'held', text: c.held };
     else if (c?.step === PLAN_STEP) tab.status = { kind: 'planning' };
     else if (c?.step === WAITING && draft.plan) tab.status = { kind: 'ready' };
@@ -352,6 +400,7 @@ export class Sessions implements vscode.Disposable {
       ...(draft?.session?.kind ? { kind: draft.session.kind.title } : {}),
       ...(draft?.session?.page ? { page: draft.session.page } : {}),
       current: this.current(tab.root)?.draft === tab.id,
+      told: this.host.claudeTold?.(tab.root) ?? false,
       ...(draft?.session?.proposal ? { proposal: draft.session.proposal } : {}),
       asked: draft?.asked ?? [],
       revision: tab.revision ?? draft?.revision ?? 1,

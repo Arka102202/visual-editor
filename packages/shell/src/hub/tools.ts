@@ -71,6 +71,10 @@ export interface HubHost {
   sessionKinds?(root: string): { id: string; title: string; summary: string; needs: { card?: string; design?: boolean; name?: string; page?: boolean } }[];
   /** Continues a waiting (or sent-back, held-back) proposal in a design session; its draft, or why it couldn't. */
   continueProposal?(root: string, id: string): { draft: string } | string;
+  /** Whether a session's tab is open in the developer's editor (only then is it worked in). */
+  sessionOpen?(root: string, draft: string): boolean;
+  /** Opens a closed session's tab again (the developer agreed); why not, if it can't. */
+  openSession?(root: string, draft: string): string | undefined;
   /** A draft's check ended (sent: its proposal; or why it was held back). */
   checked?(root: string, draft: Draft, result: { proposal: Proposal } | string): void;
 }
@@ -137,6 +141,12 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
   const projectArg = z.string().optional().describe('Project name (from overview); default: the one on the map');
 
   /** The project a tool is about: by name or folder, else the one on the map. */
+  /** A session's draft whose tab is closed isn't worked in: why not, in words for Claude (undefined: it can be). */
+  const closedSession = (root: string, d: Draft): string | undefined =>
+    d.session && d.status === 'draft' && host.sessionOpen && !host.sessionOpen(root, d.id)
+      ? `The design session “${d.title}” (draft ${d.id}) is closed: its tab isn't open in the developer's editor, so it isn't worked in. Ask the developer whether to open it again (then call open_session with draft "${d.id}"), or make this a normal change (propose_change).`
+      : undefined;
+
   const pick = async (name?: string): Promise<ProjectState | string> => {
     await host.whenReady(READY_WAIT_MS);
     const all = host.projects();
@@ -400,6 +410,11 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       const old = draft ? host.drafts(root).find((d) => d.id === draft) : undefined;
       if (draft && !old) return fail(`No draft "${draft}" in ${s.project.name}. Leave draft out to start a new one.`);
       if (old?.status === 'submitted') return fail(`Draft ${old.id} was already sent to Review (proposal ${old.proposal}). Save a new draft instead.`);
+      if (old?.status === 'discarded') return fail(`Draft ${old.id} is a session the developer discarded. Save a new draft (or propose_change) instead.`);
+      if (old) {
+        const closed = closedSession(root, old);
+        if (closed) return fail(closed);
+      }
       if (!old && !asked?.trim()) return fail('Say what the developer asked for (asked), in their own words: every change is checked against it.');
       const files = new Map((old?.changes ?? []).map((c) => [c.path, c]));
       for (const c of changes) {
@@ -488,6 +503,9 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       const d = host.drafts(s.project.root).find((x) => x.id === id);
       if (!d) return fail(`No draft "${id}" in ${s.project.name}.`);
       if (d.status === 'submitted') return fail(`Draft ${id} is already in Review as proposal ${d.proposal}.`);
+      if (d.status === 'discarded') return fail(`Draft ${id} is a session the developer discarded: it can't be sent.`);
+      const closed = closedSession(s.project.root, d);
+      if (closed) return fail(closed);
       // (Files that moved on first: no test cases for a draft that can't be sent as it is.)
       const moved = await stale(s.project.root, d);
       if (moved) return fail(moved);
@@ -545,6 +563,27 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       const r = host.continueProposal(s.project.root, id);
       if (typeof r === 'string') return fail(r);
       return reply(`Proposal ${id} is open in a design session (draft ${r.draft}), with its changes. Put more changes into it with save_draft (draft: "${r.draft}"), each new request as asked; it shows live. When the developer is done (Done in the session, or "done" and you call submit_draft with id "${r.draft}"), the result goes back into proposal ${id}.`);
+    },
+  );
+
+  server.registerTool(
+    'open_session',
+    {
+      title: 'Open a closed design session',
+      description:
+        'Opens a design session whose tab is closed, in the developer\'s editor, so you can work in it again. Only after the developer agreed: when their message seems to continue a closed session, ask them first ("shall I open it and continue there, or make a normal change?"). Then put changes into its draft with save_draft.',
+      inputSchema: { draft: z.string().describe('The session\'s draft id'), project: projectArg },
+    },
+    async ({ draft, project }) => {
+      const s = await pick(project);
+      if (typeof s === 'string') return fail(s);
+      const d = host.drafts(s.project.root).find((x) => x.id === draft);
+      if (!d?.session) return fail(`No design session with draft "${draft}" in ${s.project.name}.`);
+      if (d.status !== 'draft') return fail(`That session is finished (${d.status === 'submitted' ? `sent to Review as proposal ${d.proposal}` : 'discarded'}): it can't be worked in. Start a new one, or continue the proposal (continue_proposal).`);
+      if (!host.openSession) return fail('Design sessions can\'t be opened here.');
+      const why = host.openSession(s.project.root, draft);
+      if (why) return fail(why);
+      return reply(`The session “${d.title}” is open in the developer's editor again (draft ${draft}). Put changes into it with save_draft (draft: "${draft}"), adding the request as asked; it shows live. Nothing is checked until the developer is done.`);
     },
   );
 
@@ -1078,7 +1117,7 @@ export function draftFlow(host: HubHost) {
     const same = c.differing <= 25 && !c.sizes;
     const words = same
       ? `The page ${page} looks the same with the draft (${c.differing.toLocaleString('en')} of ${c.total.toLocaleString('en')} pixels differ).`
-      : `The page ${page} looks different with the draft: ${c.differing.toLocaleString('en')} of ${c.total.toLocaleString('en')} pixels differ (${(share * 100).toFixed(1)}%)${c.sizes ? `, and its size changed from ${c.sizes.before.join('×')} to ${c.sizes.after.join('×')}` : ''}. What differs is marked in red in the difference picture.`;
+      : `The page ${page} looks different with the draft: ${c.differing.toLocaleString('en')} of ${c.total.toLocaleString('en')} pixels differ (${share < 0.001 ? 'less than 0.1%' : `${(share * 100).toFixed(1)}%`})${c.sizes ? `, and its size changed from ${c.sizes.before.join('×')} to ${c.sizes.after.join('×')}` : ''}. What differs is marked in red in the difference picture.`;
     const text = [words, ...c.problems.map((p) => `Problem on the page: ${p}`)].join('\n');
     const title = `${LOOKS_SAME}: ${page}`;
     const passed = same && !c.problems.length;

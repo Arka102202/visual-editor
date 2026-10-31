@@ -3,7 +3,7 @@ import test from 'node:test';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { blocked, guard, lock, locked, MAP_FIRST_WORDS, readsFrom, sessionWords, unlock, writesInto } from '../src/hub/claudeLock';
+import { blocked, guard, lock, locked, MAP_FIRST_WORDS, readNote, readsFrom, sessionWords, unlock, writesInto } from '../src/hub/claudeLock';
 
 const root = '/work/app';
 
@@ -120,4 +120,25 @@ test('through Visual Editor only: with several sessions open, Claude is told the
   assert.match(said, /draft d2 \(the one the developer looked at last\)/);
   assert.match(said, /Other sessions are open too: “New design: ProjectCard” \(draft d1\)\. If the developer's message is clearly about one of those, work in that draft instead; if it isn't clear which session they mean, ask them/);
   assert.match(said, /\nThis session makes a NEW PAGE, Billing, at \/billing\.$/);
+});
+
+test('through Visual Editor only: a session its checks held back tells Claude what failed (and one that wasn\'t, nothing)', () => {
+  const held = sessionWords({ draft: 'd3', title: 'Compact: even padding', held: 'Looks the same in the app: / did not pass: 483 of 1,152,000 pixels differ.' });
+  assert.match(held, /\nIts checks held this version back: Looks the same in the app: \/ did not pass: 483 of 1,152,000 pixels differ\.\nWhen the developer asks to fix it, fix what failed, save_draft, and tell them to press Done again\./);
+  assert.doesNotMatch(sessionWords({ draft: 'd3', title: 'Compact: even padding' }), /held/);
+});
+
+test('through Visual Editor only: closed sessions are told about only to ask (open it, or a normal change); an old note still reads', () => {
+  const closed = [{ draft: 'd5', title: 'Compact: even padding' }, { draft: 'd6', title: 'New page: Help', page: '/help' }];
+  const none = guard({ hook_event_name: 'UserPromptSubmit', session_id: 's' }, '/p', undefined, false, undefined, closed).say ?? '';
+  assert.match(none, /these design sessions are closed \(their tabs aren't open\): “Compact: even padding” \(draft d5\), “New page: Help” \(\/help\) \(draft d6\)\. Don't work in them, and don't save_draft into their drafts\./);
+  assert.match(none, /make it a normal change\?"[\s\S]*Only when they say to open it, call open_session[\s\S]*Otherwise work the normal way \(propose_change\)\./);
+  assert.doesNotMatch(none, /a design session is open/);
+  const withOpen = guard({ hook_event_name: 'UserPromptSubmit', session_id: 's' }, '/p', undefined, false, { draft: 'd1', title: 'New design: Card' }, closed).say ?? '';
+  assert.match(withOpen, /a design session is open: “New design: Card”[\s\S]*these design sessions are closed[\s\S]*make it in the open session\?"[\s\S]*Otherwise work in the open session\./);
+  // Nothing open, nothing closed: only the map-first words.
+  assert.equal(guard({ hook_event_name: 'UserPromptSubmit', session_id: 's' }, '/p', undefined, false).say, MAP_FIRST_WORDS);
+  assert.deepEqual(readNote({ draft: 'd1', title: 'T' }), { open: { draft: 'd1', title: 'T' } }, 'an older note: the open session alone');
+  assert.deepEqual(readNote({ closed }), { closed });
+  assert.deepEqual(readNote(null), {});
 });

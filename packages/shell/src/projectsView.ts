@@ -5,6 +5,7 @@ import * as vscode from 'vscode';
 import type { CurrentProject } from './currentProject';
 import type { ProjectIndex, ProjectState } from './projectIndex';
 import type { Review } from './review';
+import { needsYou, needsYouWords } from './proposals';
 
 type Node =
   | { kind: 'project'; state: ProjectState }
@@ -62,8 +63,8 @@ export class ProjectsView implements vscode.TreeDataProvider<Node>, vscode.Dispo
     const { project, items, links } = node.state;
     const item = new vscode.TreeItem(project.name, vscode.TreeItemCollapsibleState.Expanded);
     const shown = this.index.snapshot().length > 1 && this.current.get()?.project.root === project.root;
-    const waiting = this.review.proposals(project.root).filter((p) => p.status === 'proposed').length;
-    item.description = [project.group && project.group !== project.name ? `in ${project.group}` : '', `${project.files.length} files`, waiting ? `${waiting} proposed` : '', shown ? 'on the map' : ''].filter(Boolean).join(' · ');
+    const need = needsYouWords(needsYou(this.review.proposals(project.root)));
+    item.description = [project.group && project.group !== project.name ? `in ${project.group}` : '', `${project.files.length} files`, need, shown ? 'on the map' : ''].filter(Boolean).join(' · ');
     item.tooltip = `${project.root}\n${items.length} cards · ${links.length} lines\nClick to show it on the map`;
     item.iconPath = new vscode.ThemeIcon(shown ? 'eye' : project.group ? 'repo' : 'folder');
     item.command = { command: 'visualEditor.chooseProject', title: 'Show on the map', arguments: [project.root] };

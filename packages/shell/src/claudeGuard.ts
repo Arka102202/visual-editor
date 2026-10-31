@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { FREE_READ_ENV, guard, type OpenSession, type ToolCall, type Turn } from './hub/claudeLock';
+import { FREE_READ_ENV, guard, readNote, type SessionNote, type ToolCall, type Turn } from './hub/claudeLock';
 
 const folder = process.argv[2];
 let input = '';
@@ -29,14 +29,14 @@ process.stdin.on('end', () => {
   } catch {
     turn = undefined;
   }
-  // The design session open in the developer's editor, if one (Visual Editor notes it: session.ts).
-  let session: OpenSession | undefined;
+  // The design session open in a tab of the developer's editor, if one, and the closed ones (session.ts notes them).
+  let note: SessionNote = {};
   try {
-    session = JSON.parse(readFileSync(join(folder, '.visual-editor', 'drafts', '.session'), 'utf8')) as OpenSession;
+    note = readNote(JSON.parse(readFileSync(join(folder, '.visual-editor', 'drafts', '.session'), 'utf8')));
   } catch {
-    session = undefined;
+    note = {};
   }
-  const out = guard(call, folder, turn, process.env[FREE_READ_ENV] === '1', session);
+  const out = guard(call, folder, turn, process.env[FREE_READ_ENV] === '1', note.open, note.closed);
   if (out.turn) {
     try {
       mkdirSync(dir, { recursive: true });

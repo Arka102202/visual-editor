@@ -4,7 +4,7 @@
 import { CONTRACT_VERSION, type Disposable, type Plugin, type PluginAgent, type PluginSessionKind, type PluginSkill, type PluginTool } from '@visual-editor/contract';
 
 /** The hub's own tools (hub/tools.ts): a plugin's tool can't take one of these names. */
-export const HUB_TOOLS = ['overview', 'list_cards', 'card', 'memory', 'propose_change', 'proposal_status', 'remember', 'save_draft', 'read_draft', 'submit_draft', 'start_session', 'continue_proposal', 'add_evidence', 'draft_pictures', 'compare_app', 'job_start', 'job_status', 'job_hand_in', 'job_verdict'];
+export const HUB_TOOLS = ['overview', 'list_cards', 'card', 'memory', 'propose_change', 'proposal_status', 'remember', 'save_draft', 'read_draft', 'submit_draft', 'start_session', 'continue_proposal', 'open_session', 'add_evidence', 'draft_pictures', 'compare_app', 'job_start', 'job_status', 'job_hand_in', 'job_verdict'];
 const TOOL_NAME = /^[a-z][a-z0-9_]{0,47}$/;
 const NAME = /^[a-z][a-z0-9-]{0,47}$/;
 

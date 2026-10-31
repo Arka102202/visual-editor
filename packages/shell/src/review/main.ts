@@ -254,6 +254,12 @@ function drawDetail(item: ReviewItem) {
       button('reject', 'Reject: drop it; nothing changes', undefined, { type: 'reject', id: item.id }),
       button('brush', 'Continue in a design session: keep changing it with Claude, live; when you’re done, the changes come back into this proposal', undefined, { type: 'session', id: item.id }),
     );
+  } else if (item.status === 'awaiting-checks') {
+    // Before its checks run: more changes in a design session (they come back into it, with new test cases).
+    const busy = item.plan?.state === 'writing' || item.plan?.state === 'running';
+    const session = button('brush', busy ? 'Its test cases are being written or run: wait for them to end, then continue it in a design session' : 'Continue in a design session: keep changing it with Claude, live; when you’re done, the changes come back into this proposal and new test cases are written for them', undefined, { type: 'session', id: item.id });
+    session.disabled = busy;
+    actions.append(session);
   } else if (item.status === 'sent-back' || item.status === 'held-back') {
     // Its checks again, as they are (e.g. after a check that was wrong has been fixed): no new test cases written.
     // While its checks run, nothing else can be done to it (for safety): the buttons say so.
