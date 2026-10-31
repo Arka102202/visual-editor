@@ -647,16 +647,20 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     vscode.commands.registerCommand('visualEditor.openAgents', () => agentsView.openPanel()),
     // A design session, about a component (from the Playground, or chosen here) or the whole app.
     // A design session: its kind first (a plugin's: new design, new page…), then what that kind needs; or just a session.
-    vscode.commands.registerCommand('visualEditor.startSession', async (arg?: { card?: string }) => {
+    // (Choices given, e.g. a kind and its name: only what's still missing is asked.)
+    vscode.commands.registerCommand('visualEditor.startSession', async (arg?: { card?: string; kind?: string; design?: string; name?: string; page?: string }) => {
       const state = current.get();
       if (!state) return void vscode.window.showInformationMessage('Open a project on the map first.');
       const given = arg?.card ? state.items.find((i) => i.id === arg.card) : undefined;
       const kinds = registry.sessionKinds().filter(({ plugin, kind }) => state.detected.some((d) => d.plugin.id === plugin.id) && (!given || kind.needs.card));
       const choices: (vscode.QuickPickItem & { sessionKind?: PluginSessionKind })[] = [...kinds.map(({ kind }) => ({ label: kind.title, detail: kind.summary, sessionKind: kind })), { label: 'Just a session', detail: 'No particular kind: tell Claude what you want.' }];
-      const which = await vscode.window.showQuickPick(
-        choices,
-        { title: given ? `Design session: ${given.label}` : 'Start a design session', placeHolder: 'What kind of session?' },
-      );
+      const named = arg?.kind ? choices.find((c) => c.sessionKind?.id === arg.kind) : undefined;
+      const which =
+        named ??
+        (await vscode.window.showQuickPick(
+          choices,
+          { title: given ? `Design session: ${given.label}` : 'Start a design session', placeHolder: 'What kind of session?' },
+        ));
       if (!which) return;
       const kind = which.sessionKind;
       let card = given;
@@ -669,20 +673,20 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
         if (!pick) return;
         card = pick.item;
       }
-      let design: string | undefined;
-      if (kind?.needs.design && card?.preview) {
+      let design: string | undefined = arg?.design;
+      if (!design && kind?.needs.design && card?.preview) {
         const pick = await vscode.window.showQuickPick(card.preview.variants.map((v) => ({ label: v.name, description: v.inUse ? 'in use' : '', id: v.id })), { title: `${which.label}: ${card.label}`, placeHolder: 'Which design?' });
         if (!pick) return;
         design = pick.id;
       }
-      let name: string | undefined;
-      if (kind?.needs.name) {
+      let name: string | undefined = arg?.name;
+      if (!name && kind?.needs.name) {
         name = await vscode.window.showInputBox({ title: which.label, prompt: kind.needs.name, validateInput: (v) => (/^[A-Z][A-Za-z0-9]*$/.test(v.trim()) ? undefined : 'A name like ProjectBadge: letters and digits, starting with a capital.') });
         if (!name) return;
         name = name.trim();
       }
-      let page: string | undefined;
-      if (kind?.needs.page) {
+      let page: string | undefined = arg?.page;
+      if (!page && kind?.needs.page) {
         const suggested = name ? `/${name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase()}` : '/';
         page = await vscode.window.showInputBox({ title: which.label, prompt: 'Its address in the app, e.g. /billing', value: suggested, validateInput: (v) => (/^\/[\w\-/:]*$/.test(v.trim()) ? undefined : 'An address starting with /, like /billing.') });
         if (!page) return;
@@ -691,6 +695,7 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
       const chosen = { ...(card ? { card } : {}), ...(design ? { design } : {}), ...(name ? { name } : {}), ...(page ? { page } : {}) };
       const draft = sessions.start(state.project.root, card, undefined, kind ? { id: kind.id, title: kind.title, brief: kind.brief(chosen), ...(name ? { name } : {}), ...(page ? { page } : {}), ...(design ? { design } : {}) } : undefined);
       void vscode.window.showInformationMessage(`${draft.title}: started. Tell Claude in your Claude Code chat what you want; each change shows in the session by itself.`);
+      return draft.id;
     }),
     // Hints on the map closed for this project ("Not now") show again.
     vscode.commands.registerCommand('visualEditor.showClosedHints', async () => {

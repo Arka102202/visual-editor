@@ -104,7 +104,14 @@ function showPop(row: HTMLElement, e: AgentsEntry) {
 /** Entries whose description is open under their row (a click opens or closes it). */
 const open = new Set<string>();
 let last: ToAgents | undefined;
-const hidePop = () => (pop.hidden = true);
+/** The pop-over waits for the mouse to rest on a row (about a second), so passing over the list doesn't flash it. */
+const POP_DELAY_MS = 900;
+let popTimer: ReturnType<typeof setTimeout> | undefined;
+const hidePop = () => {
+  clearTimeout(popTimer);
+  popTimer = undefined;
+  pop.hidden = true;
+};
 addEventListener('scroll', hidePop, true);
 document.addEventListener('mouseleave', hidePop);
 
@@ -149,7 +156,10 @@ function draw(m: ToAgents) {
         row.lastElementChild!.append(bg, term);
       }
       row.setAttribute('aria-expanded', String(open.has(e.title)));
-      row.addEventListener('mouseenter', () => showPop(row, e));
+      row.addEventListener('mouseenter', () => {
+        clearTimeout(popTimer);
+        popTimer = setTimeout(() => showPop(row, e), POP_DELAY_MS);
+      });
       row.addEventListener('mouseleave', hidePop);
       // A click (or Enter) opens its description under it, at any size of the section.
       const toggle = (ev: Event) => {
@@ -161,15 +171,16 @@ function draw(m: ToAgents) {
       row.addEventListener('click', toggle);
       row.addEventListener('keydown', (ev) => (ev.key === 'Enter' || ev.key === ' ') && toggle(ev));
       document.body.append(row);
-      // A run from a button: what it's doing now.
-      if (e.job?.running && e.job.progress) document.body.append(el('div', 'progress', e.job.progress));
-      // Its last results: how each ended; a click opens what happened and the proof.
-      for (const r of e.recent ?? []) document.body.append(...drawResult(r));
+      // What it is, right under its name (above its jobs, however many there are).
       if (open.has(e.title)) {
         const about = el('div', `about ${e.kind}`);
         about.append(...aboutOf(e));
         document.body.append(about);
       }
+      // A run from a button: what it's doing now.
+      if (e.job?.running && e.job.progress) document.body.append(el('div', 'progress', e.job.progress));
+      // Its last results: how each ended; a click opens what happened and the proof.
+      for (const r of e.recent ?? []) document.body.append(...drawResult(r));
     }
   }
 }
