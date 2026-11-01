@@ -178,17 +178,26 @@ export class MapView {
       this.lineBoxes.push({ link: l, x0: Math.min(x1, x2, x1 + bend, x2 - bend), y0: Math.min(y1, y2), x1: Math.max(x1, x2, x1 + bend, x2 - bend), y1: Math.max(y1, y2) });
     }
     if (this.selected && !this.placedById.has(this.selected)) this.selected = undefined;
-    this.select(this.selected);
+    this.select(this.selected, true);
+  }
+
+  /** A story's cards (Story view): they stay lit and the others step back, until another card is chosen. */
+  private path: Set<string> | undefined;
+
+  showPath(ids: string[] | undefined) {
+    this.path = ids?.length ? new Set(ids) : undefined;
+    this.select(this.selected, true);
   }
 
   /** Highlights a card (or none) and its lines; the cards it has no line to step back. */
-  select(id: string | undefined) {
+  select(id: string | undefined, keepPath = false) {
+    if (!keepPath) this.path = undefined;
     if (this.selected) this.cardEls.get(this.selected)?.classList.remove('selected');
     this.selected = id;
     if (id) this.cardEls.get(id)?.classList.add('selected');
     const near = this.nearSet();
     for (const [cid, card] of this.cardEls) card.classList.toggle('near', near.has(cid));
-    this.world.classList.toggle('picked', !!id);
+    this.world.classList.toggle('picked', !!id || !!this.path);
     this.paintVersion++;
     this.applyView();
   }
@@ -273,6 +282,7 @@ export class MapView {
 
   /** The chosen card and the cards it has a line to. */
   private nearSet(): Set<string> {
+    if (this.path) return new Set([...this.path, ...(this.selected ? [this.selected] : [])]);
     if (!this.selected) return new Set();
     return new Set([this.selected, ...(this.linksOf.get(this.selected) ?? []).flatMap((l) => [l.from, l.to])]);
   }

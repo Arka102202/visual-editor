@@ -2,7 +2,7 @@
 // and when another project is chosen.
 
 import * as vscode from 'vscode';
-import type { Item, MapDefinition, PluginNudge, ProposedChange } from '@visual-editor/contract';
+import type { Item, MapDefinition, PluginNudge, ProposedChange, Story } from '@visual-editor/contract';
 import { webviewPage } from './webviewPage';
 import { isAbsolute, join } from 'node:path';
 import { cardMarks, type OutsideChanges } from './changes';
@@ -334,6 +334,21 @@ export class MapPanel {
       summarizing: !!this.summaries?.writing(root, item.id),
       canSummarize: !!this.summaries && !!item.source,
     } satisfies ToMap);
+    void this.sendStories(item);
+  }
+
+  /** The chosen card's stories (Story view), from its plugin: read from its code, after its drawer shows. */
+  private async sendStories(item: Item) {
+    const state = this.current.get();
+    const plugin = state?.detected.find(({ plugin: p }) => item.id.startsWith(`${p.id}:`))?.plugin;
+    if (!state || !plugin?.stories) return;
+    let stories: Story[] = [];
+    try {
+      stories = await plugin.stories(item, state.project);
+    } catch {
+      // (A plugin's mistake: no stories shown.)
+    }
+    if (this.card === item.id) void this.panel?.webview.postMessage({ type: 'stories', id: item.id, stories } satisfies ToMap);
   }
 
   /** Cards' summaries ("What it does"), given once they exist. */
