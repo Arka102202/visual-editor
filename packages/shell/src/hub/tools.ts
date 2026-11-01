@@ -5,14 +5,14 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { relative, sep } from 'node:path';
 import { z } from 'zod';
-import type { Item, Plugin, PluginAgent, PluginTool, ToolAnswer, ToolInput } from '@visual-editor/contract';
+import type { FieldTrail, Impact, Item, Link, Plugin, PluginAgent, PluginTool, ToolAnswer, ToolInput } from '@visual-editor/contract';
 import { forCard, rulesText, type MemoryEntry } from '../memory';
 import type { ProjectState } from '../projectIndex';
 import { holdsBack, LOOKS_SAME, newId, parseProposal, safePath, type Evidence, type FileChange, type Proposal } from '../proposals';
 import { applyEdits, BUILT_IN_CHECKS, choicesText, progressOf, type AvailableCheck, type CheckPlan, type PlanEdits } from './checkPlan';
 import { sessionWords as sessionText, type OpenSession } from './claudeLock';
 import { draftView, type Draft, type ProgressItem } from '../drafts';
-import { current, JOB_MINUTES, newJob, nextStep, type Job } from '../jobs';
+import { current, JOB_MINUTES, newJob, nextStep, stopped, type Job } from '../jobs';
 import { logicText, type LogicVerdict } from './logicCheck';
 
 export const SERVER_NAME = 'visual-editor';
@@ -37,6 +37,8 @@ export interface HubHost {
   saveDraft(root: string, d: Draft): void;
   jobs(root: string): Job[];
   saveJob(root: string, j: Job): void;
+  /** Why an agent can't start in a project yet (it needs setting up first), in plain words; undefined: it can. */
+  blocked?(root: string, agent: string): string | undefined;
   /** Every plugin's agents (registry.agents()). */
   agents(): { plugin: Plugin; agent: PluginAgent }[];
   /**
@@ -46,6 +48,8 @@ export interface HubHost {
   pictures?(root: string, draft: Draft, card: string): Promise<DraftPicture | string>;
   /** The cards that can be previewed which a draft changes (their ids), as it would leave the project. */
   cardsTouched?(root: string, draft: Draft): Promise<string[]>;
+  /** The project's cards and lines as a draft would leave it (plugin tools given the draft see these). */
+  draftCards?(root: string, draft: Draft): Promise<{ items: Item[]; links: Link[] }>;
   /**
    * A page of the app (`path`, e.g. "/") pictured from the real files and from the draft's own app, and compared: the
    * pictures (absolute paths; `diff` has what differs in red) and how much differs. A string says why it can't.
@@ -71,6 +75,10 @@ export interface HubHost {
   sessionKinds?(root: string): { id: string; title: string; summary: string; needs: { card?: string; design?: boolean; name?: string; page?: boolean } }[];
   /** Continues a waiting (or sent-back, held-back) proposal in a design session; its draft, or why it couldn't. */
   continueProposal?(root: string, id: string): { draft: string } | string;
+  /** A card's fields, or where one comes from and is shown (its plugin's Follow a field); undefined: it can't tell. */
+  fields?(root: string, item: Item, field?: string): Promise<FieldTrail | undefined>;
+  /** What depends on a card, or one of its props (its plugin's Impact); undefined when its plugin can't tell. */
+  impact?(root: string, item: Item, prop?: string): Promise<Impact | undefined>;
   /** A card's summary ("what it does"), if one was written: its text, when, and whether its code changed since. */
   summary?(root: string, item: Item): { text: string; at: string; stale: boolean } | undefined;
   /** Whether a session's tab is open in the developer's editor (only then is it worked in). */
@@ -219,6 +227,48 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       const lines = found.slice(from, from + PER_PAGE).map((i) => `${i.id} · ${i.kind} · ${i.label}${i.source ? ` · ${i.source.path}${i.source.line ? `:${i.source.line}` : ''}` : ''}`);
       const where = pages > 1 ? `, page ${Math.min(page, pages)} of ${pages} (${from + 1}–${from + lines.length})${page < pages ? '. Narrow it with search, kind or map, or ask for the next page' : ''}` : '';
       return reply(`${found.length} card(s)${where}:\n${lines.join('\n')}`);
+    },
+  );
+
+  server.registerTool(
+    'follow_field',
+    {
+      title: 'Where a value comes from and where it is shown',
+      description:
+        'Follows a value a component is given (a prop, or a part of one, like project.name): where it comes from, way by way from where it starts (saved data, a server, state, a hook, a store, a constant…) down to the component, and every place it is shown (as text, an attribute, a look), passed to a child (followed into it) or used in code. Without field: the fields one can follow on that card. Use it to find where data comes from or where it shows, instead of searching files.',
+      inputSchema: { id: z.string().describe('The card id, from list_cards'), field: z.string().optional().describe('A prop, or a part of one: project.name'), project: projectArg },
+      annotations: readOnly,
+    },
+    async ({ id, field, project }) => {
+      const s = await pick(project);
+      if (typeof s === 'string') return fail(s);
+      const item = s.items.find((i) => i.id === id);
+      if (!item) return fail(`No card "${id}" in ${s.project.name}. Use list_cards to find it.`);
+      const trail = host.fields ? await host.fields(s.project.root, item, field) : undefined;
+      if (!trail) return fail(`Visual Editor can't follow ${item.label}'s fields (its plugin doesn't say).`);
+      if (!field) return reply(trail.fields.length ? `Fields of ${item.label} one can follow: ${trail.fields.join(', ')}.` : `${item.label} is given nothing to follow.`);
+      return reply(fieldText(item.label, trail));
+    },
+  );
+
+  server.registerTool(
+    'impact',
+    {
+      title: 'What changing a card affects',
+      description:
+        'What depends on a card, near and far, each with why: who renders it and what they pass, the pages it is seen on, what shares its data (the same store, API call, saved data or hook). With prop: every place that passes that prop (and what), the ones that leave it out, the ones that can\'t be told (a spread), and what renaming, removing or requiring it would mean. Use it before changing a component or one of its props, instead of searching files.',
+      inputSchema: { id: z.string().describe('The card id, from list_cards'), prop: z.string().optional().describe('One of its props, to see every place that passes it'), project: projectArg },
+      annotations: readOnly,
+    },
+    async ({ id, prop, project }) => {
+      const s = await pick(project);
+      if (typeof s === 'string') return fail(s);
+      const item = s.items.find((i) => i.id === id);
+      if (!item) return fail(`No card "${id}" in ${s.project.name}. Use list_cards to find it.`);
+      const imp = host.impact ? await host.impact(s.project.root, item, prop) : undefined;
+      if (!imp) return fail(`Visual Editor can't tell what depends on ${item.label} (its plugin doesn't say).`);
+      if (prop && !imp.props.includes(prop)) return fail(`${item.label} has no prop "${prop}". Its props: ${imp.props.join(', ') || 'none'}.`);
+      return reply(impactText(item.label, imp));
     },
   );
 
@@ -387,6 +437,32 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
   );
 
   const { picture, runTool, requestChecks, compare, lookMustStay, stale } = draftFlow(host);
+
+  /**
+   * A call that may take longer than an assistant waits (its tools give up after a minute, and a big project's app or
+   * TypeScript can take longer): it answers within checkWaitMs, else says it goes on in the background. The same call
+   * again gets its answer, without starting it twice. `key`: "tool#root#draft@version#what was asked".
+   */
+  const patiently = async (key: string, work: () => Promise<SlowAnswer>) => {
+    let run = SLOW.get(key);
+    if (!run) {
+      const started: SlowRun = { started: Date.now(), promise: work().catch((e: unknown): SlowAnswer => ({ text: `It stopped with an error: ${e instanceof Error ? e.message : e}`, error: true })) };
+      SLOW.set(key, started);
+      void started.promise.then(() => {
+        started.done = true;
+        const forget: ReturnType<typeof setTimeout> = setTimeout(() => SLOW.get(key) === started && SLOW.delete(key), KEEP_ANSWER_MS);
+        forget.unref?.();
+      });
+      run = started;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const answer = await Promise.race([run.promise, new Promise<undefined>((done) => (timer = setTimeout(() => done(undefined), host.checkWaitMs ?? CHECK_WAIT_MS)))]);
+    clearTimeout(timer);
+    const tool = key.split('#')[0];
+    if (!answer) return reply(`Still running (started ${Math.round((Date.now() - run.started) / 1000)} s ago): ${tool} takes a while on this project, so it goes on in the background. Call ${tool} again with the same input in a minute to get its answer (it won't start again). Don't decide anything from it before then.`);
+    if (SLOW.get(key) === run) SLOW.delete(key);
+    return answer.error ? fail(answer.text) : reply(answer.text);
+  };
   const sentForChecks = (id: string) =>
     `Sent. Visual Editor's check planner is writing its test cases; the developer looks at them and presses Run, then it reaches Review (or comes back with what to fix). Nothing to wait for and don't send it again: call proposal_status with id "${id}" later to see where it is.`;
   const sessionWords = (open: OpenSession) => sessionText(open).replace(/^Visual Editor: /, '');
@@ -632,9 +708,11 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       const d = host.drafts(root).find((x) => x.id === draft);
       if (!d) return fail(`No draft "${draft}" in ${s.project.name}.`);
       if (d.status === 'submitted') return fail(`Draft ${d.id} is already in Review.`);
-      const p = await picture(root, d, card);
-      if (typeof p === 'string') return fail(p);
-      return reply(`Picture of ${p.card}'s Playground in draft ${d.id} (version ${d.revision}): ${p.image}\nOpen it with your Read tool to look at it. ${p.text}\nIt is kept with the draft as proof.`);
+      return patiently(`draft_pictures#${draftKey(root, d)}#${card}`, async () => {
+        const p = await picture(root, d, card);
+        if (typeof p === 'string') return { text: p, error: true };
+        return { text: `Picture of ${p.card}'s Playground in draft ${d.id} (version ${d.revision}): ${p.image}\nOpen it with your Read tool to look at it. ${p.text}\nIt is kept with the draft as proof.` };
+      });
     },
   );
 
@@ -659,9 +737,11 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       if (d.status === 'submitted') return fail(`Draft ${d.id} is already in Review.`);
       if (!host.compareApp) return fail('The app can’t be compared here.');
       const page = path.startsWith('/') ? path : `/${path}`;
-      const r = await compare(root, d, page, lookMustStay(root, d));
-      if (typeof r === 'string') return fail(r);
-      return reply(`${r.text}\nBefore: ${r.before}\nAfter: ${r.after}\nDifference: ${r.diff}\n${r.passed ? 'PASSED' : 'PROBLEMS'}`);
+      return patiently(`compare_app#${draftKey(root, d)}#${page}`, async () => {
+        const r = await compare(root, d, page, lookMustStay(root, d));
+        if (typeof r === 'string') return { text: r, error: true };
+        return { text: `${r.text}\nBefore: ${r.before}\nAfter: ${r.after}\nDifference: ${r.diff}\n${r.passed ? 'PASSED' : 'PROBLEMS'}` };
+      });
     },
   );
 
@@ -691,6 +771,8 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       const found = host.agents().find((a) => a.agent.name === agent);
       if (!found) return fail(`No agent "${agent}". Agents: ${host.agents().map((a) => a.agent.name).join(', ') || 'none'}.`);
       if (!s.detected.some((d) => d.plugin.id === found.plugin.id)) return fail(`${s.project.name} isn't a ${found.plugin.name} project, so ${found.agent.title} can't work on it.`);
+      const blocked = host.blocked?.(s.project.root, agent);
+      if (blocked) return fail(`${found.agent.title} can't start now. ${blocked} Tell the developer.`);
       const j = newJob(found.agent, request, client, newId());
       host.saveJob(s.project.root, j);
       return reply(`Job ${j.id} started (${j.title}; at most ${j.rounds} round${j.rounds === 1 ? '' : 's'}, ${JOB_MINUTES} minutes; ${roleNames(agent)}).\nNext: ${nextStep(j)} Give it the job id ${j.id} and the request.`);
@@ -769,7 +851,17 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       if (j.status !== 'checking') return fail(`${j.title} isn't waiting for the checker (it's ${j.status}). ${nextStep(j)}`);
       const d = j.draft ? host.drafts(root).find((x) => x.id === j.draft) : undefined;
       if (!d) return fail(`The job's draft (${j.draft}) is gone.`);
+      const busy = stillRunning(root, d);
+      if (busy.length) return fail(`Not yet: ${busy.join(', ')} on this version is still running. Call it again with the same input for its answer, then give your verdict.`);
       const at = new Date().toISOString();
+      // Visual Editor's own tools failed on this version, and the draft failed nothing: the worker can't fix that, so
+      // the job stops for the developer instead of going round again (Resume carries on once it's fixed).
+      const ours = TROUBLE.get(draftKey(root, d)) ?? [];
+      if (!passed && ours.length && !d.evidence.some((e) => e.revision === d.revision && e.passed === false)) {
+        const said = reasons?.trim() ? ` The checker said: ${reasons.trim()}` : '';
+        host.saveJob(root, stopped(j, `Stopped instead of sending it back: Visual Editor's own tools failed on this version of the draft (${ours.join('; ')}). That isn't the worker's to fix. Resume carries on once it's fixed.${said}`, 'Visual Editor'));
+        return reply(`Not sent back: Visual Editor's own tools failed on this version (${ours.join('; ')}), which the worker can't fix, so the job stopped for the developer. End your answer now, saying what couldn't be checked.`);
+      }
       if (!passed) {
         if (!reasons?.trim()) return fail('Say what is wrong and how to fix it (reasons), so the worker can fix it.');
         const round = j.round + 1;
@@ -803,12 +895,14 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       const root = s.project.root;
       const draft = draftId ? host.drafts(root).find((d) => d.id === draftId) : undefined;
       if (draftId && !draft) return fail(`No draft "${draftId}" in ${s.project.name}.`);
-      try {
-        const answer = await runTool(s, tool, input, draft);
-        return typeof answer === 'string' ? reply(answer) : fail(answer.problem);
-      } catch (e) {
-        return fail(`${tool.name} stopped with an error (a bug in the ${plugin.name} plugin): ${e instanceof Error ? e.message : e}`);
-      }
+      return patiently(`${tool.name}#${draft ? draftKey(root, draft) : root}#${JSON.stringify(input)}`, async () => {
+        try {
+          const answer = await runTool(s, tool, input, draft);
+          return typeof answer === 'string' ? { text: answer } : { text: answer.problem, error: true };
+        } catch (e) {
+          return { text: `${tool.name} stopped with an error (a bug in the ${plugin.name} plugin): ${e instanceof Error ? e.message : e}`, error: true };
+        }
+      });
     });
   }
 
@@ -851,6 +945,39 @@ type Finished = { proposal: Proposal; evidence: Evidence[] } | string;
 const RUNNING = new Map<string, Promise<Finished>>();
 /** Test cases being written now, by project and draft. */
 const RUNNING_PLANS = new Map<string, Promise<CheckPlan | string>>();
+
+/**
+ * Calls that may take longer than an assistant waits (compare_app, pictures, plugin tools on a big project), by what
+ * was asked ("tool#root#draft@version#input"): running, or done and not picked up yet.
+ */
+const SLOW = new Map<string, SlowRun>();
+interface SlowRun {
+  promise: Promise<SlowAnswer>;
+  started: number;
+  done?: boolean;
+}
+interface SlowAnswer {
+  text: string;
+  error?: boolean;
+}
+/** How long an answer nobody picked up is kept. */
+const KEEP_ANSWER_MS = 10 * 60_000;
+const draftKey = (root: string, d: Pick<Draft, 'id' | 'revision'>) => `${root}#${d.id}@${d.revision}`;
+/** The slow calls on a draft's version still running (their tool names). */
+const stillRunning = (root: string, d: Draft) =>
+  [...new Set([...SLOW].filter(([k, r]) => !r.done && k.includes(`#${draftKey(root, d)}#`)).map(([k]) => k.split('#')[0]))];
+
+/**
+ * Visual Editor's own trouble with a draft's version, by draftKey: a tool that broke or couldn't do its job. That isn't
+ * the draft's fault, so the worker can't fix it (job_verdict stops the job for the developer instead).
+ */
+const TROUBLE = new Map<string, string[]>();
+function trouble(root: string, d: Pick<Draft, 'id' | 'revision'>, what: string) {
+  const key = draftKey(root, d);
+  const had = TROUBLE.get(key) ?? [];
+  if (!had.includes(what)) TROUBLE.set(key, [...had, what]);
+  if (TROUBLE.size > 200) TROUBLE.delete(TROUBLE.keys().next().value!);
+}
 /** A draft's check steps, as proposal_status and the session tab tell them. */
 export const PLAN_STEP = 'writing the test cases (the check planner reads the change)';
 export const WAITING = 'waiting for you to look at the test cases and run them';
@@ -1113,9 +1240,12 @@ export function draftFlow(host: HubHost) {
     try {
       c = await host.compareApp(root, d, page);
     } catch (e) {
-      return `The app couldn't be compared: ${e instanceof Error ? e.message : e}`;
+      c = `The app couldn't be compared: ${e instanceof Error ? e.message : e}`;
     }
-    if (typeof c === 'string') return c;
+    if (typeof c === 'string') {
+      trouble(root, d, `compare_app ${page}: ${c}`);
+      return c;
+    }
     const share = c.total ? c.differing / c.total : 0;
     // The same: at most a few stray pixels apart (changing a word changes about a thousand), and the same size.
     const same = c.differing <= 25 && !c.sizes;
@@ -1137,7 +1267,9 @@ export function draftFlow(host: HubHost) {
     try {
       p = await host.pictures(root, d, card);
     } catch (e) {
-      return `The picture couldn't be taken: ${e instanceof Error ? e.message : e}`;
+      const why = `The picture couldn't be taken: ${e instanceof Error ? e.message : e}`;
+      trouble(root, d, `draft_pictures ${card}: ${why}`);
+      return why;
     }
     if (typeof p === 'string') return p;
     const image = relative(root, p.image).split(sep).join('/');
@@ -1160,13 +1292,23 @@ export function draftFlow(host: HubHost) {
     const root = s.project.root;
     const real = (path: string) => host.readFile(root, path);
     const view = draft ? draftView(s.project.files, draft, real) : undefined;
-    const answer = await tool.run(input, {
-      project: view ? { ...s.project, files: view.files } : s.project,
-      items: s.items,
-      links: s.links,
-      read: view?.read ?? real,
-      ...(draft ? { draft: { id: draft.id, title: draft.title, changes: draft.changes.map((c) => ({ path: c.path, after: c.after })) } } : {}),
-    });
+    let answer: ToolAnswer;
+    try {
+      // (With a draft, its own cards: a component it moves into a folder is found where the draft puts it.)
+      const cards = draft && host.draftCards ? await host.draftCards(root, draft) : s;
+      answer = await tool.run(input, {
+        project: view ? { ...s.project, files: view.files } : s.project,
+        items: cards.items,
+        links: cards.links,
+        read: view?.read ?? real,
+        ...(draft ? { draft: { id: draft.id, title: draft.title, changes: draft.changes.map((c) => ({ path: c.path, after: c.after })) } } : {}),
+      });
+    } catch (e) {
+      if (draft) trouble(root, draft, `${tool.name}: it broke (${e instanceof Error ? e.message : e})`);
+      throw e;
+    }
+    // (A check that answers with a problem couldn't do its job: that's Visual Editor's trouble, not the draft's.)
+    if (draft && tool.checks && typeof answer !== 'string') trouble(root, draft, `${tool.name}: ${answer.problem}`);
     // A check on a draft is kept with it as proof (the latest answer for the same question on the same version).
     if (draft && tool.checks && typeof answer === 'string') {
       const last = answer.trim().split('\n').pop() ?? '';
@@ -1248,4 +1390,23 @@ export function draftFlow(host: HubHost) {
   };
 
   return { provenOrWhy, holdBack, stale, submit, picture, addProof, runTool, finish, checkInBackground, lookMustStay, requestChecks, runChecks, compare, available };
+}
+
+/** What changing a card (or one of its props) affects, in words for Claude. */
+export function impactText(label: string, imp: Impact): string {
+  const line = (p: Impact['direct'][number]) => `- ${p.label}: ${p.why}${p.at ? ` (${p.at.path}:${p.at.line})` : ''}${p.unsure ? ' [can\'t be told for sure]' : ''}`;
+  return [
+    `If you change ${label}${imp.prop ? `'s prop "${imp.prop}"` : ''}:`,
+    ...(imp.verdict ? [imp.verdict] : []),
+    'Directly:',
+    ...imp.direct.map(line),
+    ...(imp.further.length ? ['Further away:', ...imp.further.map(line)] : []),
+    ...(!imp.prop && imp.props.length ? [`Its props: ${imp.props.join(', ')} (ask with prop for one).`] : []),
+  ].join('\n');
+}
+
+/** Where a field comes from and where it's shown, in words for Claude. */
+export function fieldText(label: string, trail: FieldTrail): string {
+  const line = (st: FieldTrail['shown'][number]) => (st.kind === 'branch' ? `${st.text}:` : `${'  '.repeat((st.depth ?? 0) + 1)}- ${st.kind === 'origin' ? 'Starts at ' : ''}${st.text}${st.at ? ` (${st.at.path}:${st.at.line})` : ''}`);
+  return [`${label}'s ${trail.field}`, 'Comes from:', ...trail.comesFrom.map(line), 'Shown:', ...(trail.shown.length ? trail.shown.map(line) : ['  - nowhere it can be told'])].join('\n');
 }

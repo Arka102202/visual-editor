@@ -2,7 +2,7 @@
 // and when another project is chosen.
 
 import * as vscode from 'vscode';
-import type { Item, MapDefinition, PluginNudge, ProposedChange, Story } from '@visual-editor/contract';
+import type { FieldTrail, Impact, Item, MapDefinition, PluginNudge, ProposedChange, Story } from '@visual-editor/contract';
 import { webviewPage } from './webviewPage';
 import { isAbsolute, join } from 'node:path';
 import { cardMarks, type OutsideChanges } from './changes';
@@ -220,6 +220,12 @@ export class MapPanel {
       if (state && item && plugin?.previewFix) this.proposeChange(state.project.root, plugin.previewFix(state.project, m.need), item.id);
     } else if (m.type === 'session') {
       void vscode.commands.executeCommand('visualEditor.startSession', { card: m.id });
+    } else if (m.type === 'field') {
+      const item = this.current.get()?.items.find((i) => i.id === m.id);
+      if (item) void this.sendField(item, m.field);
+    } else if (m.type === 'impact') {
+      const item = this.current.get()?.items.find((i) => i.id === m.id);
+      if (item) void this.sendImpact(item, m.prop);
     } else if (m.type === 'summarize') {
       const root = this.current.get()?.project.root;
       if (root) this.summaries?.write(root, [m.id]);
@@ -227,7 +233,8 @@ export class MapPanel {
       // Its agent, for this card: what it's for is said already, so nothing is asked.
       const item = this.current.get()?.items.find((i) => i.id === m.id);
       const nudge = item && this.cardNudges(item).find((n) => n.agent === m.agent);
-      if (item && nudge) void vscode.commands.executeCommand('visualEditor.runAgent', nudge.agent, undefined, `${nudge.title}: ${item.label}${item.source ? ` (${item.source.path})` : ''}`);
+      // (For this card: one job works on a card at a time.)
+      if (item && nudge) void vscode.commands.executeCommand<boolean>('visualEditor.runAgent', nudge.agent, undefined, `${nudge.title}: ${item.label}${item.source ? ` (${item.source.path})` : ''}`, item.id).then((started) => started && this.refreshCard());
     } else if (m.type === 'nudge') {
       const nudge = this.nudgesFor(this.current.get())?.find((n) => n.key === m.key);
       // Closed, or its agent started: it doesn't come back for this project.
@@ -335,6 +342,36 @@ export class MapPanel {
       canSummarize: !!this.summaries && !!item.source,
     } satisfies ToMap);
     void this.sendStories(item);
+    void this.sendImpact(item);
+    void this.sendField(item);
+  }
+
+  /** The card's fields, or where one comes from and is shown, from its plugin. */
+  private async sendField(item: Item, field?: string) {
+    const state = this.current.get();
+    const plugin = state?.detected.find(({ plugin: p }) => item.id.startsWith(`${p.id}:`))?.plugin;
+    if (!state || !plugin?.fields) return;
+    let trail: FieldTrail | undefined;
+    try {
+      trail = await plugin.fields(item, state.project, field);
+    } catch {
+      // (A plugin's mistake: nothing shown.)
+    }
+    if (trail && this.card === item.id) void this.panel?.webview.postMessage({ type: 'field', id: item.id, trail } satisfies ToMap);
+  }
+
+  /** What depends on a card (or one of its props), from its plugin. */
+  private async sendImpact(item: Item, prop?: string) {
+    const state = this.current.get();
+    const plugin = state?.detected.find(({ plugin: p }) => item.id.startsWith(`${p.id}:`))?.plugin;
+    if (!state || !plugin?.impact) return;
+    let impact: Impact | undefined;
+    try {
+      impact = await plugin.impact(item, state.project, prop);
+    } catch {
+      // (A plugin's mistake: nothing shown.)
+    }
+    if (impact && this.card === item.id) void this.panel?.webview.postMessage({ type: 'impact', id: item.id, impact } satisfies ToMap);
   }
 
   /** The chosen card's stories (Story view), from its plugin: read from its code, after its drawer shows. */
@@ -363,15 +400,23 @@ export class MapPanel {
     void this.sendCard();
   }
 
-  /** What the card's plugin suggests an agent could do for it (only agents it has). */
-  private cardNudges(item: Item): { text: string; agent: string; title: string }[] {
+  /** Why an agent can't start for a card now (its project needs setting up first, or a job is at work on the card). */
+  private agentWaits: ((root: string, agent: string, card: string) => string | undefined) | undefined;
+
+  setAgentWaits(fn: NonNullable<MapPanel['agentWaits']>) {
+    this.agentWaits = fn;
+  }
+
+  /** What the card's plugin suggests an agent could do for it (only agents it has), and why one must wait. */
+  private cardNudges(item: Item): { text: string; agent: string; title: string; waits?: string }[] {
     const state = this.current.get();
     const plugin = state?.detected.find(({ plugin: p }) => item.id.startsWith(`${p.id}:`))?.plugin;
     if (!state || !plugin?.cardNudges) return [];
     try {
       return plugin.cardNudges(item, state.project).flatMap((n) => {
         const agent = plugin.agents?.find((a) => a.name === n.agent);
-        return agent ? [{ text: n.text, agent: agent.name, title: agent.title }] : [];
+        const waits = agent && this.agentWaits?.(state.project.root, agent.name, item.id);
+        return agent ? [{ text: n.text, agent: agent.name, title: agent.title, ...(waits ? { waits } : {}) }] : [];
       });
     } catch {
       return [];

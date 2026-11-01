@@ -1,10 +1,11 @@
 // The "Agents" section in Visual Editor's side panel (a small page: agentsPanel/main.ts): what each plugin gives
 // assistants, as coloured badges (Agent, Skill, Tool) with a pop-over in plain words, whether Claude Code has them for
-// this folder, and each agent's job (working now, with Stop, or how the last one ended).
+// this folder, and each agent's jobs: each at work (or waiting its turn) its own row with Watch and Stop, then how the
+// last ones ended (a stopped one with Resume).
 
 import * as vscode from 'vscode';
-import type { Disposable } from '@visual-editor/contract';
-import type { AgentsEntry, FromAgents, JobResult, ToAgents } from '../agentsMessages';
+import type { Disposable, Plugin, PluginAgent } from '@visual-editor/contract';
+import type { AgentsEntry, FromAgents, JobResult, LiveJob, ToAgents } from '../agentsMessages';
 import type { Evidence, Proposal } from '../proposals';
 
 /** How many of an agent's finished jobs the section shows. */
@@ -13,7 +14,7 @@ const IN_REVIEW: Record<Proposal['status'], string> = { 'awaiting-checks': 'its 
 import type { PluginRegistry } from '../registry';
 import { webviewPage } from '../webviewPage';
 import type { Hub } from './hub';
-import { finished, type Job } from '../jobs';
+import { finished, resumable, type Job } from '../jobs';
 import { HUB_TOOLS } from '../registry';
 
 /** Visual Editor's own tools, in plain words (title, what it does), as the section lists them. */
@@ -21,6 +22,8 @@ const HUB_TOOL_WORDS: Record<string, [string, string]> = {
   overview: ['The project at a glance', 'What the project is: its plugins, maps, how many cards, and its rules.'],
   list_cards: ['Find cards on the map', 'Finds components, pages and API calls on the map by name.'],
   card: ['Everything about one card', 'One card: what it takes, what uses it, what it uses, its notes.'],
+  follow_field: ['Where a value comes from and is shown', 'Follows a value a component is given (project.name): where it starts, how it gets there, and every place it’s shown.'],
+  impact: ['What changing a card affects', 'Who uses a component and what they pass, the pages it’s seen on, what shares its data; for one prop, every place that passes it.'],
   memory: ['Rules, decisions and notes', 'Reads the project’s rules, decisions and notes, so Claude follows them.'],
   remember: ['Remember something', 'Adds a rule, decision or note to Memory, signed by Claude.'],
   propose_change: ['Propose a change', 'Sends a change to Review: its test cases are written, you run them, and nothing changes until you approve.'],
@@ -65,8 +68,12 @@ export class AgentsView implements vscode.WebviewViewProvider, vscode.Disposable
     private readonly progress: (job: string) => string | undefined = () => undefined,
     /** The open project's proposal by id (a passed job's, for its proof). */
     private readonly proposal: (id: string) => Proposal | undefined = () => undefined,
-    /** Shows a running job as it works (its log or terminal), and a proposal in Review. */
-    private readonly actions: { watch(job: string): void; review(proposal: string): void } = { watch: () => {}, review: () => {} },
+    /** Shows a running job as it works (its log or terminal), a proposal in Review, and resumes a stopped job. */
+    private readonly actions: { watch(job: string): void; review(proposal: string): void; resume?(job: string): void } = { watch: () => {}, review: () => {} },
+    /** Why an agent can't be started now (its plugin's project needs setting up first). */
+    private readonly blocked: (plugin: Plugin, agent: PluginAgent) => string | undefined = () => undefined,
+    /** Why an agent has nothing to do in the open project (what it makes is there already). */
+    private readonly done: (agent: PluginAgent) => string | undefined = () => undefined,
   ) {
     this.off = [registry.onChange(() => this.refresh()), hub.onChange(() => this.refresh())];
   }
@@ -98,6 +105,7 @@ export class AgentsView implements vscode.WebviewViewProvider, vscode.Disposable
       else if (m.type === 'connect') void vscode.commands.executeCommand('visualEditor.connectAssistant');
       else if (m.type === 'addAgents') void vscode.commands.executeCommand('visualEditor.addAgents');
       else if (m.type === 'stop') this.stop(m.job);
+      else if (m.type === 'resume') this.actions.resume?.(m.job);
       else if (m.type === 'run') void vscode.commands.executeCommand('visualEditor.runAgent', m.agent, m.way);
       else if (m.type === 'watch') this.actions.watch(m.job);
       else if (m.type === 'review') this.actions.review(m.proposal);
@@ -120,16 +128,22 @@ export class AgentsView implements vscode.WebviewViewProvider, vscode.Disposable
     for (const p of this.registry.list()) {
       const items: AgentsEntry[] = [
         ...(p.agents ?? []).map((a): AgentsEntry => {
-          const job = jobs.find((j) => j.agent === a.name);
-          const progress = job && this.progress(job.id);
+          const live = jobs.filter((j) => j.agent === a.name && !finished(j)).map((j): LiveJob => {
+            const progress = this.progress(j.id);
+            return { id: j.id, status: j.status, round: j.round, rounds: j.rounds, request: j.request, by: j.by, ...(progress ? { progress } : {}) };
+          });
           const recent = jobs.filter((j) => j.agent === a.name && finished(j)).slice(0, RECENT).map((j) => this.result(j));
+          const done = this.done(a);
+          const blocked = done ? undefined : this.blocked(p, a);
           return {
             kind: 'agent',
             name: a.name,
             title: a.title,
             summary: a.summary ?? a.description,
             claudeName: `visual-editor:${a.name}`,
-            ...(job ? { job: { id: job.id, status: job.status, round: job.round, rounds: job.rounds, request: job.request, running: !finished(job), by: job.by, ...(progress ? { progress } : {}) } } : {}),
+            ...(live.length ? { jobs: live } : {}),
+            ...(blocked ? { blocked } : {}),
+            ...(done ? { done } : {}),
             ...(recent.length ? { recent } : {}),
           };
         }),
@@ -164,6 +178,7 @@ export class AgentsView implements vscode.WebviewViewProvider, vscode.Disposable
       ...(j.proposal ? { proposal: j.proposal } : {}),
       ...(p ? { inReview: IN_REVIEW[p.status] } : {}),
       ...(p?.evidence ? { proof: p.evidence.map((e) => ({ mark: mark(e), title: e.title })) } : {}),
+      ...(resumable(j) ? { resumable: true } : {}),
     };
   }
 

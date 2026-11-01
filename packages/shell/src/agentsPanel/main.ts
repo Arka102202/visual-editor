@@ -1,7 +1,8 @@
 // The Agents section in Visual Editor's side panel: what each plugin gives Claude, as coloured badges (Agent, Skill,
-// Tool), each with a pop-over in plain words; an agent at work shows its round and a Stop button. Plain DOM.
+// Tool), each with a pop-over in plain words. Under an agent, each of its jobs at work (or waiting its turn) is its own
+// row with Watch and Stop; then how the last ones ended, a stopped one with Resume. Plain DOM.
 
-import type { AgentsEntry, FromAgents, JobResult, ToAgents } from '../agentsMessages';
+import type { AgentsEntry, FromAgents, JobResult, LiveJob, ToAgents } from '../agentsMessages';
 import { addStyles, ago, el } from '../ui/dom';
 import { iconButton, installTips, tray } from '../ui/buttons';
 
@@ -50,10 +51,15 @@ addStyles(`
   .resultbox .steps { margin: 0 0 6px; padding-left: 18px; }
   .resultbox .steps li { margin-bottom: 3px; }
   .resultbox .proof { margin-bottom: 6px; opacity: .9; }
-  .progress { margin: -2px 12px 4px 20px; padding-left: 8px; font-size: 11px; opacity: .75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .progress { margin: 0 12px 3px 30px; padding-left: 13px; font-size: 11px; opacity: .75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .progress::before { content: '↳ '; }
-  .working { flex: none; font-size: 11px; color: var(--vscode-charts-yellow, #cca700); white-space: nowrap; }
-  .working::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: currentColor; animation: pulse 1.2s ease-in-out infinite; }
+  .working, .waiting { flex: none; align-self: center; width: 7px; height: 7px; border-radius: 50%; }
+  .working { background: var(--vscode-charts-yellow, #cca700); animation: pulse 1.2s ease-in-out infinite; }
+  .waiting { border: 1px solid currentColor; opacity: .6; box-sizing: border-box; }
+  .result.live { cursor: default; align-items: center; }
+  .result .buttons { flex: none; display: flex; gap: 2px; }
+  .result .buttons button { padding: 0 3px; }
+  .buttons button.off { opacity: .4; }
   @keyframes pulse { 50% { opacity: .25; } }
   .row { cursor: pointer; }
   .about { margin: 0 12px 6px 20px; padding: 6px 8px; border-left: 2px solid var(--c, #888); background: color-mix(in srgb, var(--c, #888) 8%, transparent); line-height: 1.45; font-size: 12px; }
@@ -90,8 +96,9 @@ function aboutOf(e: AgentsEntry): HTMLElement[] {
     parts.append(el('code', undefined, `${e.name}-worker`), document.createTextNode(' makes the change, then '), el('code', undefined, `${e.name}-checker`), document.createTextNode(' checks it.'));
     out.push(parts);
   }
-  if (e.job?.running) out.push(el('p', 'ask', `Working now (round ${e.job.round} of ${e.job.rounds}) on: “${e.job.request}”`));
-  else if (e.job) out.push(el('p', 'ask', `Last job (${e.job.status}): “${e.job.request}”`));
+  if (e.blocked) out.push(el('p', 'ask', e.blocked));
+  if (e.done) out.push(el('p', 'ask', e.done));
+  if (e.jobs?.length) out.push(el('p', 'ask', `${e.jobs.length === 1 ? 'One job' : `${e.jobs.length} jobs`} at work now (or waiting their turn): each is its own row under it, with Watch and Stop.`));
   if (e.kind === 'agent') {
     const ask = el('p', 'ask', 'To use it, ask Claude: ');
     ask.append(el('code', undefined, `use the ${e.title} agent: …`));
@@ -153,21 +160,14 @@ function draw(m: ToAgents) {
       const names = el('span', 'names');
       names.append(el('span', 'title', e.title), el('span', 'cname', e.kind === 'helper' ? 'runs by itself' : e.claudeName.replace(/^visual-editor:/, '')));
       row.append(el('span', `badge ${e.kind}`, KINDS[e.kind].label), names);
-      if (e.job?.running) {
-        row.append(el('span', 'working', `${e.job.status} · ${e.job.round}/${e.job.rounds}`));
-        const id = e.job.id;
-        const watch = iconButton('console', `Watch ${e.title} work: ${/terminal/.test(e.job.by) ? 'its terminal' : 'what it does and says, step by step'}`);
-        watch.addEventListener('click', () => vscode.postMessage({ type: 'watch', job: id }));
-        const stop = iconButton('stop', `Stop ${e.title}: it stops at its next step`);
-        stop.addEventListener('click', () => vscode.postMessage({ type: 'stop', job: id }));
-        row.append(tray(el('span', 'buttons')));
-        row.lastElementChild!.append(watch, stop);
-      } else if (e.kind === 'agent') {
-        // Run it: it asks what you want, then works in the background (or in a terminal you can watch and talk to).
+      if (e.kind === 'agent') {
+        // Run it (once more for each job: each is its own row): in the background, or in a terminal to watch and talk to.
+        // (Off when it has nothing to do here, or not yet, when the project needs setting up first: a click says so.)
         const name = e.name;
-        const bg = iconButton('play', `Run ${e.title} in the background: it asks what you want, then works quietly; the result comes to Review`);
+        const off = e.done ? `Nothing to do: ${e.done}` : e.blocked ? `Not yet: ${e.blocked}` : undefined;
+        const bg = iconButton('play', off ?? `Run ${e.title} in the background: it works quietly, as its own row here; the result comes to Review`, { cls: off ? 'off' : undefined });
         bg.addEventListener('click', () => vscode.postMessage({ type: 'run', agent: name, way: 'background' }));
-        const term = iconButton('terminal', `Run ${e.title} in a terminal: watch it work, and talk to it`);
+        const term = iconButton('terminal', off ?? `Run ${e.title} in a terminal: watch it work, and talk to it`, { cls: off ? 'off' : undefined });
         term.addEventListener('click', () => vscode.postMessage({ type: 'run', agent: name, way: 'terminal' }));
         row.append(tray(el('span', 'buttons')));
         row.lastElementChild!.append(bg, term);
@@ -194,12 +194,30 @@ function draw(m: ToAgents) {
         about.append(...aboutOf(e));
         document.body.append(about);
       }
-      // A run from a button: what it's doing now.
-      if (e.job?.running && e.job.progress) document.body.append(el('div', 'progress', e.job.progress));
+      // Each job at work, or waiting its turn: its own row, with what it's doing now.
+      for (const j of e.jobs ?? []) document.body.append(...drawLive(j, e.title));
       // Its last results: how each ended; a click opens what happened and the proof.
-      for (const r of e.recent ?? []) document.body.append(...drawResult(r));
+      for (const r of e.recent ?? []) document.body.append(...drawResult(r, e.done));
     }
   }
+}
+
+/** A job at work (or waiting its turn): what was asked, its round, Watch and Stop; under it, what it's doing now. */
+function drawLive(j: LiveJob, title: string): HTMLElement[] {
+  const waiting = j.status === 'waiting';
+  const line = el('div', 'result live');
+  line.append(el('span', waiting ? 'waiting' : 'working', ''), el('span', 'ask', j.request), el('span', 'when', waiting ? 'waiting' : `${j.status === 'checking' ? 'checking' : 'working'} · ${j.round}/${j.rounds}`));
+  const buttons = tray(el('span', 'buttons'));
+  if (!waiting) {
+    const watch = iconButton('console', `Watch it work: ${/terminal/.test(j.by) ? 'its terminal' : 'what it does and says, step by step'}`);
+    watch.addEventListener('click', () => vscode.postMessage({ type: 'watch', job: j.id }));
+    buttons.append(watch);
+  }
+  const stop = iconButton('stop', waiting ? `Stop it: it won’t start (Resume starts it later)` : `Stop this ${title} job only: it stops at its next step, and Resume carries on from there`);
+  stop.addEventListener('click', () => vscode.postMessage({ type: 'stop', job: j.id }));
+  buttons.append(stop);
+  line.append(buttons);
+  return j.progress ? [line, el('div', 'progress', j.progress)] : [line];
 }
 
 /** How a job ended: a mark and its colour. */
@@ -211,11 +229,21 @@ const ENDED: Record<string, { mark: string; cls: string; words: string }> = {
 };
 
 /** A finished job: one line (mark, what was asked, round, when), and, opened, its steps, proof and Review. */
-function drawResult(r: JobResult): HTMLElement[] {
+/** A finished job; `done`: its agent has nothing to do in the project now, so it isn't resumed (why). */
+function drawResult(r: JobResult, done?: string): HTMLElement[] {
   const ended = ENDED[r.status] ?? { mark: '•', cls: 'off', words: r.status };
   const line = el('div', 'result');
   line.tabIndex = 0;
   line.append(el('span', `mark ${ended.cls}`, ended.mark), el('span', 'ask', r.request), el('span', 'when', ago(r.at)));
+  if (r.resumable) {
+    const resume = iconButton('resume', done ? `Nothing to do: ${done}` : `Resume: it carries on from where it stopped (round ${r.round} of ${r.rounds})`, { cls: done ? 'off' : undefined });
+    resume.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      vscode.postMessage({ type: 'resume', job: r.id });
+    });
+    line.append(tray(el('span', 'buttons')));
+    line.lastElementChild!.append(resume);
+  }
   const key = `job ${r.id}`;
   const toggle = () => {
     if (open.has(key)) open.delete(key);

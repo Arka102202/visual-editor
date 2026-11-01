@@ -119,8 +119,10 @@ function canListen(port: number, host?: string): Promise<boolean> {
 }
 
 /** The first port from `from` that nothing listens on. */
-export async function freePort(from: number): Promise<number> {
+export async function freePort(from: number, taken: ReadonlySet<number> = new Set()): Promise<number> {
   for (let port = from; port < from + 200; port++) {
+    // (`taken`: ports handed out already but maybe not listened on yet: two apps starting at once.)
+    if (taken.has(port)) continue;
     if ((await canListen(port)) && (await canListen(port, '127.0.0.1')) && (await canListen(port, '::1'))) return port;
   }
   return from;

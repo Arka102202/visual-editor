@@ -25,6 +25,26 @@ test('draft items: plugins read the draft’s files over the real ones, told it 
   assert.deepEqual(items.map((i) => i.id), ['react:a.tsx', 'react:n.tsx']);
 });
 
+test('draft items: a draft is read once and kept; read again when the draft or the project changes', async () => {
+  let reads = 0;
+  const plugin: Plugin = {
+    id: 'react', name: 'React', version: '0', contract: CONTRACT_VERSION, detect: () => ({ reason: 'r' }),
+    readers: [{ id: 'r', wants: () => true, read: (files) => (reads++, { items: files.map((f) => ({ id: `react:${f.path}`, map: 'components', kind: 'component', label: f.text })), links: [{ from: 'a', to: 'b', kind: 'renders' }] }) }],
+  };
+  const project = { root: '/k', name: 'k', files: ['a.tsx'] };
+  const state = { project, detected: [{ plugin, reason: 'r' }], items: [], links: [], cards: {}, problems: [] } as unknown as ProjectState;
+  const draft = { id: 'd', changes: [{ path: 'a.tsx', before: 'A', after: 'A2' }] };
+  const real = async () => 'A';
+  const first = await draftItems(state, draft, real);
+  assert.deepEqual(first.links, [{ from: 'a', to: 'b', kind: 'renders' }], 'with its lines');
+  await draftItems({ ...state }, { ...draft }, real);
+  assert.equal(reads, 1, 'the same draft on the same project: kept');
+  assert.equal((await draftItems(state, { ...draft, changes: [{ path: 'a.tsx', before: 'A', after: 'A3' }] }, real)).items[0].label, 'A3');
+  assert.equal(reads, 2, 'the draft changed: read again');
+  await draftItems({ ...state, project: { ...project } }, draft, real);
+  assert.equal(reads, 3, 'a file of the project changed (a new project object): read again');
+});
+
 test('proof read from a file: a picture only from a draft’s own folder', () => {
   const base = { kind: 'picture', title: 'P', text: 't', by: 'Visual Editor', at: '', revision: 1 };
   assert.equal(parseEvidence([{ ...base, image: '.visual-editor/drafts/d1/Card-v1.png' }])[0].image, '.visual-editor/drafts/d1/Card-v1.png');

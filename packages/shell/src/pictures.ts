@@ -95,6 +95,11 @@ export function openChrome() {
   return { send, page, thrown, quiet, close };
 }
 
+/** The problem a picture has when its page didn't finish drawing in time. */
+export const TOO_LONG = 'The page took too long to finish drawing: the picture may be missing parts.';
+/** The problem a picture has when its page shows nothing. */
+export const BLANK = 'The page is blank.';
+
 /** Opens `url` in a hidden browser and saves a picture of the whole page as PNG at `out`. */
 export async function takePicture(url: string, out: string, options: { width?: number; timeoutMs?: number; settleMs?: number } = {}): Promise<Picture> {
   const chrome = openChrome();
@@ -139,14 +144,14 @@ export async function takePicture(url: string, out: string, options: { width?: n
       if (!now.waiting && now.height === last) break;
       last = now.height;
     }
-    if (Date.now() >= deadline) problems.push('The page took too long to finish drawing: the picture may be missing parts.');
+    if (Date.now() >= deadline) problems.push(TOO_LONG);
     // (An app's page may still be loading its data: a moment more.)
     await sleep(options.settleMs ?? 300);
     const marks = await evaluate<{ tiles: number; broken: string[]; empty: boolean }>(
       `({ tiles: document.querySelectorAll('[data-ve-variant]').length, broken: [...document.querySelectorAll('[data-ve-variant-error]')].map((e) => e.getAttribute('data-ve-variant-error') + ': ' + e.textContent.trim().slice(0, 300)), empty: !document.body || !document.body.innerText.trim() && !document.querySelector('img,svg,canvas') })`,
     );
     for (const b of marks?.broken ?? []) problems.push(`A design didn't draw: ${b}`);
-    if (marks?.empty) problems.push('The page is blank.');
+    if (marks?.empty) problems.push(BLANK);
     const shot = (await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true }, sessionId)) as { data: string };
     mkdirSync(dirname(out), { recursive: true });
     writeFileSync(out, Buffer.from(shot.data, 'base64'));
