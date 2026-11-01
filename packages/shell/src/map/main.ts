@@ -8,7 +8,8 @@ import { MAX_FIELDS } from '../layout';
 import type { CardLines, CardMemory, FromMap, ShowMap, ToMap } from '../mapMessages';
 import type { FieldStep, FieldTrail, Impact, ImpactPlace, Item, Story, StoryStep } from '@visual-editor/contract';
 import type { MemoryEntry } from '../memory';
-import { addStyles, ago, el } from '../ui/dom';
+import type { HistoryLine } from '../cardHistory';
+import { addStyles, ago, dayWords, el } from '../ui/dom';
 import { iconButton, installTips, mapIcon, setIcon, tray, type Icon } from '../ui/buttons';
 import { TYPE_CSS, typeText, useThemeTokens } from '../ui/typeText';
 import { WINDOW_CSS } from '../ui/windows';
@@ -163,6 +164,11 @@ addStyles(`
   .drawer .entry.problem { line-height: 1.45; box-shadow: inset 3px 0 0 var(--vscode-editorWarning-foreground, #cca700); }
   .drawer .entry .d { opacity: .85; margin-top: 2px; }
   .drawer .entry .m { opacity: .6; margin-top: 3px; font-size: 11px; }
+  .drawer .entry.history { border-left: 3px solid transparent; }
+  .drawer .entry.history.good { border-left-color: var(--vscode-charts-green, #89d185); }
+  .drawer .entry.history.bad { border-left-color: var(--vscode-charts-red, #f14c4c); }
+  .drawer .entry.history .when { display: flex; align-items: center; gap: 5px; opacity: .7; font-size: 11px; margin-bottom: 2px; }
+  .drawer .entry.history .hist-mark svg { width: 12px; height: 12px; display: block; }
   .drawer .none { font-size: 12px; opacity: .6; }
   .card.selected { border-color: var(--vscode-foreground); box-shadow: 0 0 0 2px var(--vscode-foreground); }
   .card .head { padding: 8px 12px 6px; border-bottom: 1px solid #8882; height: 56px; box-sizing: border-box; }
@@ -370,6 +376,8 @@ function select(id: string | undefined, tell = true) {
 
 /** Each card's stories (Story view), as its plugin last sent them; the stories opened; the card drawn last. */
 const storiesOf = new Map<string, Story[]>();
+/** Cards' histories (asked for when a drawer opens), and whether the project is in git. */
+const historyOf = new Map<string, { lines: HistoryLine[]; git: boolean }>();
 const openStories = new Set<string>();
 let lastCard: CardMemory | undefined;
 
@@ -507,10 +515,23 @@ const TONE = {
   yellow: 'var(--vscode-charts-yellow, #cca700)',
   purple: 'var(--vscode-charts-purple, #b180d7)',
   green: 'var(--vscode-charts-green, #89d185)',
+  red: 'var(--vscode-charts-red, #f14c4c)',
   orange: 'var(--vscode-charts-orange, #d18616)',
   warn: 'var(--vscode-editorWarning-foreground, #cca700)',
 };
 const OPEN_LINE: LegendLine = { text: 'Click a row to open its line in the code.' };
+const HISTORY_ICONS: Record<HistoryLine['kind'], Icon> = { review: 'proposed', job: 'play', commit: 'commit', edit: 'changed' };
+const HISTORY_LEGEND: LegendLine[] = [
+  { icon: 'proposed', text: 'A change that went through Review: approved, sent back, rejected or undone' },
+  { icon: 'play', text: 'An agent’s job on it' },
+  { icon: 'commit', text: 'A commit that touched its files' },
+  { icon: 'changed', text: 'Changed, and not committed yet' },
+  { mark: '▎', tone: TONE.green, text: 'It went well: approved, or passed its checks' },
+  { mark: '▎', tone: TONE.red, text: 'It didn’t: rejected, or failed' },
+  { text: 'Newest first. Click a row to open what it’s about.' },
+];
+/** What a click on a history row opens, in words. */
+const HISTORY_OPENS = { proposal: 'Open it in Review', job: 'Open the job’s story: each step it took', commit: 'Open the commit: its message and its changes to this card', path: 'Open its changes since the last commit' };
 const GO_LINE: LegendLine = { icon: 'onMap', text: 'Go to that card on the map' };
 const STORY_LEGEND: LegendLine[] = [
   { mark: '▸', text: 'A story: click it to see its steps (▾ hides them)' },
@@ -761,13 +782,19 @@ function showCard(m: CardMemory) {
   }
 
   const notes = m.entries.filter((e) => e.kind !== 'change');
-  const changes = m.entries.filter((e) => e.kind === 'change');
   drawer.append(el('h3', undefined, `Notes (${notes.length})`));
   if (notes.length) for (const e of notes) drawer.append(entry(e));
   else drawer.append(el('div', 'none', 'No notes yet.'));
-  drawer.append(el('h3', undefined, `History (${changes.length})`));
-  if (changes.length) for (const e of changes) drawer.append(entry(e));
-  else drawer.append(el('div', 'none', 'No reviewed changes yet. Approved, sent back and rejected changes appear here.'));
+  // Its history as a story: what went through Review, agents' jobs on it, commits, and what isn't committed yet.
+  const history = historyOf.get(item.id);
+  drawer.append(heading(`History${history ? ` (${history.lines.length})` : ''}`, HISTORY_LEGEND));
+  const noGit = 'The project isn’t in git, so changes made outside Visual Editor aren’t known.';
+  if (!history) drawer.append(el('div', 'none', 'Reading its history…'));
+  else if (!history.lines.length) drawer.append(el('div', 'none', history.git ? 'Nothing yet: no change through Review, no agent job, and no commit has touched its files.' : `Nothing through Review or agents yet. ${noGit}`));
+  else {
+    for (const h of history.lines) drawer.append(historyRow(h));
+    if (!history.git) drawer.append(el('div', 'none', noGit));
+  }
   foldSections();
   drawer.hidden = false;
 }
@@ -835,6 +862,25 @@ function foldSections() {
       }
     });
   }
+}
+
+/** One moment of a card's history: what kind, when, what happened and more; a click opens what it's about. */
+function historyRow(h: HistoryLine): HTMLElement {
+  const row = el('div', `entry history${h.tone ? ` ${h.tone}` : ''}`);
+  const when = el('div', 'when');
+  const mark = el('span', 'hist-mark');
+  setIcon(mark, HISTORY_ICONS[h.kind], '');
+  mark.removeAttribute('aria-label');
+  when.append(mark, el('span', undefined, dayWords(h.at)));
+  row.append(when, el('div', 't', h.text));
+  if (h.detail) row.append(el('div', 'd', h.detail));
+  const open = h.open;
+  if (open) {
+    row.classList.add('link');
+    row.dataset.tip = HISTORY_OPENS[Object.keys(open)[0] as keyof typeof HISTORY_OPENS];
+    row.addEventListener('click', () => vscode.postMessage({ type: 'openHistory', open }));
+  }
+  return row;
 }
 
 function entry(e: MemoryEntry): HTMLElement {
@@ -1549,6 +1595,9 @@ window.addEventListener('message', (e: MessageEvent<ToMap>) => {
     if (lastCard?.id === e.data.id) showCard(lastCard);
   } else if (e.data?.type === 'stories') {
     storiesOf.set(e.data.id, e.data.stories);
+    if (lastCard?.id === e.data.id) showCard(lastCard);
+  } else if (e.data?.type === 'history') {
+    historyOf.set(e.data.id, { lines: e.data.lines, git: e.data.git });
     if (lastCard?.id === e.data.id) showCard(lastCard);
   }
   else if (e.data?.type === 'lines') showLines(e.data);

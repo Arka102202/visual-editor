@@ -1031,6 +1031,22 @@ test('hub: a card comes with its summary (what it does), saying when its code ch
   }
 });
 
+test('hub: a card comes with its history, newest first (Review\'s changes, agents\' jobs on it); notes stay apart; without git, said so', async () => {
+  const { host, memory, jobs } = fakeHost();
+  memory.unshift({ id: 'c1', at: '2026-10-28T09:00:00.000Z', kind: 'change', text: 'Show the date first', by: { kind: 'assistant', name: 'Claude Code' }, outcome: 'applied', proposal: 'p1', paths: ['src/Card.tsx'] });
+  memory.unshift({ id: 'n1', at: '2026-10-29T09:00:00.000Z', kind: 'note', text: 'Keep it simple', by: { kind: 'developer', name: 'You' }, items: ['react:Card'] });
+  jobs.push({ id: 'j1', agent: 'new-variant', title: 'New variant', request: 'A compact one', status: 'failed', round: 3, rounds: 3, startedAt: '2026-10-30T09:00:00.000Z', until: '', history: [{ at: '2026-10-30T10:00:00.000Z', who: 'checker', what: 'Sent back' }], by: 'Claude Code', card: 'react:Card' });
+  const hub = await connect(host);
+  try {
+    const text = (await hub.call('card', { id: 'react:Card' })).text;
+    assert.match(text, /\nRemembered:\n- \[note\] Keep it simple[^\n]*\nHistory \(newest first\):\n- 2026-10-30 · New variant failed: the checker sent it back 3 times\. Asked: “A compact one” \(by Claude Code\)\.\n- 2026-10-28 · Claude Code changed it: Show the date first\. Approved in Review\.\n- \(The project isn't in git: changes made outside Visual Editor aren't known\.\)$/);
+    assert.doesNotMatch(text, /\[applied\]/, 'a change is told once, in its history');
+    assert.match((await hub.call('card', { id: 'react:List' })).text, /History \(newest first\):\n- Nothing yet\.\n- \(The project isn't in git/);
+  } finally {
+    await hub.close();
+  }
+});
+
 test('hub: impact: what changing a card (or a prop) affects, in words; a prop it doesn\'t have is refused', async () => {
   const { host } = fakeHost();
   host.impact = async (_root, _item, prop) => ({
