@@ -13,6 +13,8 @@ import { applyEdits, BUILT_IN_CHECKS, choicesText, progressOf, type AvailableChe
 import { sessionWords as sessionText, type OpenSession } from './claudeLock';
 import { draftView, type Draft, type ProgressItem } from '../drafts';
 import { current, JOB_MINUTES, newJob, nextStep, stopped, type Job } from '../jobs';
+import { cardFiles, cardHistory, historyText } from '../cardHistory';
+import { gitHistory } from '../gitHistory';
 import { logicText, type LogicVerdict } from './logicCheck';
 
 export const SERVER_NAME = 'visual-editor';
@@ -276,7 +278,7 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
     'card',
     {
       title: 'One card in detail',
-      description: 'Everything about one card: its rows (props, columns…), where it is defined, its lines to other cards, notes on it and the reviewed changes that touched it.',
+      description: 'Everything about one card: its rows (props, columns…), where it is defined, its lines to other cards, notes on it, and its history (changes through Review, agent jobs on it, commits that touched its files, changes not committed yet), newest first.',
       inputSchema: { id: z.string().describe('The card id, from list_cards'), project: projectArg },
       annotations: readOnly,
     },
@@ -295,8 +297,11 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       const in1 = s.links.filter((l) => l.to === id);
       if (out1.length) out.push('Lines out:', ...out1.map((l) => `- ${l.kind} → ${label(l.to)} (${l.to})`));
       if (in1.length) out.push('Lines in:', ...in1.map((l) => `- ${label(l.from)} (${l.from}) ${l.kind} it`));
-      const remembered = forCard(host.memory(s.project.root), item);
+      const remembered = forCard(host.memory(s.project.root), item).filter((e) => e.kind !== 'change');
       if (remembered.length) out.push('Remembered:', ...remembered.slice(0, 15).map(entryLine));
+      const git = await gitHistory(s.project.root, cardFiles(item));
+      const history = cardHistory(item, host.memory(s.project.root), host.jobs(s.project.root), git);
+      out.push('History (newest first):', ...(history.length ? historyText(history.slice(0, 20), !!git) : ['- Nothing yet.', ...(git ? [] : historyText([], false))]));
       return reply(out.join('\n'));
     },
   );

@@ -14,6 +14,9 @@ import type { ProjectIndex } from './projectIndex';
 import type { Review } from './review';
 import { newId, type Proposal } from './proposals';
 import { forCard } from './memory';
+import { cardFiles, cardHistory, type HistoryLine } from './cardHistory';
+import { commitText, gitHistory } from './gitHistory';
+import { JobStore } from './jobs';
 import type { ProjectMemory } from './memoryView';
 import { onThemeChange, themeTokenColours } from './themeColours';
 import type { AppProxies } from './proxy/appProxies';
@@ -156,6 +159,8 @@ export class MapPanel {
       this.send();
     } else if (m.type === 'openReview') {
       this.review.show(m.proposal);
+    } else if (m.type === 'openHistory') {
+      void this.openHistory(m.open);
     } else if (m.type === 'card') {
       this.card = m.id;
       void this.sendCard();
@@ -344,6 +349,38 @@ export class MapPanel {
     void this.sendStories(item);
     void this.sendImpact(item);
     void this.sendField(item);
+    void this.sendHistory(item);
+  }
+
+  /** The card's history as a story: Review's changes, agent jobs on it, and (in git) commits and uncommitted changes. */
+  private async sendHistory(item: Item) {
+    const root = this.current.get()?.project.root;
+    if (!root) return;
+    const git = await gitHistory(root, cardFiles(item));
+    const lines = cardHistory(item, this.memory.entries(root), new JobStore(root).list(), git);
+    if (this.card === item.id) void this.panel?.webview.postMessage({ type: 'history', id: item.id, lines, git: !!git } satisfies ToMap);
+  }
+
+  /** What a line of a card's history is about: its proposal in Review, a job's story, a commit, a file's changes. */
+  private async openHistory(open: NonNullable<HistoryLine['open']>) {
+    const state = this.current.get();
+    if (!state) return;
+    const root = state.project.root;
+    const item = state.items.find((i) => i.id === this.card);
+    const show = async (content: string, language: string) => vscode.window.showTextDocument(await vscode.workspace.openTextDocument({ content, language }), { preview: true });
+    if ('proposal' in open) this.review.show(open.proposal);
+    else if ('job' in open) {
+      const j = new JobStore(root).list().find((x) => x.id === open.job);
+      if (j) await show([`# ${j.title}: ${j.request}`, '', `${j.status}, round ${j.round} of ${j.rounds} · started by ${j.by}`, '', ...j.history.map((h) => `- ${h.at.replace('T', ' ').slice(0, 16)} · ${h.who}: ${h.what}`)].join('\n'), 'markdown');
+    } else if ('commit' in open) {
+      const text = await commitText(root, open.commit, item ? cardFiles(item) : []);
+      if (text) await show(text, 'diff');
+      else void vscode.window.showWarningMessage('git couldn’t show that commit.');
+    } else {
+      const uri = vscode.Uri.file(join(root, open.path));
+      // (Its changes since the last commit, as git shows them; else the file itself.)
+      await vscode.commands.executeCommand('git.openChange', uri).then(undefined, () => vscode.window.showTextDocument(uri));
+    }
   }
 
   /** The card's fields, or where one comes from and is shown, from its plugin. */

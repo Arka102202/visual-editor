@@ -48,3 +48,16 @@ export function ago(iso: string): string {
   if (s < 172800) return 'yesterday';
   return new Date(iso).toLocaleDateString();
 }
+
+/** When, in words: "Today 14:05", "Yesterday 09:12", "Monday", "3 Oct", "3 Oct 2025". */
+export function dayWords(at: string, now = new Date()): string {
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return '';
+  const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((day(now) - day(d)) / 86_400_000);
+  const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  if (days <= 0) return `Today ${time}`;
+  if (days === 1) return `Yesterday ${time}`;
+  if (days < 7) return d.toLocaleDateString('en-GB', { weekday: 'long' });
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', ...(d.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }) });
+}

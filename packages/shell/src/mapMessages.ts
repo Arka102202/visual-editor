@@ -8,6 +8,7 @@ import type { FakeEndpoint, Scenarios } from './proxy/fakes';
 import type { ContractInfo, ContractRef } from './contracts/contracts';
 import type { Arrange, Layout } from './layout';
 import type { MemoryEntry } from './memory';
+import type { HistoryLine } from './cardHistory';
 import type { Tone } from './styles';
 
 export interface MapProject {
@@ -25,6 +26,8 @@ export type ToMap =
   | CardLines
   /** What happens when someone does something on the chosen card (Story view), read from its code by its plugin. */
   | { type: 'stories'; id: string; stories: Story[] }
+  /** A card's history as a story, newest first; `git`: whether the project is in git (else outside changes aren't known). */
+  | { type: 'history'; id: string; lines: HistoryLine[]; git: boolean }
   /** What depends on the chosen card, or one of its props (Impact), read by its plugin. */
   | { type: 'impact'; id: string; impact: Impact }
   /** The chosen card's fields, or where one comes from and where it's shown (Follow a field). */
@@ -143,6 +146,8 @@ export type FromMap =
   | { type: 'chooseMap'; id: string }
   | { type: 'arrange'; arrange: Arrange }
   | { type: 'openReview'; proposal?: string }
+  /** A line of a card's history was clicked: open what it's about (a proposal, a job, a commit, a file's changes). */
+  | { type: 'openHistory'; open: NonNullable<HistoryLine['open']> }
   /** A card was chosen (its notes and history are wanted), or none. */
   | { type: 'card'; id?: string }
   /** Every line that joins this card to another, on any map, is wanted. */
