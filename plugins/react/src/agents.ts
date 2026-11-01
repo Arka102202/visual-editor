@@ -2,6 +2,7 @@
 // checker must do). Their tools are the plugin's and the hub's, by name.
 
 import type { PluginAgent } from '@visual-editor/contract';
+import { providersFile } from './previewPage';
 
 const LOOK = ['variant_brief', 'check_variant_files', 'draft_pictures', 'card', 'Read', 'Grep', 'Glob'];
 
@@ -117,6 +118,8 @@ export const setUpProjectAgent: PluginAgent = {
   description:
     'Sets a React project (Vite) up for Preview and the Playground: writes the providers file (src/visual-editor.providers.tsx, what every preview is wrapped in) from what the app is wrapped in, made safe for previews, and makes one component previewable to prove it works. The app must look and work exactly as before. Use when the developer wants to start using Preview in a project, or previews of a project don\'t draw because something the app is wrapped in is missing.',
   rounds: 3,
+  // (Nothing to ask: it picks the component to make previewable itself.)
+  request: 'Set this project up for Preview and the Playground.',
   worker: {
     tools: SET_UP,
     prompt: `Get the project ready for Preview, without changing how the app looks or works.
@@ -155,5 +158,13 @@ ${makePreviewableAgent.worker.prompt.replace(/^/gm, '   > ')}
    component by its old path, if that changed).
 
 When anything is off, send it back with specific reasons the worker can act on (which file, what is wrong, what to do).`,
+  },
+  // Set up already (a providers file, or something previewable: what Make previewable and New variant wait for).
+  done: (project, items) => {
+    const providers = providersFile(project);
+    const ready = items.filter((i) => i.preview).length;
+    if (!providers && !ready) return undefined;
+    const has = [providers && `its providers file is ${providers}`, ready && `${ready} component${ready === 1 ? '' : 's'} can be previewed`].filter(Boolean).join(', and ');
+    return `${project.name} is set up for Preview and the Playground already (${has}): nothing for Set up project to do.`;
   },
 };

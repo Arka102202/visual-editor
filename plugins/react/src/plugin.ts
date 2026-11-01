@@ -1,7 +1,7 @@
 // The React plugin itself (no VS Code imports, so it can be tested on its own): finds React projects, reads their
 // components, pages and API calls, and gives the shell three maps.
 
-import { CONTRACT_VERSION, type MapDefinition, type Plugin } from '@visual-editor/contract';
+import { CONTRACT_VERSION, type Item, type MapDefinition, type Plugin, type ProjectInfo } from '@visual-editor/contract';
 import { reactPackage, SHARED_FROM_WORDS, wantsFile } from './cards';
 import { readingWorker } from './workerClient';
 import { previewPage } from './previewPage';
@@ -13,6 +13,8 @@ import { providersFile } from './previewPage';
 import { makePreviewableAgent, newVariantAgent, setUpProjectAgent } from './agents';
 import { setupBriefTool } from './setupBrief';
 import { storiesFor } from './storyView';
+import { impactFor } from './impactView';
+import { fieldsFor } from './fieldView';
 import { sessionKinds } from './sessions';
 import { checkTypesTool, checkVariantFilesTool, previewableTool, rememberModel, variantBriefTool, variantRulesSkill } from './tools';
 import { existsSync, readFileSync } from 'node:fs';
@@ -52,6 +54,10 @@ export const MAPS: MapDefinition[] = [
   },
 ];
 
+/** Not set up for Preview: no providers file, nothing previewable yet, and a Vite app (what Set up project works on). */
+const notSetUp = (project: ProjectInfo, items: Item[]) =>
+  !providersFile(project) && !items.some((i) => i.preview) && project.files.some((f) => /^vite\.config\.[cm]?[jt]s$/.test(f));
+
 export const reactPlugin: Plugin = {
   id: 'react',
   name: 'React',
@@ -73,6 +79,10 @@ export const reactPlugin: Plugin = {
   sessions: sessionKinds,
   // What happens when someone does something on a component: its stories, read from the code (Story view).
   stories: (item, project) => storiesFor(item, project),
+  // What depends on a component, or one of its props (Impact).
+  impact: (item, project, prop) => impactFor(item, project, prop),
+  // Where a field comes from, and where it's shown (Follow a field).
+  fields: (item, project, field) => fieldsFor(item, project, field),
   // A component or page that isn't previewable yet: Make previewable, from its drawer.
   cardNudges: (item) =>
     item.map === 'components' && item.source && !item.preview
@@ -80,9 +90,12 @@ export const reactPlugin: Plugin = {
       : [],
   // Not set up for Preview yet (no providers file, nothing previewable, a Vite app): the Set up project agent does it.
   nudges: (project, items) =>
-    !providersFile(project) && !items.some((i) => i.preview) && project.files.some((f) => /^vite\.config\.[cm]?[jt]s$/.test(f))
+    notSetUp(project, items)
       ? [{ id: 'set-up', text: `${project.name} isn’t set up for Preview yet: Set up project gets it ready (a providers file from what your app is wrapped in, and one component you can preview).`, agent: 'set-up-project' }]
       : [],
+  // And until it is, Make previewable and New variant wait (they need the providers file to draw anything).
+  setUpFirst: (project, items) =>
+    notSetUp(project, items) ? { agent: 'set-up-project', why: `${project.name} isn’t set up for Preview yet, and previews need that first. Set up project gets it ready.` } : undefined,
   setup: (project) => setupProject((p) => (existsSync(join(project.root, p)) ? readFileSync(join(project.root, p), 'utf8') : undefined), helperTemplate()),
   readers: [
     {

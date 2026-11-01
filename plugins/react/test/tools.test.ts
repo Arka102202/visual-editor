@@ -123,6 +123,18 @@ test('variant_brief: one that is not previewable yet: its data, and the folder i
   assert.equal(await run(variantBriefTool, { card: 'Nope' }, context()), 'PROBLEM No component or page called "Nope". Use previewable or list_cards to find it.');
 });
 
+test('variant_brief with a draft that moves a component into its folder: found where the draft puts it, given the draft\'s cards', async () => {
+  const move = { 'src/components/Badge.tsx': null, 'src/components/Badge/index.tsx': texts['src/components/Badge.tsx'] };
+  const ctx = context(move);
+  // With today's cards it can't be found (the shell gives the draft's own: hub/tools.ts runTool).
+  assert.equal(await run(variantBriefTool, { card: 'Badge' }, ctx), 'PROBLEM Badge isn\'t in the project as the draft would leave it.');
+  const files = await Promise.all(ctx.project.files.map(async (path) => ({ path, text: (await ctx.read(path)) ?? '' })));
+  const { items, links } = toMaps(readModel(files));
+  const text = await run(variantBriefTool, { card: 'Badge' }, { ...ctx, items, links: links ?? [] });
+  assert.match(text, /^# Badge \(uses data\) · react:component:src\/components\/Badge\/index\.tsx#Badge\nFile: src\/components\/Badge\/index\.tsx:2/);
+  assert.match(text, /Used by: ProjectList/);
+});
+
 test('check_variant_files: today’s folders, and a draft checked as it would leave the project', async () => {
   assert.match(await run(checkVariantFilesTool, {}, context()), /✓ ProjectCard \(src\/pages\/ProjectList\/components\/ProjectCard\): follows the rules\. Designs: Default, Compact; states: default, long name, no description, just created\.\nPASSED$/);
 
@@ -158,4 +170,12 @@ test('check_types: no verdict when there is nothing for TypeScript to check', as
   assert.equal(await run(checkTypesTool, {}, context()), 'This project has no tsconfig.json: no TypeScript to check.');
   const withConfig = (draft?: Record<string, string | null>) => ({ ...context(draft), project: { ...context(draft).project, files: [...context(draft).project.files, 'tsconfig.json'] } });
   assert.equal(await run(checkTypesTool, {}, withConfig({ 'README.md': 'hi' })), 'Nothing for TypeScript to check: the draft changes no code.');
+});
+
+test('Set up project has nothing to do once the project is set up (a providers file, or something previewable); before that it has work', async () => {
+  const { setUpProjectAgent } = await import('../src/agents');
+  const project = { root: '/x', name: 'shop', files: ['vite.config.ts', 'src/main.tsx'] };
+  assert.equal(setUpProjectAgent.done!(project, items.map(({ preview: _p, ...i }) => i)), undefined, 'not set up: it has work');
+  assert.equal(setUpProjectAgent.done!(project, items), 'shop is set up for Preview and the Playground already (2 components can be previewed): nothing for Set up project to do.');
+  assert.equal(setUpProjectAgent.done!({ ...project, files: [...project.files, 'src/visual-editor.providers.tsx'] }, []), 'shop is set up for Preview and the Playground already (its providers file is src/visual-editor.providers.tsx): nothing for Set up project to do.');
 });

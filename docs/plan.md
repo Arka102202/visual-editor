@@ -213,6 +213,23 @@ A one-line proposal, with the before and after shown live in Review, and Undo.
 ### 2.7 Agents panel ✅ done
 - **You get:** every agent with what it does, Run now, what's running, and the last results with their proof.
 - **Done when:** you can start, watch, stop and review any agent from one place.
+- **Later (2026-11-01):** each job is **its own row** under its agent (what was asked, its round, what it's doing
+  now, its own Watch and Stop), so two components at once are two rows, each controlled on its own. At most **2 jobs
+  run at once**, every agent's together (each is a Claude Code run); more **wait their turn** as rows of their own and
+  start by themselves when one ends. **One job per card**: starting another for a card already being worked on says
+  so instead. **One at a time** for an agent that always does the same thing (Set up project): a second start, or
+  resuming another, waits until the one at work stops. A stopped job (by you, out of time, its run ended, VS Code closed) has **Resume**: it carries on where it
+  was (the worker's turn or the checker's, the same round and draft), in the same Claude conversation when Claude Code
+  still has it (each run gets its own conversation id), otherwise in a new one told what happened so far.
+  **Set up first:** until a project is set up (React: no providers file, nothing previewable), only Set up project
+  runs; Make previewable and New variant wait, from their buttons, a card's note and the chat alike, each saying why
+  (and "approve it in Review" while the set-up's change waits there). Set up project asks nothing: it starts at once.
+  **Big projects** (tried on 10,000 components): Claude Code stops waiting for a tool after a minute, so a slow one
+  (comparing the app, pictures, TypeScript) answers "still running" within 45 s and carries on in the background; asked
+  again, it gives its answer, and a verdict waits for it. A draft's project is read once per version; tools given a
+  draft see its own cards. The app is pictured one page at a time per project, and a page that didn't finish drawing
+  is never "looks the same". When Visual Editor's own tool fails on a version, sending it back stops the job for you
+  instead (the worker can't fix that), with Resume.
 
 ### 2.8 Agent: Make previewable ✅ done
 - **You get:** an existing component or page split into the two parts.
@@ -396,13 +413,32 @@ Claude.
   made-up project (each pattern, both ways); the archFlow VS Code test checks the Delete story arrives with its cards.
 - **Later (second pass):** what you see change on screen at each step.
 
-### 3.3 Follow a field
+### 3.3 Follow a field ✅ built
 - **You get:** pick a value (for example `project.name`) and see where it comes from and every place it's shown.
 - **Done when:** the path is highlighted across components on the map.
+- **How it works:** read from the code, no Claude. A card's drawer has "Follow a field": its props and the parts of
+  them its code reads (not text methods). Comes from: each way, from where it starts (saved data, a server, a store,
+  a constant, what a function is given) through state and what sets it, hooks, lists gone through (filtered, sorted),
+  objects built, a previewable folder's data part and designs, down to the card. Shown: as text, an attribute, a look,
+  passed into a child (followed there), or used in code; a previewable card's designs, the one in use first. Each step
+  opens its line or goes to its card; its path can be lit up on the map. Claude gets the same with `follow_field`.
+- **Checked:** on archFlow, ProjectCard's project.name: from the saved data (db.projects) both ways (through each of
+  ProjectList's designs; the Dashboard one filters and sorts), shown in each of its designs; EditorHeader's
+  projectName: from the saved data, or a rename. Unit tests on a made-up project (each pattern, both ways).
 
-### 3.4 Impact
+### 3.4 Impact ✅ built
 - **You get:** "What breaks if I change this?", direct and further away, each with a reason.
 - **Done when:** changing a prop lists every parent that passes it.
+- **How it works:** read from the code, no Claude. A card's drawer has "If you change it…": pick the whole component or
+  one prop. Directly: each place that renders it and what it passes (a previewable folder's design named as such),
+  its own parts, the page it is. Further away: the pages it's seen on (through which parents), and what shares its
+  data (the same store, API call, saved data, hook). For a prop: each place that passes it (and what), leaves it out,
+  or can't be told (a spread {...}), and what renaming, removing or requiring it means. Rows open their line or go to
+  their card; what it affects can be lit up on the map. Claude gets the same through the `impact` tool (workers and
+  checkers too).
+- **Checked:** on archFlow, ProjectCard: both of ProjectList's designs render it, seen on /; its onDelete: passed in
+  both, with what; the impact tool says the same. Unit tests on a made-up project (passed, left out, spread; pages;
+  a shared store), and the tool's words.
 
 ### 3.5 History and change timeline
 - **You get:** per card: approved proposals, notes and outside changes, in words ("changed yesterday by Claude: the

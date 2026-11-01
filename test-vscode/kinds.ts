@@ -5,7 +5,8 @@
 // real: saved into its session, checked, and sent to Review; the same page with a mistake is held back.
 
 import * as vscode from 'vscode';
-import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DraftStore } from '../packages/shell/src/drafts';
 import { asItIs } from '../packages/shell/src/hub/checkPlan';
@@ -215,6 +216,7 @@ export async function run() {
   });
 
   const projectCard = () => card('ProjectCard');
+  const folderInUse = () => projectCard().preview.variants.find((v: any) => v.inUse)?.name;
   const otherDesign = () => projectCard().preview.variants.find((v: any) => !v.inUse) ?? projectCard().preview.variants[0];
   const KINDS: { kind: string; choice: () => Record<string, string>; chat: () => Record<string, string>; brief: RegExp }[] = [
     { kind: 'new-design', choice: () => ({ card: projectCard().id }), chat: () => ({ card: 'ProjectCard' }), brief: /NEW DESIGN for ProjectCard/ },
@@ -314,7 +316,7 @@ export async function run() {
     const realAssistants = t.hub.assistants.bind(t.hub);
     t.hub.assistants = () => realAssistants().map((a: any) => (a.id === 'claude' ? { ...a, state: 'on', agents: 'on' } : a));
     t.map.receive({ type: 'cardAgent', id: modal.id, agent: 'make-previewable' });
-    await until(() => new JobStore(root).list().some((j: any) => j.agent === 'make-previewable' && /CreateProjectModal \(src\/.*CreateProjectModal\.tsx\)/.test(j.request)), 'its job, for that card', 10_000);
+    await until(() => new JobStore(root).list().some((j: any) => j.agent === 'make-previewable' && j.card === modal.id && /CreateProjectModal \(src\/.*CreateProjectModal\.tsx\)/.test(j.request)), 'its job, for that card', 10_000);
     // (Its stand-in for claude finishes before the next steps use it.)
     const fakes = process.env.VISUAL_EDITOR_FAKE_OUT!;
     await until(() => existsSync(fakes) && readdirSync(fakes).some((f) => { try { return JSON.parse(readFileSync(join(fakes, f), 'utf8')).prompt.includes('CreateProjectModal'); } catch { return false; } }), 'the stand-in to be given the job', 20_000);
@@ -343,6 +345,49 @@ export async function run() {
     if (!cards.has(projectCard().id) || !cards.has(list.id)) throw new Error(`its steps' cards: ${[...cards].join(', ')}`);
   });
 
+  await step('Impact: ProjectCard is rendered by both of ProjectList\'s designs; its onDelete is passed in both (the drawer, and Claude\'s impact tool)', async () => {
+    const pc = projectCard();
+    t.map.show();
+    const seen: any[] = [];
+    const post = t.map.panel.webview.postMessage.bind(t.map.panel.webview);
+    t.map.panel.webview.postMessage = (m: any) => (seen.push(m), post(m));
+    await until(() => t.map.ready, 'the map page', 20_000);
+    t.map.receive({ type: 'card', id: pc.id });
+    await until(() => seen.some((m) => m.type === 'impact' && m.id === pc.id && !m.impact.prop), 'its impact', 20_000);
+    const whole = seen.find((m) => m.type === 'impact' && m.id === pc.id && !m.impact.prop).impact;
+    const users = whole.direct.map((p: any) => p.label).sort().join(' | ');
+    if (users !== 'ProjectCard\'s own parts | ProjectList (Dashboard design) | ProjectList (Default design)') throw new Error(`directly: ${users}`);
+    if (!whole.further.some((p: any) => /^the page at \/: /.test(p.why))) throw new Error(`further: ${JSON.stringify(whole.further)}`);
+    t.map.receive({ type: 'impact', id: pc.id, prop: 'onDelete' });
+    await until(() => seen.some((m) => m.type === 'impact' && m.impact.prop === 'onDelete'), 'onDelete\'s impact', 20_000);
+    const one = seen.find((m) => m.type === 'impact' && m.impact.prop === 'onDelete').impact;
+    if (!/^onDelete is passed in 2 places\. Renaming it: 2 places must change too\./.test(one.verdict) || one.direct.filter((p: any) => /^passes onDelete=/.test(p.why)).length !== 2) throw new Error(`onDelete: ${JSON.stringify(one)}`);
+    const said = await chat('impact', { id: pc.id, prop: 'onDelete' });
+    if (said.error || !/^If you change ProjectCard's prop "onDelete":\nonDelete is passed in 2 places/.test(said.text)) throw new Error(`Claude is told: ${said.text}`);
+  });
+
+  await step('Follow a field: ProjectCard\'s project.name comes from the saved data both ways, and shows in its design in use (drawer, and Claude\'s tool)', async () => {
+    const pc = projectCard();
+    t.map.show();
+    const seen: any[] = [];
+    const post = t.map.panel.webview.postMessage.bind(t.map.panel.webview);
+    t.map.panel.webview.postMessage = (m: any) => (seen.push(m), post(m));
+    await until(() => t.map.ready, 'the map page', 20_000);
+    t.map.receive({ type: 'card', id: pc.id });
+    await until(() => seen.some((m) => m.type === 'field' && m.id === pc.id), 'its fields', 20_000);
+    const fields = seen.find((m) => m.type === 'field' && m.id === pc.id).trail.fields;
+    if (!fields.includes('project.name') || fields.some((f: string) => /charAt/.test(f))) throw new Error(`its fields: ${fields.join(', ')}`);
+    t.map.receive({ type: 'field', id: pc.id, field: 'project.name' });
+    await until(() => seen.some((m) => m.type === 'field' && m.trail.field === 'project.name'), 'project.name followed', 20_000);
+    const trail = seen.find((m) => m.type === 'field' && m.trail.field === 'project.name').trail;
+    const origins = trail.comesFrom.filter((s: any) => s.kind === 'origin').map((s: any) => s.text);
+    if (origins.length !== 2 || origins.some((o: string) => o !== 'saved data (db.projects)')) throw new Error(`it starts at: ${origins.join(' | ')}`);
+    const inUse = folderInUse();
+    if (!trail.shown.some((s: any) => s.kind === 'shown' && s.text.startsWith(`ProjectCard (${inUse} design)`))) throw new Error(`shown: ${trail.shown.map((s: any) => s.text).join(' | ')}`);
+    const said = await chat('follow_field', { id: pc.id, field: 'project.name' });
+    if (said.error || !/Starts at saved data \(db\.projects\)/.test(said.text)) throw new Error(`Claude is told: ${said.text}`);
+  });
+
   // Agents: from a button (a stand-in for claude), and from the chat (job_start, as the agent's skill does).
   const fakeOut = process.env.VISUAL_EDITOR_FAKE_OUT!;
   const realAssistants = t.hub.assistants.bind(t.hub);
@@ -352,6 +397,24 @@ export async function run() {
     { name: 'new-variant', request: 'ProjectCard: the name only, on one line' },
     { name: 'set-up-project', request: 'Set it up' },
   ];
+  // archFlow is set up already: Set up project has nothing to do there. (The steps after stand in for a project that
+  // isn't, so it has work.)
+  const setUpAgent = t.registry.list().find((p: any) => p.id === 'react').agents.find((a: any) => a.name === 'set-up-project');
+  const realDone = setUpAgent.done;
+  await step('Set up project in a project set up already: nothing to do, its buttons say so; a start (button or chat) is refused; the other agents still start', async () => {
+    const rows = () => t.agentsView.state().groups.find((g: any) => g.name === 'React').items;
+    const row = rows().find((e: any) => e.name === 'set-up-project');
+    if (!/^archflow is set up for Preview and the Playground already \(its providers file is src\/visual-editor\.providers\.tsx, and \d+ components can be previewed\): nothing for Set up project to do\.$/.test(row.done ?? '')) throw new Error(`its row: ${JSON.stringify(row)}`);
+    if (row.blocked) throw new Error('said as blocked too');
+    for (const name of ['make-previewable', 'new-variant']) if (rows().find((e: any) => e.name === name).done) throw new Error(`${name} has nothing to do?`);
+    const n = new JobStore(root).list().length;
+    if ((await vscode.commands.executeCommand('visualEditor.runAgent', 'set-up-project', 'background')) !== false || new JobStore(root).list().length !== n) throw new Error('it started');
+    const said = await chat('job_start', { agent: 'set-up-project', request: 'Set it up (chat)' });
+    if (!said.error || !/^Set up project can't start now\. archflow is set up for Preview and the Playground already/.test(said.text)) throw new Error(`the chat: ${said.text}`);
+    setUpAgent.done = () => undefined;
+    if (rows().find((e: any) => e.name === 'set-up-project').done) throw new Error('still done once the project needs it');
+  });
+  setUpAgent.done = () => undefined;
   for (const a of AGENTS) {
     await step(`${a.name}: from the button, a job starts and Claude Code is given it`, async () => {
       const before = existsSync(fakeOut) ? readdirSync(fakeOut).length : 0;
@@ -374,6 +437,155 @@ export async function run() {
       rmSync(join(root, '.visual-editor', 'jobs', `${job.id}.json`), { force: true });
     });
   }
+
+  // Jobs from buttons: at most 2 at once (every agent's together), each its own row; Stop one and the next one starts;
+  // Resume carries a stopped one on where it was. (The stand-in for claude stays busy while the hold file is there.)
+  const jobsNow = () => new JobStore(root).list();
+  const statusOf = (id: string) => jobsNow().find((j) => j.id === id)?.status;
+  const hold = join(fakeOut, '.hold');
+  const given = (id: string) =>
+    (existsSync(fakeOut) ? readdirSync(fakeOut).filter((f) => f.endsWith('.json')).sort() : [])
+      .map((f) => { try { return JSON.parse(readFileSync(join(fakeOut, f), 'utf8')); } catch { return undefined; } })
+      .filter((g) => g?.prompt.includes(id));
+  const reactRows = (name: string) => t.agentsView.state().groups.find((g: any) => g.name === 'React').items.find((e: any) => e.name === name);
+  const free = t.index.snapshot()[0].items.filter((i: any) => i.map === 'components' && i.source && !i.preview).slice(0, 3);
+  const ids: string[] = [];
+  await step('jobs: at most 2 run at once, every agent\'s together (each its own row); a third waits its turn; a second job on the same card is refused', async () => {
+    if (free.length < 3) throw new Error('not 3 cards to try');
+    mkdirSync(fakeOut, { recursive: true });
+    writeFileSync(hold, '');
+    for (const [i, c] of free.entries()) {
+      const started = await vscode.commands.executeCommand('visualEditor.runAgent', i === 2 ? 'new-variant' : 'make-previewable', 'background', `Queue test ${i}: ${c.label}`, c.id);
+      if (started !== true) throw new Error(`job ${i} did not start`);
+      ids.push(jobsNow().find((j) => j.request === `Queue test ${i}: ${c.label}`)!.id);
+    }
+    if (ids.map(statusOf).join() !== 'working,working,waiting') throw new Error(`statuses: ${ids.map(statusOf).join()}`);
+    await until(() => given(ids[0]).length === 1 && given(ids[1]).length === 1, 'the first two to be given to Claude Code', 20_000);
+    await wait(1000);
+    if (given(ids[2]).length) throw new Error('the third ran while two were at work');
+    const mp = (reactRows('make-previewable').jobs ?? []).map((j: any) => j.id);
+    const nv = reactRows('new-variant').jobs ?? [];
+    if (!mp.includes(ids[0]) || !mp.includes(ids[1]) || nv[0]?.id !== ids[2] || !/^waiting its turn \(next\)/.test(nv[0].progress ?? '')) throw new Error(`rows: ${JSON.stringify({ mp, nv })}`);
+    // The same card again, by any agent: refused, nothing new starts. (Another card is fine: it waits its turn.)
+    const n = jobsNow().length;
+    if ((await vscode.commands.executeCommand('visualEditor.runAgent', 'new-variant', 'background', 'Same card', free[0].id)) !== false || jobsNow().length !== n) throw new Error('a second job on the same card started');
+  });
+  await step('jobs: Stop stops that one only (Resume offered); the one waiting starts in its place', async () => {
+    await vscode.commands.executeCommand('visualEditor.stopJob', { job: { id: ids[0] } });
+    await until(() => given(ids[2]).length === 1, 'the waiting one to start', 20_000);
+    if (ids.map(statusOf).join() !== 'stopped,working,working') throw new Error(`statuses: ${ids.map(statusOf).join()}`);
+    const row = (reactRows('make-previewable').recent ?? []).find((r: any) => r.id === ids[0]);
+    if (!row?.resumable) throw new Error(`its row: ${JSON.stringify(row)}`);
+    if ((reactRows('make-previewable').jobs ?? []).some((j: any) => j.id === ids[0])) throw new Error('still shown at work');
+  });
+  await step('jobs: Resume carries a stopped job on where it was: in its own Claude conversation when that\'s kept, else a new one told where the job stands', async () => {
+    // Both places taken: it waits its turn.
+    if ((await vscode.commands.executeCommand('visualEditor.resumeJob', ids[0])) !== true || statusOf(ids[0]) !== 'waiting') throw new Error(`resumed: ${statusOf(ids[0])}`);
+    const session = jobsNow().find((j) => j.id === ids[0])!.session;
+    if (!session || given(ids[0])[0].args[given(ids[0])[0].args.indexOf('--session-id') + 1] !== session) throw new Error(`its conversation: ${session}`);
+    // Its conversation kept (Claude Code's file for it, in a throwaway Claude folder): resumed in it when a place frees.
+    const config = mkdtempSync(join(tmpdir(), 've-claude-'));
+    const realConfig = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = config;
+    try {
+      const folder = join(config, 'projects', realpathSync(root).replace(/[^a-zA-Z0-9]/g, '-'));
+      mkdirSync(folder, { recursive: true });
+      writeFileSync(join(folder, `${session}.jsonl`), '');
+      await vscode.commands.executeCommand('visualEditor.stopJob', { job: { id: ids[1] } });
+      await until(() => given(ids[0]).length === 2, 'it to carry on', 20_000);
+    } finally {
+      if (realConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = realConfig;
+      rmSync(config, { recursive: true, force: true });
+    }
+    const again = given(ids[0])[1];
+    if (again.args[again.args.indexOf('--resume') + 1] !== session || again.args.includes('--session-id') || !/^The developer resumed this job/.test(again.prompt)) throw new Error(`resumed with: ${again.args.join(' ')} / ${again.prompt}`);
+    if (statusOf(ids[0]) !== 'working') throw new Error(`then: ${statusOf(ids[0])}`);
+    // Its conversation not kept (here: Claude's own folder has no such file): a new one, told the job and where it is.
+    await vscode.commands.executeCommand('visualEditor.stopJob', { job: { id: ids[0] } });
+    await until(() => statusOf(ids[0]) === 'stopped', 'it to stop', 5000);
+    if ((await vscode.commands.executeCommand('visualEditor.resumeJob', ids[0])) !== true) throw new Error('not resumed');
+    await until(() => given(ids[0]).length === 3, 'it to carry on in a new conversation', 20_000);
+    const fresh = given(ids[0])[2];
+    if (fresh.args.includes('--resume') || !fresh.args.includes('--session-id') || !fresh.prompt.includes(`carry on job ${ids[0]}`) || !/Don't call job_start/.test(fresh.prompt)) throw new Error(`resumed with: ${fresh.args.join(' ')} / ${fresh.prompt}`);
+    // (The stand-ins finish: what they left unfinished stops where it was, to resume.)
+    rmSync(hold, { force: true });
+    await until(() => ids.every((id) => statusOf(id) === 'stopped') && !ids.some((id) => t.agentRuns.has(id)), 'every run to end', 20_000);
+    const last = jobsNow().find((j) => j.id === ids[2])!.history.at(-1)!.what;
+    if (!/Claude Code finished without finishing the job\. Resume carries on from here/.test(last)) throw new Error(`its run ended with: ${last}`);
+    for (const id of ids) rmSync(join(root, '.visual-editor', 'jobs', `${id}.json`), { force: true });
+  });
+
+  await step('set up first: until the project is set up only Set up project starts (from a button, a card or the chat), and it asks nothing; set up, the others start', async () => {
+    const react = t.registry.list().find((p: any) => p.id === 'react');
+    const real = react.setUpFirst;
+    const state = t.index.snapshot()[0];
+    if (real(state.project, state.items) !== undefined) throw new Error('archFlow is set up, yet it says it isn\'t');
+    if (reactRows('make-previewable').blocked || reactRows('new-variant').blocked) throw new Error('blocked while set up');
+    react.setUpFirst = () => ({ agent: 'set-up-project', why: 'archflow isn’t set up for Preview yet.' });
+    try {
+      const n = jobsNow().length;
+      if ((await vscode.commands.executeCommand('visualEditor.runAgent', 'make-previewable', 'background', 'Gate test', free[0].id)) !== false || jobsNow().length !== n) throw new Error('Make previewable started before the set-up');
+      for (const name of ['make-previewable', 'new-variant']) if (!/^archflow isn’t set up for Preview yet\. Run Set up project first\.$/.test(reactRows(name).blocked ?? '')) throw new Error(`${name}: ${reactRows(name).blocked}`);
+      if (reactRows('set-up-project').blocked) throw new Error('Set up project itself is blocked');
+      const said = await chat('job_start', { agent: 'new-variant', request: 'Gate test (chat)' });
+      if (!said.error || !/New variant can't start now/.test(said.text)) throw new Error(`the chat: ${said.text}`);
+      // The card's note says it waits.
+      t.map.show();
+      const seen: any[] = [];
+      const post = t.map.panel.webview.postMessage.bind(t.map.panel.webview);
+      t.map.panel.webview.postMessage = (m: any) => (seen.push(m), post(m));
+      await until(() => t.map.ready, 'the map page', 20_000);
+      t.map.receive({ type: 'card', id: free[0].id });
+      await until(() => seen.some((m) => m.type === 'card' && m.id === free[0].id), 'its drawer', 5000);
+      const note = seen.find((m) => m.type === 'card' && m.id === free[0].id).nudges?.[0];
+      if (!/isn’t set up for Preview yet/.test(note?.waits ?? '')) throw new Error(`its note: ${JSON.stringify(note)}`);
+      // Set up project starts, asking nothing (no request given); while it works, the others say so.
+      writeFileSync(hold, '');
+      if ((await vscode.commands.executeCommand('visualEditor.runAgent', 'set-up-project', 'background')) !== true) throw new Error('Set up project did not start');
+      const setUp = jobsNow().find((j) => j.agent === 'set-up-project' && j.request === 'Set this project up for Preview and the Playground.');
+      if (!setUp) throw new Error('no set-up job with its own request');
+      if (!/^Set up project is getting archflow ready now/.test(reactRows('make-previewable').blocked ?? '')) throw new Error(`while it works: ${reactRows('make-previewable').blocked}`);
+      await vscode.commands.executeCommand('visualEditor.stopJob', { job: { id: setUp.id } });
+      rmSync(join(root, '.visual-editor', 'jobs', `${setUp.id}.json`), { force: true });
+    } finally {
+      react.setUpFirst = real;
+      rmSync(hold, { force: true });
+    }
+    // Set up again: they start (no false alarm).
+    if (reactRows('make-previewable').blocked) throw new Error('still blocked once set up');
+    const started = await vscode.commands.executeCommand('visualEditor.runAgent', 'make-previewable', 'background', 'Gate test, set up', free[0].id);
+    if (started !== true) throw new Error('it did not start once set up');
+    await until(() => !t.agentRuns.has(jobsNow().find((j) => j.request === 'Gate test, set up')?.id ?? ''), 'its run to end', 20_000);
+    for (const j of jobsNow()) rmSync(join(root, '.visual-editor', 'jobs', `${j.id}.json`), { force: true });
+  });
+  await step('Set up project works one job at a time (another would do the same): a second start or Resume is refused while one works; once it stops, it starts again', async () => {
+    writeFileSync(hold, '');
+    try {
+      const setUps = () => jobsNow().filter((j) => j.agent === 'set-up-project');
+      if ((await vscode.commands.executeCommand('visualEditor.runAgent', 'set-up-project', 'background')) !== true) throw new Error('the first did not start');
+      const first = setUps()[0];
+      if ((await vscode.commands.executeCommand('visualEditor.runAgent', 'set-up-project', 'terminal')) !== false || setUps().length !== 1) throw new Error('a second one started');
+      if (!/^Set up project is at work already \(round 1 of 3\): one at a time/.test(reactRows('set-up-project').blocked ?? '')) throw new Error(`its buttons: ${reactRows('set-up-project').blocked}`);
+      const said = await chat('job_start', { agent: 'set-up-project', request: 'Set it up (chat)' });
+      if (!said.error || !/is at work already/.test(said.text)) throw new Error(`the chat: ${said.text}`);
+      // Stopped: a new one starts; the stopped one can't be resumed while the new one works.
+      await vscode.commands.executeCommand('visualEditor.stopJob', { job: { id: first.id } });
+      if (reactRows('set-up-project').blocked) throw new Error('still blocked once stopped');
+      if ((await vscode.commands.executeCommand('visualEditor.runAgent', 'set-up-project', 'background')) !== true) throw new Error('it did not start again');
+      const second = setUps().find((j) => j.id !== first.id)!;
+      if ((await vscode.commands.executeCommand('visualEditor.resumeJob', first.id)) !== false || statusOf(first.id) !== 'stopped') throw new Error('resumed alongside the new one');
+      // The new one stopped: the first resumes.
+      await vscode.commands.executeCommand('visualEditor.stopJob', { job: { id: second.id } });
+      if ((await vscode.commands.executeCommand('visualEditor.resumeJob', first.id)) !== true) throw new Error('not resumed once alone');
+      await vscode.commands.executeCommand('visualEditor.stopJob', { job: { id: first.id } });
+    } finally {
+      rmSync(hold, { force: true });
+    }
+    await until(() => !jobsNow().some((j) => t.agentRuns.has(j.id)), 'every run to end', 20_000);
+    for (const j of jobsNow()) rmSync(join(root, '.visual-editor', 'jobs', `${j.id}.json`), { force: true });
+  });
+  setUpAgent.done = realDone;
   t.hub.assistants = realAssistants;
 
   await client.close();

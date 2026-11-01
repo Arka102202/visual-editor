@@ -7,6 +7,7 @@ import type { FeComponent, FeModel } from './read/model';
 import type { VariantFolder } from './read/variants';
 import { readingWorker } from './workerClient';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { TypeCheck } from './types/typeCheck';
@@ -70,10 +71,32 @@ export function rememberModel(root: string, model: FeModel) {
   models.set(root, model);
 }
 
+/**
+ * Models read as a draft would leave the project: a big project takes seconds to read, and a draft's checks ask again
+ * and again. Per today's model (a new one drops them) and per draft content; a few each.
+ */
+const draftModels = new WeakMap<FeModel, Map<string, Promise<FeModel>>>();
+
 /** The project's model: today's (from the reader), or read again as a draft would leave it. */
 async function modelOf(ctx: ToolContext): Promise<FeModel> {
   const known = models.get(ctx.project.root);
   if (known && !ctx.draft) return known;
+  if (!known || !ctx.draft) return readAll(ctx);
+  const hash = createHash('sha1');
+  for (const c of ctx.draft.changes) hash.update(`${c.path}\0${c.after ?? '\u0001gone'}\0`);
+  const key = `${ctx.draft.id}#${hash.digest('hex')}`;
+  let byDraft = draftModels.get(known);
+  if (!byDraft) draftModels.set(known, (byDraft = new Map()));
+  const had = byDraft.get(key);
+  if (had) return had;
+  const reading = readAll(ctx);
+  byDraft.set(key, reading);
+  if (byDraft.size > 4) byDraft.delete(byDraft.keys().next().value!);
+  reading.catch(() => byDraft.delete(key));
+  return reading;
+}
+
+async function readAll(ctx: ToolContext): Promise<FeModel> {
   const files: SourceFile[] = [];
   for (const path of ctx.project.files.filter(wantsFile)) {
     const text = await ctx.read(path);

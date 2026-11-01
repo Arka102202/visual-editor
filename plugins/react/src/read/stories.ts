@@ -11,7 +11,7 @@ import { resolveImport, type Alias } from './resolve';
 import type { VariantFolder } from './variants';
 
 type N = t.Node;
-type Fn = t.ArrowFunctionExpression | t.FunctionExpression | t.FunctionDeclaration | t.ObjectMethod;
+export type Fn = t.ArrowFunctionExpression | t.FunctionExpression | t.FunctionDeclaration | t.ObjectMethod;
 
 export interface StoryContext {
   /** A project file's text (undefined: not there). */
@@ -24,7 +24,7 @@ export interface StoryContext {
   cardOf(path: string, name: string): string | undefined;
 }
 
-interface FileCtx {
+export interface FileCtx {
   path: string;
   text: string;
   ast: t.File;
@@ -32,7 +32,7 @@ interface FileCtx {
   imports: Map<string, { from: string; imported: string }>;
 }
 
-interface Scope {
+export interface Scope {
   file: FileCtx;
   /** The component or hook the code is in (for the card it belongs to). */
   owner: string;
@@ -78,7 +78,7 @@ export class StoryReader {
   private readonly parsed = new Map<string, FileCtx | null>();
   private readonly cache = new Map<string, Story[]>();
 
-  constructor(private readonly ctx: StoryContext) {}
+  constructor(protected readonly ctx: StoryContext) {}
 
   /** The stories of a component (its file and name), its children's carried on through it. */
   storiesOf(path: string, name: string, depth = 0): Story[] {
@@ -284,7 +284,7 @@ export class StoryReader {
   }
 
   /** What a component or hook has in scope: its functions, state setters, hook values, props. */
-  private scope(fn: Fn, file: FileCtx, owner: string, card: string | undefined): Scope {
+  protected scope(fn: Fn, file: FileCtx, owner: string, card: string | undefined): Scope {
     const s: Scope = { file, owner, card, locals: new Map(), setters: new Map(), hookVals: new Map(), props: new Set(), navigate: new Set(), mutations: new Map(), stores: new Map() };
     const p = fn.params[0];
     if (p?.type === 'ObjectPattern') for (const n of patternNames(p)) s.props.add(n);
@@ -330,7 +330,7 @@ export class StoryReader {
   }
 
   /** A project component an element's tag stands for, when it's one. */
-  private childComponent(tag: string, file: FileCtx): { path: string; name: string } | undefined {
+  protected childComponent(tag: string, file: FileCtx): { path: string; name: string } | undefined {
     if (!/^[A-Z]/.test(tag) || tag.includes('.')) return undefined;
     // (One defined in the same file.)
     if (!file.imports.has(tag) && findFunction(file.ast, tag)) return { path: file.path, name: tag };
@@ -344,7 +344,7 @@ export class StoryReader {
   }
 
   /** A constant's text, when an expression names one (MESSAGES.project.newProjectButton → "New project"). */
-  private constant(e: t.Expression, file: FileCtx): string | undefined {
+  protected constant(e: t.Expression, file: FileCtx): string | undefined {
     if (e.type !== 'MemberExpression') return undefined;
     const chain = memberChain(e);
     const imp = file.imports.get(chain[0]);
@@ -361,7 +361,7 @@ export class StoryReader {
     return v?.type === 'StringLiteral' ? v.value : v?.type === 'TemplateLiteral' ? shownText(v, source.text) : undefined;
   }
 
-  private file(path: string): FileCtx | undefined {
+  protected file(path: string): FileCtx | undefined {
     if (this.parsed.has(path)) return this.parsed.get(path) ?? undefined;
     const text = this.ctx.read(path);
     const ast = text !== undefined ? parseSource({ path, text }) : undefined;
@@ -386,7 +386,7 @@ export class StoryReader {
 
 // ---------------------------------------------------------------------------
 
-const at = (file: FileCtx, n: N) => ({ path: file.path, line: line0(n) + 1 });
+export const at = (file: FileCtx, n: N) => ({ path: file.path, line: line0(n) + 1 });
 
 const cap = (steps: StoryStep[]) => (steps.length > MAX_STEPS ? [...steps.slice(0, MAX_STEPS - 1), { ...steps[MAX_STEPS - 1], text: `${steps[MAX_STEPS - 1].text} (and more: open the code to see the rest)` }] : steps);
 
@@ -400,14 +400,18 @@ function dedupe(stories: Story[]): Story[] {
   });
 }
 
-function strip(e: t.Expression): t.Expression {
+export function strip(e: t.Expression): t.Expression {
   let x: t.Expression = e;
-  while (x.type === 'TSAsExpression' || x.type === 'TSNonNullExpression' || x.type === 'ParenthesizedExpression' || x.type === 'TSSatisfiesExpression' || x.type === 'AwaitExpression' || x.type === 'TSTypeAssertion') x = (x as { expression: t.Expression }).expression;
+  for (;;) {
+    if (x.type === 'AwaitExpression') x = x.argument;
+    else if (x.type === 'TSAsExpression' || x.type === 'TSNonNullExpression' || x.type === 'ParenthesizedExpression' || x.type === 'TSSatisfiesExpression' || x.type === 'TSTypeAssertion') x = (x as { expression: t.Expression }).expression;
+    else break;
+  }
   return x;
 }
 
 /** A function a file defines under a name ('default': its default export), unwrapping memo, forwardRef, useCallback. */
-function findFunction(ast: t.File, name: string): Fn | undefined {
+export function findFunction(ast: t.File, name: string): Fn | undefined {
   const unwrap = (e: N | null | undefined, depth = 0): Fn | undefined => {
     if (!e || depth > 3) return undefined;
     if (e.type === 'ArrowFunctionExpression' || e.type === 'FunctionExpression' || e.type === 'FunctionDeclaration') return e;
@@ -436,7 +440,7 @@ function findFunction(ast: t.File, name: string): Fn | undefined {
 }
 
 /** The name a file's default export has (its component's name). */
-function defaultName(ast: t.File): string | undefined {
+export function defaultName(ast: t.File): string | undefined {
   for (const st of ast.program.body) {
     if (st.type !== 'ExportDefaultDeclaration') continue;
     const d = st.declaration;
@@ -460,7 +464,7 @@ function objectMethod(ast: t.File, objName: string, key: string): Fn | undefined
 const fnOf = (n: N | undefined): Fn | undefined => (n && (n.type === 'ArrowFunctionExpression' || n.type === 'FunctionExpression' || n.type === 'ObjectMethod') ? n : undefined);
 
 /** What a function returns at its top level (the last return of an object, or an arrow's object body). */
-function returned(fn: Fn): t.ObjectExpression | undefined {
+export function returned(fn: Fn): t.ObjectExpression | undefined {
   if (fn.body.type !== 'BlockStatement') {
     const b = strip(fn.body as t.Expression);
     return b.type === 'ObjectExpression' ? b : undefined;
@@ -471,7 +475,7 @@ function returned(fn: Fn): t.ObjectExpression | undefined {
 }
 
 /** The value under a key in an object literal (`{ key }` stands for the name `key`). */
-function propertyValue(o: t.ObjectExpression, key: string): t.Expression | Fn | undefined {
+export function propertyValue(o: t.ObjectExpression, key: string): t.Expression | Fn | undefined {
   for (const p of o.properties) {
     if (p.type === 'ObjectMethod' && p.key.type === 'Identifier' && p.key.name === key) return p;
     if (p.type !== 'ObjectProperty') continue;
@@ -493,7 +497,7 @@ function jsxAttribute(fn: Fn, name: string, isTag: (tag: string) => boolean): { 
   return found ? { ...found, value: found.value } : undefined;
 }
 
-function jsxName(n: t.JSXOpeningElement['name']): string {
+export function jsxName(n: t.JSXOpeningElement['name']): string {
   if (n.type === 'JSXIdentifier') return n.name;
   if (n.type === 'JSXNamespacedName') return `${n.namespace.name}:${n.name.name}`;
   return `${jsxName(n.object as t.JSXOpeningElement['name'])}.${n.property.name}`;
@@ -529,7 +533,7 @@ function labelOf(el: t.JSXElement, text: string, constant: (e: t.Expression) => 
 }
 
 /** What an expression shows, in words: a string as it is, a template with … for its holes, else its text. */
-function shownText(e: t.Expression, text: string): string {
+export function shownText(e: t.Expression, text: string): string {
   if (e.type === 'StringLiteral') return e.value;
   // (One of two: "Close chat / Open chat".)
   if (e.type === 'ConditionalExpression' && e.consequent.type === 'StringLiteral' && e.alternate.type === 'StringLiteral') return `${e.consequent.value} / ${e.alternate.value}`;
@@ -537,7 +541,7 @@ function shownText(e: t.Expression, text: string): string {
   return sliceText(text, e).slice(0, 40);
 }
 
-function memberChain(m: t.Expression): string[] {
+export function memberChain(m: t.Expression): string[] {
   const out: string[] = [];
   let x: t.Expression = m;
   for (let i = 0; i < 8; i++) {
@@ -561,7 +565,7 @@ function patternNames(p: t.ObjectPattern): string[] {
   return patternPairs(p).map((x) => x.local);
 }
 
-function patternPairs(p: t.ObjectPattern): { key: string; local: string }[] {
+export function patternPairs(p: t.ObjectPattern): { key: string; local: string }[] {
   const out: { key: string; local: string }[] = [];
   for (const prop of p.properties) {
     if (prop.type !== 'ObjectProperty') continue;
@@ -572,7 +576,7 @@ function patternPairs(p: t.ObjectPattern): { key: string; local: string }[] {
   return out;
 }
 
-function argText(a: N, text: string): string {
+export function argText(a: N, text: string): string {
   if (a.type === 'StringLiteral') return `"${a.value}"`;
   if (a.type === 'TemplateLiteral') return `"${sliceText(text, a).slice(1, -1)}"`;
   return sliceText(text, a);
