@@ -388,6 +388,44 @@ export async function run() {
     if (said.error || !/Starts at saved data \(db\.projects\)/.test(said.text)) throw new Error(`Claude is told: ${said.text}`);
   });
 
+  await step('History: a card\'s story from git (its commits, newest first; a change not committed yet), a commit opens; Claude\'s card tool tells the same', async () => {
+    const pc = projectCard();
+    const file = join(root, pc.source.path);
+    const before = readFileSync(file, 'utf8');
+    t.map.show();
+    const seen: any[] = [];
+    const post = t.map.panel.webview.postMessage.bind(t.map.panel.webview);
+    t.map.panel.webview.postMessage = (m: any) => (seen.push(m), post(m));
+    try {
+      await until(() => t.map.ready, 'the map page', 20_000);
+      const history = async () => {
+        seen.length = 0;
+        t.map.receive({ type: 'card', id: pc.id });
+        await until(() => seen.some((m) => m.type === 'history' && m.id === pc.id), 'its history', 20_000);
+        return seen.find((m) => m.type === 'history' && m.id === pc.id);
+      };
+      const h = await history();
+      if (!h.git) throw new Error('archFlow is in git, yet not said so');
+      const commits = h.lines.filter((l: any) => l.kind === 'commit').map((l: any) => l.text);
+      if (commits.join(' | ') !== 'test committed “test start” | Arka102202 committed “Git: initial commit”') throw new Error(`its commits: ${commits.join(' | ')}`);
+      // Changed by hand, not committed: said, newest first.
+      writeFileSync(file, `${before}\n// a change by hand\n`);
+      const h2 = await history();
+      const top = h2.lines[0];
+      if (top.kind !== 'edit' || top.text !== 'Changed since the last commit, not committed yet' || !/: \+\d+ −\d+ lines/.test(top.detail)) throw new Error(`newest: ${JSON.stringify(top)}`);
+      // A commit opens: its message and its changes.
+      t.map.receive({ type: 'openHistory', open: h.lines.find((l: any) => l.kind === 'commit').open });
+      await until(() => vscode.window.activeTextEditor?.document.languageId === 'diff', 'the commit to open', 10_000);
+      if (!/^commit [0-9a-f]{40}\nAuthor: test\n[\s\S]*test start/.test(vscode.window.activeTextEditor!.document.getText())) throw new Error('not the commit');
+      await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+      const said = await chat('card', { id: pc.id });
+      if (said.error || !/\nHistory \(newest first\):\n- \d{4}-\d\d-\d\d · Changed since the last commit, not committed yet\.[^\n]*\n(- [^\n]*\n)*- [^\n]* · test committed “test start”/.test(said.text)) throw new Error(`Claude is told: ${said.text}`);
+    } finally {
+      writeFileSync(file, before);
+      t.map.panel.webview.postMessage = post;
+    }
+  });
+
   // Agents: from a button (a stand-in for claude), and from the chat (job_start, as the agent's skill does).
   const fakeOut = process.env.VISUAL_EDITOR_FAKE_OUT!;
   const realAssistants = t.hub.assistants.bind(t.hub);

@@ -440,10 +440,21 @@ Claude.
   both, with what; the impact tool says the same. Unit tests on a made-up project (passed, left out, spread; pages;
   a shared store), and the tool's words.
 
-### 3.5 History and change timeline
+### 3.5 History and change timeline ✅ built
 - **You get:** per card: approved proposals, notes and outside changes, in words ("changed yesterday by Claude: the
   date shows first").
 - **Done when:** a card's history reads like a story.
+- **How it works:** a card's drawer has History, newest first, each moment with when ("Today 11:05", "Yesterday",
+  "Thursday", "3 Oct"), what happened in a sentence and more under it: changes that went through Review (approved,
+  sent back, rejected, undone; why, and your note), agents' jobs on it (passed, failed, stopped; what was asked), the
+  commits that touched its files (who, the message, lines added and removed), and its changes not committed yet. A
+  previewable card's history is its whole folder's, so what it was before it was made previewable stays in it. Green
+  or red edge: it went well or not. A click opens what it's about: the proposal in Review, the job's story, the commit,
+  or the file's changes. Notes stay in Notes. Outside git, it says changes made elsewhere aren't known. Claude's
+  `card` tool tells the same story (exact dates).
+- **Checked:** on archFlow, ProjectCard's commits (its first one from before it was previewable), a change by hand
+  shown as not committed, a commit opening; the card tool says the same. Unit tests in a real git repository (new
+  files, changes, commits of other files left out), the story's order and words, and the day words.
 
 ### 3.6 Problems list
 - **You get:** hooks rules, duplicates and look-alikes, missing loading/error states, design tokens, unused
