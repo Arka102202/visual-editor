@@ -6,7 +6,7 @@ import type { Layout, PlacedCard, Section } from '../layout';
 import { MapView, type Look } from './mapView';
 import { MAX_FIELDS } from '../layout';
 import type { CardLines, CardMemory, FromMap, ShowMap, ToMap } from '../mapMessages';
-import type { Item } from '@visual-editor/contract';
+import type { Item, Story, StoryStep } from '@visual-editor/contract';
 import type { MemoryEntry } from '../memory';
 import { addStyles, ago, el } from '../ui/dom';
 import { iconButton, installTips, mapIcon, setIcon, tray, type Icon } from '../ui/buttons';
@@ -91,6 +91,24 @@ addStyles(`
   .drawer .card-nudge { display: flex; align-items: flex-start; gap: 8px; margin: 10px 0 4px; padding: 8px 10px; border-radius: 4px; font-size: 12px; line-height: 1.45; background: color-mix(in srgb, var(--vscode-charts-purple, #b180d7) 10%, transparent); border-left: 2px solid var(--vscode-charts-purple, #b180d7); }
   .drawer .card-nudge span { flex: 1; }
   .drawer .summary .text { font-size: 13px; line-height: 1.5; }
+  .drawer .story { margin: 4px 0; border-radius: 4px; }
+  .drawer .story-head { display: flex; gap: 6px; align-items: baseline; padding: 4px 6px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+  .drawer .story-head:hover { background: var(--vscode-list-hoverBackground); }
+  .drawer .story.open .story-head { font-weight: 600; }
+  .drawer .story-arrow { opacity: .6; width: 10px; flex: none; }
+  .drawer .story-tools { display: flex; gap: 4px; margin: 2px 0 2px 22px; }
+  .drawer .story-steps { list-style: none; margin: 2px 0 8px 16px; padding: 0; font-size: 12px; line-height: 1.45; border-left: 1px solid var(--vscode-panel-border, #8884); }
+  .drawer .story-steps .step { display: flex; gap: 6px; align-items: baseline; padding: 2px 6px; cursor: pointer; border-radius: 3px; }
+  .drawer .story-steps .step:hover { background: var(--vscode-list-hoverBackground); }
+  .drawer .story-steps .step .text { flex: 1; min-width: 0; }
+  .drawer .story-steps .step button { flex: none; padding: 0 3px; }
+  .drawer .story-steps .mark { width: 14px; flex: none; text-align: center; font-weight: 700; opacity: .85; }
+  .drawer .step.action .mark { color: var(--vscode-charts-blue, #3794ff); }
+  .drawer .step.ask .mark, .drawer .step.message .mark { color: var(--vscode-charts-yellow, #cca700); }
+  .drawer .step.state .mark, .drawer .step.store .mark { color: var(--vscode-charts-purple, #b180d7); }
+  .drawer .step.data .mark { color: var(--vscode-charts-green, #89d185); }
+  .drawer .step.api .mark, .drawer .step.navigate .mark { color: var(--vscode-charts-orange, #d18616); }
+  .drawer .step.prop .text { font-style: italic; opacity: .8; }
   .drawer .summary .metaline { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
   .drawer .summary .meta, .drawer .summary .hint { flex: 1; font-size: 11px; opacity: .65; }
   .drawer .summary .meta.stale { color: var(--vscode-editorWarning-foreground, #cca700); opacity: 1; }
@@ -313,6 +331,68 @@ function select(id: string | undefined, tell = true) {
   if (tell && changed) vscode.postMessage({ type: 'card', id });
 }
 
+/** Each card's stories (Story view), as its plugin last sent them; the stories opened; the card drawn last. */
+const storiesOf = new Map<string, Story[]>();
+const openStories = new Set<string>();
+let lastCard: CardMemory | undefined;
+
+const STEP_MARKS: Record<StoryStep['kind'], string> = { action: '▶', run: '↳', ask: '?', state: '●', store: '◆', data: '⛁', api: '⇄', navigate: '→', message: '✉', reload: '↻', prop: '⇡' };
+
+/** "What happens when…": the card's stories; a click opens one's steps (each opens its line; another card's, its card). */
+function drawStories(item: Item) {
+  const stories = storiesOf.get(item.id);
+  if (!stories?.length) return;
+  drawer.append(el('h3', undefined, `What happens when… (${stories.length})`));
+  for (const s of stories) {
+    const open = openStories.has(s.id);
+    const box = el('div', `story${open ? ' open' : ''}`);
+    const head = el('div', 'story-head');
+    head.title = open ? 'Close its steps' : 'See its steps';
+    head.append(el('span', 'story-arrow', open ? '▾' : '▸'), el('span', 'story-title', s.title));
+    head.addEventListener('click', () => {
+      if (open) openStories.delete(s.id);
+      else openStories.add(s.id);
+      if (lastCard) showCard(lastCard);
+    });
+    box.append(head);
+    if (open) {
+      const cards = [...new Set([item.id, ...s.steps.map((x) => x.card).filter((c): c is string => !!c)])];
+      const light = iconButton('focus', `Light up its path on the map: the ${cards.length} card${cards.length === 1 ? '' : 's'} it goes through (choosing another card ends it)`);
+      light.addEventListener('click', () => mv.showPath(cards));
+      const tools = tray(el('div', 'story-tools'));
+      tools.append(light);
+      box.append(tools);
+      const list = el('ol', 'story-steps');
+      let lastCardOfStep: string | undefined;
+      for (const st of s.steps) {
+        // (The way to another card shows where the story moves into it, not on each of its steps there.)
+        const entersCard = !!st.card && st.card !== lastCardOfStep;
+        if (st.card) lastCardOfStep = st.card;
+        const li = el('li', `step ${st.kind}`);
+        li.style.paddingLeft = `${(st.depth ?? 0) * 12}px`;
+        li.append(el('span', 'mark', STEP_MARKS[st.kind]), el('span', 'text', st.text));
+        if (entersCard && st.card && st.card !== item.id && mv.placedById.has(st.card)) {
+          const other = mv.placedById.get(st.card)!.item.label;
+          const go = iconButton('onMap', `Go to ${other}: the card this step is in`);
+          go.addEventListener('click', (e) => {
+            e.stopPropagation();
+            focusCard(st.card!);
+          });
+          li.append(go);
+        }
+        if (st.at) {
+          const where = st.at;
+          li.title = `${where.path}:${where.line}: click to open it`;
+          li.addEventListener('click', () => vscode.postMessage({ type: 'open', path: where.path, line: where.line }));
+        }
+        list.append(li);
+      }
+      box.append(list);
+    }
+    drawer.append(box);
+  }
+}
+
 const OUTCOME_WORDS = { applied: 'applied', 'sent-back': 'sent back', rejected: 'rejected', undone: 'undone' } as const;
 
 /** The drawer: the chosen card, what's noted about it, and the changes it went through. */
@@ -383,6 +463,9 @@ function showCard(m: CardMemory) {
     }
     drawer.append(row);
   }
+
+  // What happens when someone does something on it (Story view).
+  drawStories(item);
 
   // Its looks (variants) and the fixed-data states Preview shows them with.
   if (item.preview) {
@@ -1116,7 +1199,13 @@ window.addEventListener('message', (e: MessageEvent<ToMap>) => {
     return preview.fromPage(e.data as unknown as Record<string, unknown>, e.source);
   }
   if (e.data?.type === 'show') show(e.data);
-  else if (e.data?.type === 'card') showCard(e.data);
+  else if (e.data?.type === 'card') {
+    lastCard = e.data;
+    showCard(e.data);
+  } else if (e.data?.type === 'stories') {
+    storiesOf.set(e.data.id, e.data.stories);
+    if (lastCard?.id === e.data.id) showCard(lastCard);
+  }
   else if (e.data?.type === 'lines') showLines(e.data);
   else if (e.data?.type === 'theme') useThemeTokens(e.data.tokens);
   else if (e.data?.type === 'layouts') layouts = { ...e.data.layouts, ...layouts };

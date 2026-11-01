@@ -198,6 +198,38 @@ export interface Plugin {
   nudges?(project: ProjectInfo, items: Item[]): PluginNudge[];
   /** Contract 8: the same for one card, shown in its drawer on the map (React: "not previewable yet" → Make previewable). */
   cardNudges?(item: Item, project: ProjectInfo): PluginNudge[];
+  /**
+   * Contract 8: what happens when someone does something on a card (Story view): each action (a click, typing, a
+   * submit) and its steps through the code, read from it. Asked for when the card's drawer opens.
+   */
+  stories?(item: Item, project: ProjectInfo): Story[] | Promise<Story[]>;
+}
+
+/** What happens when someone does one thing on a card: "Click Delete on ProjectCard", step by step. */
+export interface Story {
+  id: string;
+  title: string;
+  /** Where the action is (line from 1). */
+  at: { path: string; line: number };
+  steps: StoryStep[];
+}
+
+export interface StoryStep {
+  /**
+   * action: what the person does; run: a function runs; ask: a yes/no question; state: the component's state changes;
+   * store: a shared store changes; data: saved data changes (a database, storage); api: a request to a server;
+   * navigate: another page opens; message: something is shown (an alert, a toast); reload: data is loaded again;
+   * prop: a function the component was given is called (what it does is up to the component using it).
+   */
+  kind: 'action' | 'run' | 'ask' | 'state' | 'store' | 'data' | 'api' | 'navigate' | 'message' | 'reload' | 'prop';
+  text: string;
+  /** Where it happens (line from 1), and the card it's in, when it's one. */
+  at?: { path: string; line: number };
+  card?: string;
+  /** How deep it is (a function inside a function): for indenting. */
+  depth?: number;
+  /** A prop step: the prop's name. */
+  prop?: string;
 }
 
 export interface PluginNudge {

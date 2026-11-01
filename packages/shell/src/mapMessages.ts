@@ -1,6 +1,6 @@
 // What the shell and the map page say to each other. Shared by both sides, so they can't drift apart.
 
-import type { Item } from '@visual-editor/contract';
+import type { Item, Story } from '@visual-editor/contract';
 import type { Mark } from './changes';
 import type { Layout as PanelLayout } from './ui/frame';
 import type { Recorded } from './proxy/proxy';
@@ -23,6 +23,8 @@ export type ToMap =
   | ShowMap
   | CardMemory
   | CardLines
+  /** What happens when someone does something on the chosen card (Story view), read from its code by its plugin. */
+  | { type: 'stories'; id: string; stories: Story[] }
   | { type: 'focus'; id: string }
   | { type: 'measure' }
   /** The code colours of the theme on now (type, string, keyword…), for text shown the way the editor colours it. */
