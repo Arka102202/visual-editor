@@ -21,7 +21,7 @@ export interface ClaudeParts {
 /** What the hub's tools are called in Claude Code. */
 const mcp = (tool: string) => `mcp__${SERVER_NAME}__${tool}`;
 /** The hub's tools that only read, for parts that don't say which tools they use. */
-const READING = ['overview', 'list_cards', 'card', 'memory', 'read_draft'];
+const READING = ['overview', 'list_cards', 'card', 'impact', 'follow_field', 'memory', 'read_draft'];
 /** Claude Code's own tools that change files: never given (changes reach the developer only as proposals). */
 const CHANGING = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
@@ -109,6 +109,8 @@ checker's reasons, which you must fix).
 - Make the change as a draft with \`save_draft\` (to change your draft, pass its id). Never edit files.
 - Check it yourself first with the plugin check tools, passing the draft, and fix what they find.
 - Then hand it in with \`job_hand_in\` (job, draft, a note) and end your answer with what you did, in plain words.
+- A tool that answers "Still running" goes on in the background: do other checks meanwhile, then call it again with the
+  same input for its answer. It hasn't failed.
 - If a job tool says the job was stopped or ran out of time, stop at once.`;
 
 /** What every checker is told first (its own instructions follow). */
@@ -118,6 +120,8 @@ const CHECKER = `You are the checker of a Visual Editor job: you are given a job
   as proof for Review), and look for yourself.
 - Then give your verdict with \`job_verdict\`: passed (only with proof that passed on this version) or sent back with
   specific reasons the worker can act on. End your answer with your verdict and why.
+- A tool that answers "Still running" goes on in the background: do other checks meanwhile, then call it again with the
+  same input for its answer. It hasn't failed.
 - If a job tool says the job was stopped or ran out of time, stop at once.`;
 
 /** The tools each role always has, and the ones it never gets (so neither can skip the other). */

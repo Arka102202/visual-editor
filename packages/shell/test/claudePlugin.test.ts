@@ -70,7 +70,7 @@ test('claude plugin: a one-plugin marketplace with the map skill, plugins’ ski
   assert.match(worker, /^You are the worker of a Visual Editor job/m);
   assert.match(worker, /## Make previewable\n\nSplit it\.\n$/);
   const checker = files['visual-editor/agents/make-previewable-checker.md'];
-  assert.equal(front(checker).tools, 'mcp__visual-editor__overview, mcp__visual-editor__list_cards, mcp__visual-editor__card, mcp__visual-editor__memory, mcp__visual-editor__read_draft, Read, Grep, Glob, mcp__visual-editor__add_evidence, mcp__visual-editor__job_status, mcp__visual-editor__job_verdict');
+  assert.equal(front(checker).tools, 'mcp__visual-editor__overview, mcp__visual-editor__list_cards, mcp__visual-editor__card, mcp__visual-editor__impact, mcp__visual-editor__follow_field, mcp__visual-editor__memory, mcp__visual-editor__read_draft, Read, Grep, Glob, mcp__visual-editor__add_evidence, mcp__visual-editor__job_status, mcp__visual-editor__job_verdict');
   assert.match(checker, /never change the draft/);
   // A checker that names save_draft among its tools still doesn't get it.
   const sneaky = claudePluginFiles({ ...parts, agents: [{ plugin: react, agent: { ...agent, checker: { prompt: 'x', tools: ['save_draft', 'check_variant_files'] } } }] }, '1', 'm')['visual-editor/agents/make-previewable-checker.md'];

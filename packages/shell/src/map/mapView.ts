@@ -397,8 +397,8 @@ export class MapView {
       }
     }
 
-    // Lines: zoomed in, those touching cards on screen; zoomed out, all of them, or one per pair of folders when
-    // there are too many to read.
+    // Lines: zoomed in, those crossing the screen; zoomed out, all of them, or (on a big map) those crossing the screen,
+    // or one per pair of folders when even those are too many to read. The chosen card's always, each on its own.
     const lw = Math.max(1.6, 0.6 / k);
     const drawLine = (x1: number, y1: number, x2: number, y2: number, colour: string, alpha: number, width: number, dashed?: boolean) => {
       const bend = Math.max(40, Math.abs(x2 - x1) / 2);
@@ -416,38 +416,40 @@ export class MapView {
       const b = this.placedById.get(l.to);
       return a && b ? { x1: a.x + a.w, y1: a.y + Math.min(a.h / 2, 28), x2: b.x, y2: b.y + Math.min(b.h / 2, 28) } : undefined;
     };
-    if (near || layout.links.length <= MAX_FAR_LINES) {
-      // Zoomed in: every line that crosses the screen (even when both its cards are off it), and the chosen card's.
-      const list = near
-        ? [...new Set([...this.lineBoxes.filter((b) => b.x1 >= r.x0 && b.x0 <= r.x1 && b.y1 >= r.y0 && b.y0 <= r.y1).map((b) => b.link), ...(picked && selected ? (this.linksOf.get(selected) ?? []) : [])])]
-        : layout.links;
-      for (const l of list) {
-        const e = ends(l);
-        if (!e) continue;
-        const on = picked && (l.from === selected || l.to === selected);
-        const colour = paint(colours.lines[l.kind]) ?? '#7c8580';
-        drawLine(e.x1, e.y1, e.x2, e.y2, colour, on ? 1 : picked ? 0.15 : near ? 0.8 : 0.3, on ? Math.max(3.5, 1.4 / k) : lw, colours.lines[l.kind]?.dashed);
-        if (on) {
-          // Its arrow head, and its name in the middle.
-          ctx.setLineDash([]);
-          ctx.globalAlpha = 1;
-          ctx.fillStyle = colour;
-          const s = Math.max(6, 6 / k);
-          ctx.beginPath();
-          ctx.moveTo(e.x2, e.y2);
-          ctx.lineTo(e.x2 - s * 1.4, e.y2 - s * 0.7);
-          ctx.lineTo(e.x2 - s * 1.4, e.y2 + s * 0.7);
-          ctx.fill();
-          // Its name too, unless the chosen card has so many lines that the names would pile up.
-          const label = nameLines ? (l.label ?? l.kind) : undefined;
-          if (label) {
-            ctx.font = `600 ${Math.max(11, 11 / k)}px system-ui, sans-serif`;
-            ctx.textAlign = 'center';
-            ctx.fillText(label, (e.x1 + e.x2) / 2, (e.y1 + e.y2) / 2 - 6 / Math.min(1, k));
-            ctx.textAlign = 'start';
-          }
+    const drawLink = (l: Layout['links'][number]) => {
+      const e = ends(l);
+      if (!e) return;
+      const on = picked && (l.from === selected || l.to === selected);
+      const colour = paint(colours.lines[l.kind]) ?? '#7c8580';
+      drawLine(e.x1, e.y1, e.x2, e.y2, colour, on ? 1 : picked ? 0.15 : near ? 0.8 : 0.3, on ? Math.max(3.5, 1.4 / k) : lw, colours.lines[l.kind]?.dashed);
+      if (on) {
+        // Its arrow head, and its name in the middle.
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = colour;
+        const s = Math.max(6, 6 / k);
+        ctx.beginPath();
+        ctx.moveTo(e.x2, e.y2);
+        ctx.lineTo(e.x2 - s * 1.4, e.y2 - s * 0.7);
+        ctx.lineTo(e.x2 - s * 1.4, e.y2 + s * 0.7);
+        ctx.fill();
+        // Its name too, unless the chosen card has so many lines that the names would pile up.
+        const label = nameLines ? (l.label ?? l.kind) : undefined;
+        if (label) {
+          ctx.font = `600 ${Math.max(11, 11 / k)}px system-ui, sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.fillText(label, (e.x1 + e.x2) / 2, (e.y1 + e.y2) / 2 - 6 / Math.min(1, k));
+          ctx.textAlign = 'start';
         }
       }
+    };
+    const own = picked && selected ? (this.linksOf.get(selected) ?? []) : [];
+    const crossing = near || layout.links.length > MAX_FAR_LINES ? this.lineBoxes.filter((b) => b.x1 >= r.x0 && b.x0 <= r.x1 && b.y1 >= r.y0 && b.y0 <= r.y1).map((b) => b.link) : layout.links;
+    if (near || crossing.length <= MAX_FAR_LINES) {
+      // (The chosen card's last, so they're on top.)
+      const ownSet = new Set(own);
+      for (const l of crossing) if (!ownSet.has(l)) drawLink(l);
+      for (const l of own) drawLink(l);
     } else {
       // One line per pair of folders, as thick as the lines it stands for.
       const pairs = new Map<string, { a: number; b: number; n: number; on: boolean }>();
@@ -466,6 +468,7 @@ export class MapView {
         const B = layout.sections[p.b];
         drawLine(A.x + A.w, A.y + A.h / 2, B.x, B.y + B.h / 2, ink.fg, p.on ? 0.9 : picked ? 0.08 : 0.25, Math.max(lw, (1 + Math.log2(p.n)) / k), false);
       }
+      for (const l of own) drawLink(l);
     }
     ctx.setLineDash([]);
 

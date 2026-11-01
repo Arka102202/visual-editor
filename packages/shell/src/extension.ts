@@ -2,10 +2,10 @@
 // memory and the assistant hub. Plugins find it through its exported API (see @visual-editor/contract).
 
 import * as vscode from 'vscode';
-import { CONTRACT_VERSION, type Item, type Plugin, type PluginSessionKind, type ShellApi } from '@visual-editor/contract';
+import { CONTRACT_VERSION, type Item, type Plugin, type PluginAgent, type PluginSessionKind, type ShellApi } from '@visual-editor/contract';
 import { PluginRegistry } from './registry';
 import { PluginsView } from './pluginsView';
-import { ProjectIndex } from './projectIndex';
+import { ProjectIndex, type ProjectState } from './projectIndex';
 import { ProjectsView } from './projectsView';
 import { findWorkspace, isIgnoredPath, isProjectFile } from './projects';
 import { basename, join, relative, sep } from 'node:path';
@@ -32,15 +32,31 @@ import { glance, runCase, startUrl, type RunSpec } from './caseRunner';
 import { DRAFTS_DIR, DraftStore, folderBytes, type Draft, type ProgressItem } from './drafts';
 import { Sessions } from './session';
 import { failedChecks, needsYouWords, type Proposal } from './proposals';
-import { JobStore, finished } from './jobs';
+import { JobStore, finished, resumable, type Job } from './jobs';
 import { cardsTouched, draftItems } from './draftItems';
 import { DraftApps } from './proxy/draftApps';
-import { comparePictures, takePicture } from './pictures';
+import { BLANK, comparePictures, takePicture, TOO_LONG } from './pictures';
 import { ClaudeAgents } from './hub/claudeAgents';
 import { AssistantsView, chooseAssistant } from './hub/assistantsView';
 import { AgentsView } from './hub/agentsView';
-import { AgentRuns, type RunWay } from './hub/agentRuns';
+import { AgentRuns, MAX_RUNNING, type RunWay } from './hub/agentRuns';
 import { vscodeFiles } from './vscodeFiles';
+
+/** How long compare_app gives each page of the app to draw (a big app loads thousands of files in its dev server). */
+const APP_PICTURE_MS = 120_000;
+
+/**
+ * Pictures of a project's app, one at a time: a big app loading in several hidden browsers at once (Claude asks for a few
+ * pages together) gets so slow that its pages run out of time, half drawn.
+ */
+const cameras = new Map<string, Promise<unknown>>();
+function camera<T>(root: string, take: () => Promise<T>): Promise<T> {
+  const mine = (cameras.get(root) ?? Promise.resolve()).then(take);
+  const done = mine.catch(() => undefined);
+  cameras.set(root, done);
+  void done.then(() => cameras.get(root) === done && cameras.delete(root));
+  return mine;
+}
 
 export function activate(context: vscode.ExtensionContext): ShellApi {
   const registry = new PluginRegistry();
@@ -425,12 +441,28 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     jobs: (root) => new JobStore(root).list(),
     saveJob: (root, j) => {
       new JobStore(root).save(j);
+      agentRuns.jobChanged(j);
       agentsView.refresh();
+    },
+    blocked: (root, agent) => {
+      const state = index.snapshot().find((s) => s.project.root === root);
+      const found = registry.agents().find((a) => a.agent.name === agent);
+      return state && found ? blockedBy(root, found.plugin, found.agent) : undefined;
     },
     agents: () => registry.agents(),
     // Design sessions, for Claude in the developer's chat: the open one, opening one, continuing a proposal in one.
     session: (root) => sessions.current(root),
     summary: (root, item) => summaryOf(root, item),
+    fields: async (root, item, field) => {
+      const state = index.snapshot().find((s) => s.project.root === root);
+      const plugin = state?.detected.find(({ plugin: p }) => item.id.startsWith(`${p.id}:`))?.plugin;
+      return state && plugin?.fields ? plugin.fields(item, state.project, field) : undefined;
+    },
+    impact: async (root, item, prop) => {
+      const state = index.snapshot().find((s) => s.project.root === root);
+      const plugin = state?.detected.find(({ plugin: p }) => item.id.startsWith(`${p.id}:`))?.plugin;
+      return state && plugin?.impact ? plugin.impact(item, state.project, prop) : undefined;
+    },
     // Only a session whose tab is open is worked in; a closed one is opened again when the developer agrees.
     sessionOpen: (root, id) => sessions.isOpen(root, id),
     openSession: (root, id) => {
@@ -531,24 +563,42 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
       const { items } = await draftItems(state, draft, (path) => vscodeFiles(root, changes).read(path));
       return cardsTouched(items, draft.changes.map((c) => c.path)).map((i) => i.id);
     },
+    // The project's cards as a draft leaves it, for plugin tools given the draft (kept per draft content: draftItems).
+    draftCards: async (root, draft) => {
+      const state = index.snapshot().find((s) => s.project.root === root);
+      if (!state) throw new Error('That project isn’t open.');
+      return draftItems(state, draft, (path) => vscodeFiles(root, changes).read(path));
+    },
     // A page of the app from the real files and from the draft's own app, pictured and compared.
     compareApp: async (root, draft, path) => {
-      const real = await proxies.open(root);
       const state = index.snapshot().find((s) => s.project.root === root);
-      const { project, items } = state ? await draftItems(state, draft, (p) => vscodeFiles(root, changes).read(p)) : { project: undefined, items: [] };
+      // (The draft's cards only for Preview's pages in its app, and only once asked: an app page doesn't need them.)
+      const cards = state ? draftItems(state, draft, (p) => vscodeFiles(root, changes).read(p)) : undefined;
+      cards?.catch(() => undefined);
+      let read: Awaited<NonNullable<typeof cards>> | undefined;
+      void cards?.then((r) => (read = r));
       const plugin = state?.detected[0]?.plugin;
-      const drafted = await draftApps.open(root, draft, (id) => {
-        const it = items.find((i) => i.id === id);
-        return it && project && plugin?.previewPage?.(it, project);
-      });
+      const [real, drafted] = await Promise.all([
+        proxies.open(root),
+        draftApps.open(root, draft, (id) => {
+          const it = read?.items.find((i) => i.id === id);
+          return it && read && plugin?.previewPage?.(it, read.project);
+        }),
+      ]);
       const dir = join(root, DRAFTS_DIR, draft.id);
       const name = `app${path.replace(/[^\w]+/g, '-').replace(/-+$/, '') || '-home'}-v${draft.revision}`;
       const before = join(dir, `${name}-before.png`);
       const after = join(dir, `${name}-after.png`);
       const diff = join(dir, `${name}-difference.png`);
-      const a = await takePicture(`${real}${path}`, before, { width: 1280, settleMs: 1500 });
-      const b = await takePicture(`${drafted}${path}`, after, { width: 1280, settleMs: 1500 });
+      // (Time for a big app to load: the call goes on in the background meanwhile. One page, then the other.)
+      const a = await camera(root, () => takePicture(`${real}${path}`, before, { width: 1280, settleMs: 1500, timeoutMs: APP_PICTURE_MS }));
+      const b = await camera(root, () => takePicture(`${drafted}${path}`, after, { width: 1280, settleMs: 1500, timeoutMs: APP_PICTURE_MS }));
       draftApps.touch();
+      // A page that didn't finish drawing can't be compared (two half-drawn pages look alike), nor a blank page without
+      // the draft: neither is the draft's doing.
+      const slow = [a.problems.includes(TOO_LONG) && 'without the draft', b.problems.includes(TOO_LONG) && 'with the draft'].filter(Boolean);
+      if (slow.length) return `The page ${path} ${slow.join(' and ')} took more than ${APP_PICTURE_MS / 1000} s to finish drawing, so the two couldn't be compared.`;
+      if (a.problems.includes(BLANK)) return `The page ${path} is blank without the draft (the app shows nothing there), so there's nothing to compare: use a page that shows what the draft changes.`;
       const d = await comparePictures(before, after, diff);
       // (Errors the page already has without the draft aren't the draft's.)
       return { before, after, diff, ...d, problems: [...new Set(b.problems.filter((p) => !a.problems.includes(p)))] };
@@ -566,7 +616,7 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
         return it && plugin?.previewPage?.(it, project);
       });
       const image = join(root, DRAFTS_DIR, draft.id, `${item.label.replace(/[^\w.-]+/g, '-')}-v${draft.revision}.png`);
-      const picture = await takePicture(`${app}/__ve/preview?item=${encodeURIComponent(item.id)}`, image);
+      const picture = await camera(root, () => takePicture(`${app}/__ve/preview?item=${encodeURIComponent(item.id)}`, image));
       draftApps.touch();
       return { image, card: item.label, cardId: item.id, designs: item.preview.variants.map((v) => v.name), states: item.preview.states, ...picture };
     },
@@ -740,7 +790,8 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     hub,
     () => {
       const root = current.get()?.project.root;
-      return root ? new JobStore(root).list() : [];
+      // (Jobs whose run is gone, as when VS Code closed while they worked, show as stopped: Resume carries them on.)
+      return root ? agentRuns.tidy(root, new JobStore(root).list()) : [];
     },
     (id) => void vscode.commands.executeCommand('visualEditor.stopJob', { job: { id } }),
     (id) => agentRuns.progress(id),
@@ -748,8 +799,113 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
       const root = current.get()?.project.root;
       return root ? review.proposals(root).find((p) => p.id === id) : undefined;
     },
-    { watch: (job) => agentRuns.watch(job), review: (proposal) => review.show(proposal) },
+    { watch: (job) => agentRuns.watch(job), review: (proposal) => review.show(proposal), resume: (job) => void vscode.commands.executeCommand('visualEditor.resumeJob', job) },
+    (plugin, agent) => {
+      const root = current.get()?.project.root;
+      return root ? blockedBy(root, plugin, agent) : undefined;
+    },
+    (agent) => {
+      const root = current.get()?.project.root;
+      return root ? doneWords(root, agent) : undefined;
+    },
   );
+  /** Until its plugin's project is set up, an agent waits (the set-up agent itself doesn't): why, and the one to run. */
+  function setUpWait(state: ProjectState, plugin: Plugin, agent: PluginAgent): { why: string; setUp?: PluginAgent } | undefined {
+    const first = plugin.setUpFirst?.(state.project, state.items);
+    if (!first || first.agent === agent.name) return undefined;
+    const setUp = plugin.agents?.find((a) => a.name === first.agent);
+    const title = setUp?.title ?? first.agent;
+    const root = state.project.root;
+    const jobs = new JobStore(root).list().filter((j) => j.agent === first.agent);
+    if (jobs.some((j) => !finished(j))) return { why: `${title} is getting ${state.project.name} ready now: ${agent.title} can start once its change is approved in Review.` };
+    const pending = review.proposals(root).find((p) => jobs.some((j) => j.proposal === p.id) && (p.status === 'proposed' || p.status === 'awaiting-checks' || p.status === 'held-back'));
+    if (pending) return { why: `${title}’s change is waiting in Review: approve it, then ${agent.title} can start.` };
+    return { why: `${first.why} Run ${title} first.`, setUp };
+  }
+
+  /**
+   * An agent that always does the same thing (it has a fixed request: Set up project) works one job at a time: a second
+   * would only do the same. The one at work, if there is one (not counting `except`, a job being resumed).
+   */
+  function sameJobAtWork(root: string, agent: PluginAgent, except?: string) {
+    return agent.request ? new JobStore(root).list().find((j) => j.agent === agent.name && j.id !== except && !finished(j)) : undefined;
+  }
+  const atWorkWords = (j: Job) => `${j.title} is at work already (${j.status === 'waiting' ? 'waiting its turn' : `round ${j.round} of ${j.rounds}`}): one at a time, since another would do the same.`;
+
+  /** Why an agent can't start now, in plain words (for the Agents section and the hub). */
+  function blockedBy(root: string, plugin: Plugin, agent: PluginAgent): string | undefined {
+    const state = index.snapshot().find((s) => s.project.root === root);
+    const same = sameJobAtWork(root, agent);
+    return doneWords(root, agent) ?? (state ? setUpWait(state, plugin, agent)?.why : undefined) ?? (same ? atWorkWords(same) : undefined);
+  }
+
+  /** Why an agent has nothing to do in a project (what it makes is there already: Set up project, set up). */
+  function doneWords(root: string, agent: PluginAgent): string | undefined {
+    const state = index.snapshot().find((s) => s.project.root === root);
+    return state && agent.done ? agent.done(state.project, state.items) : undefined;
+  }
+
+  /**
+   * Whether an agent can start (or a stopped job resume) now, saying why not with the way out: Claude Code connected
+   * with the agents added, the project set up, no other job working on the same card, and none doing the same thing.
+   */
+  function canRun(root: string, plugin: Plugin, agent: PluginAgent, way?: RunWay, card?: string, resuming?: string): boolean {
+    const done = doneWords(root, agent);
+    if (done) {
+      void vscode.window.showInformationMessage(done);
+      return false;
+    }
+    const claude = hub.assistants().find((a) => a.id === 'claude');
+    if (claude?.state !== 'on') {
+      void vscode.window.showWarningMessage(`${agent.title} runs with Claude Code: connect it first.`, 'Connect Claude Code').then((pick) => pick && hub.connectClaudeCode());
+      return false;
+    }
+    if (claude.agents === 'off') {
+      void vscode.window.showWarningMessage(`Add Visual Editor’s agents to Claude Code first, so it knows ${agent.title}.`, 'Add agents').then((pick) => pick && hub.addAgents());
+      return false;
+    }
+    const state = index.snapshot().find((s) => s.project.root === root);
+    const wait = state && setUpWait(state, plugin, agent);
+    if (wait) {
+      const setUp = wait.setUp;
+      void vscode.window.showWarningMessage(`${agent.title} can’t start yet. ${wait.why}`, ...(setUp ? [setUp.title] : [])).then((pick) => pick && setUp && vscode.commands.executeCommand('visualEditor.runAgent', setUp.name, way));
+      return false;
+    }
+    const same = sameJobAtWork(root, agent, resuming);
+    if (same) {
+      void vscode.window.showInformationMessage(atWorkWords(same), 'Watch it').then((pick) => pick && agentRuns.watch(same.id));
+      return false;
+    }
+    const busy = card ? new JobStore(root).list().find((j) => j.card === card && j.id !== resuming && !finished(j)) : undefined;
+    if (busy) {
+      void vscode.window.showInformationMessage(`${busy.title} is already working on this card (${busy.status === 'waiting' ? 'waiting its turn' : `round ${busy.round} of ${busy.rounds}`}): one job works on a card at a time.`, 'Watch it').then((pick) => pick && agentRuns.watch(busy.id));
+      return false;
+    }
+    return true;
+  }
+
+  // A card's note (Make previewable) says when its agent can't start: set up first, or a job at work on the card.
+  map.setAgentWaits((root, name, card) => {
+    const state = index.snapshot().find((s) => s.project.root === root);
+    const found = registry.agents().find((a) => a.agent.name === name);
+    const wait = state && found ? setUpWait(state, found.plugin, found.agent) : undefined;
+    if (wait) return wait.why;
+    const busy = new JobStore(root).list().find((j) => j.card === card && !finished(j));
+    return busy ? `${busy.title} is at work on it now (${busy.status === 'waiting' ? 'waiting its turn' : `round ${busy.round} of ${busy.rounds}`}): see its row in the Agents section.` : undefined;
+  });
+  // (So a card's note follows its jobs as they start and end.)
+  let liveJobs = '';
+  context.subscriptions.push(
+    agentRuns.onChange(() => {
+      const root = current.get()?.project.root;
+      const now = root ? new JobStore(root).list().filter((j) => !finished(j)).map((j) => `${j.id}:${j.status}`).join() : '';
+      if (now !== liveJobs) {
+        liveJobs = now;
+        map.refreshCard();
+      }
+    }),
+  );
+
   // (A proposal approved, sent back or rejected shows in its job's result too.)
   context.subscriptions.push(review.onChange(() => agentsView.refresh()));
   context.subscriptions.push(agentRuns, agentRuns.onChange(() => agentsView.refresh()));
@@ -906,10 +1062,11 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
       // (A run from a button also ends its process.)
       agentRuns.stop(root, j.id);
       agentsView.refresh();
-      void vscode.window.showInformationMessage(`${j.title} is stopping: it stops at its next step.`);
+      void vscode.window.showInformationMessage(`${j.title} is stopping: it stops at its next step. Resume (in the Agents section) carries it on from there.`);
     }),
     // Run an agent: which one, what it should do (in the developer's words), and where (the setting, or the button's).
-    vscode.commands.registerCommand('visualEditor.runAgent', async (name?: string, way?: RunWay, asked?: string) => {
+    // For a card, only one job works on it at a time; and until its plugin's project is set up, only that set-up runs.
+    vscode.commands.registerCommand('visualEditor.runAgent', async (name?: string, way?: RunWay, asked?: string, card?: string) => {
       const state = current.get();
       if (!state) return void vscode.window.showInformationMessage('Open a project first.');
       const mine = registry.agents().filter(({ plugin }) => state.detected.some((d) => d.plugin.id === plugin.id));
@@ -919,30 +1076,38 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
         : (await vscode.window.showQuickPick(mine.map((a) => ({ label: a.agent.title, detail: a.agent.summary ?? a.agent.description, a })), { placeHolder: 'Which agent?' }))?.a;
       if (!chosen) return;
       const agent = chosen.agent;
-      const claude = hub.assistants().find((a) => a.id === 'claude');
-      if (claude?.state !== 'on') {
-        const pick = await vscode.window.showWarningMessage(`${agent.title} runs with Claude Code: connect it first.`, 'Connect Claude Code');
-        if (pick) await hub.connectClaudeCode();
-        return;
-      }
-      if (claude.agents === 'off') {
-        const pick = await vscode.window.showWarningMessage(`Add Visual Editor’s agents to Claude Code first, so it knows ${agent.title}.`, 'Add agents');
-        if (pick) await hub.addAgents();
-        return;
-      }
-      // (A nudge says what it's for already.)
-      const request = asked ?? await vscode.window.showInputBox({
+      const root = state.project.root;
+      if (!canRun(root, chosen.plugin, agent, way, card)) return false;
+      // (A nudge says what it's for already, and an agent that's always asked the same starts without asking.)
+      const request = asked ?? agent.request ?? await vscode.window.showInputBox({
         title: `${agent.title}: what should it do?`,
         prompt: agent.summary ?? agent.description,
-        placeHolder: agent.name === 'new-variant' ? 'e.g. ProjectCard: a big coloured initial with the name under it' : agent.name === 'set-up-project' ? 'e.g. Set it up (or: start with ProjectCard)' : 'In your own words',
+        placeHolder: agent.name === 'new-variant' ? 'e.g. ProjectCard: a big coloured initial with the name under it' : 'In your own words',
         ignoreFocusOut: true,
       });
       if (!request?.trim()) return;
       const config = vscode.workspace.getConfiguration('visualEditor.agents');
       const where = way ?? config.get<RunWay>('runIn', 'background');
-      agentRuns.start(state.project.root, agent, request, where, config.get<number>('maxCostUsd', 0));
+      const job = agentRuns.start(root, agent, request, where, config.get<number>('maxCostUsd', 0), card);
       agentsView.refresh();
-      if (where === 'background') void vscode.window.showInformationMessage(`${agent.title} is working in the background: follow it in the Agents section (Stop is there too). The result comes to Review.`);
+      if (job.status === 'waiting') void vscode.window.showInformationMessage(`${agent.title} waits its turn: at most ${MAX_RUNNING} jobs run at once. It starts by itself when one ends (its row is in the Agents section).`);
+      else if (where === 'background') void vscode.window.showInformationMessage(`${agent.title} is working in the background: it's its own row in the Agents section (Watch and Stop are there). The result comes to Review.`);
+      return true;
+    }),
+    // Resume a stopped job where it was (in the Claude conversation it stopped in, when that's kept).
+    vscode.commands.registerCommand('visualEditor.resumeJob', async (id?: string) => {
+      const state = current.get();
+      if (!state) return;
+      const root = state.project.root;
+      const j = new JobStore(root).list().find((x) => x.id === id);
+      if (!j || !resumable(j)) return void vscode.window.showInformationMessage('That job can’t be resumed: it finished, or it’s gone.');
+      const found = registry.agents().find((a) => a.agent.name === j.agent);
+      if (!found) return void vscode.window.showWarningMessage(`${j.title} can’t be resumed: the plugin it came from isn’t here any more.`);
+      if (!canRun(root, found.plugin, found.agent, j.way, j.card, j.id)) return false;
+      const config = vscode.workspace.getConfiguration('visualEditor.agents');
+      const job = agentRuns.resume(root, found.agent, j, config.get<RunWay>('runIn', 'background'), config.get<number>('maxCostUsd', 0));
+      agentsView.refresh();
+      if (job.status === 'waiting') void vscode.window.showInformationMessage(`${j.title} waits its turn: at most ${MAX_RUNNING} jobs run at once. It carries on by itself when one ends.`);
       return true;
     }),
     registry.onChange(refreshAgents),
@@ -966,7 +1131,7 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     },
   };
   // The VS Code test (npm run test:vscode) reaches inside; never switched on otherwise.
-  if (process.env.VISUAL_EDITOR_TEST === '1') return Object.assign(api, { _test: { index, current, review, memory, changes, map, hub, agentsView, sessions, memoryView, summaryWriter } });
+  if (process.env.VISUAL_EDITOR_TEST === '1') return Object.assign(api, { _test: { index, current, review, memory, changes, map, hub, agentsView, agentRuns, registry, sessions, memoryView, summaryWriter } });
   return api;
 }
 

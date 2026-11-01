@@ -199,10 +199,73 @@ export interface Plugin {
   /** Contract 8: the same for one card, shown in its drawer on the map (React: "not previewable yet" → Make previewable). */
   cardNudges?(item: Item, project: ProjectInfo): PluginNudge[];
   /**
+   * Contract 8: when the project isn't ready for this plugin's agents yet, the one agent that gets it ready and why, in
+   * plain words (React: not set up for Preview → Set up project). Until then only that agent runs; the plugin's other
+   * agents, and their card nudges, wait.
+   */
+  setUpFirst?(project: ProjectInfo, items: Item[]): { agent: string; why: string } | undefined;
+  /**
    * Contract 8: what happens when someone does something on a card (Story view): each action (a click, typing, a
    * submit) and its steps through the code, read from it. Asked for when the card's drawer opens.
    */
   stories?(item: Item, project: ProjectInfo): Story[] | Promise<Story[]>;
+  /**
+   * Contract 8: what depends on a card, near and far, each with why (Impact): who uses it and what they pass, where it
+   * is seen, what shares its data; with `prop`, every place that passes that prop (or doesn't, or can't be told).
+   */
+  impact?(item: Item, project: ProjectInfo, prop?: string): Impact | undefined | Promise<Impact | undefined>;
+  /**
+   * Contract 8: follow a field (a prop, or a part of one: project.name): where it comes from, and where it's shown
+   * (Follow a field). Without `field`: only the fields one can follow on the card.
+   */
+  fields?(item: Item, project: ProjectInfo, field?: string): FieldTrail | undefined | Promise<FieldTrail | undefined>;
+}
+
+/** Where a field comes from (from its start, one way after another) and where it's shown, set, passed on or used. */
+export interface FieldTrail {
+  field: string;
+  /** The fields one can follow on the card. */
+  fields: string[];
+  comesFrom: FieldStep[];
+  shown: FieldStep[];
+}
+
+export interface FieldStep {
+  /**
+   * origin: where the value starts; step: it passes through here; here: the card followed gets it; shown: it's shown;
+   * look: it sets a look (a class, a style); into: it's passed to a child; used: code uses it without showing it;
+   * branch: one way it comes (when there are several); unsure: it can't be told.
+   */
+  kind: 'origin' | 'step' | 'here' | 'shown' | 'look' | 'into' | 'used' | 'branch' | 'unsure';
+  text: string;
+  at?: { path: string; line: number };
+  card?: string;
+  depth?: number;
+}
+
+/** What depends on a card (or one of its props), near and far. */
+export interface Impact {
+  /** Its props, to pick one. */
+  props: string[];
+  /** The prop it's about, when it's one. */
+  prop?: string;
+  /** For a prop: what renaming, removing or making it required would mean, in words. */
+  verdict?: string;
+  /** What uses it straight away. */
+  direct: ImpactPlace[];
+  /** What it reaches further away: the pages it's seen on, what shares its data. */
+  further: ImpactPlace[];
+}
+
+export interface ImpactPlace {
+  label: string;
+  /** Why it's affected, in words ("renders it, passing project, onDelete"). */
+  why: string;
+  card?: string;
+  /** Where (line from 1). */
+  at?: { path: string; line: number };
+  /** It can't be told for sure (a spread {...props}). */
+  unsure?: boolean;
 }
 
 /** What happens when someone does one thing on a card: "Click Delete on ProjectCard", step by step. */
@@ -361,6 +424,13 @@ export interface PluginAgent {
   checker: AgentPart;
   /** How many times the checker can send the draft back (1 to 3; 3 when not said). */
   rounds?: number;
+  /** Contract 8: what it's asked when started from a button, when that's always the same: it starts without asking. */
+  request?: string;
+  /**
+   * Contract 8: when what it makes is there already in a project, so it has nothing to do (Set up project in a project
+   * that's set up), why, in plain words; its buttons are off then. Undefined: it has work.
+   */
+  done?(project: ProjectInfo, items: Item[]): string | undefined;
 }
 
 export interface AgentPart {

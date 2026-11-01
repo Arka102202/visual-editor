@@ -6,7 +6,7 @@ import type { Layout, PlacedCard, Section } from '../layout';
 import { MapView, type Look } from './mapView';
 import { MAX_FIELDS } from '../layout';
 import type { CardLines, CardMemory, FromMap, ShowMap, ToMap } from '../mapMessages';
-import type { Item, Story, StoryStep } from '@visual-editor/contract';
+import type { FieldStep, FieldTrail, Impact, ImpactPlace, Item, Story, StoryStep } from '@visual-editor/contract';
 import type { MemoryEntry } from '../memory';
 import { addStyles, ago, el } from '../ui/dom';
 import { iconButton, installTips, mapIcon, setIcon, tray, type Icon } from '../ui/buttons';
@@ -22,7 +22,7 @@ import { NETWORK_CSS } from './networkPanel';
 import { PLUGIN_PANELS_CSS } from './pluginPanels';
 import type { Tone } from '../styles';
 
-declare function acquireVsCodeApi(): { postMessage(message: FromMap): void };
+declare function acquireVsCodeApi(): { postMessage(message: FromMap): void; getState(): unknown; setState(state: unknown): void };
 const vscode = acquireVsCodeApi();
 
 addStyles(`
@@ -90,8 +90,45 @@ addStyles(`
   .drawer h2 { font-size: 15px; margin: 0 24px 2px 0; word-break: break-word; }
   .drawer .card-nudge { display: flex; align-items: flex-start; gap: 8px; margin: 10px 0 4px; padding: 8px 10px; border-radius: 4px; font-size: 12px; line-height: 1.45; background: color-mix(in srgb, var(--vscode-charts-purple, #b180d7) 10%, transparent); border-left: 2px solid var(--vscode-charts-purple, #b180d7); }
   .drawer .card-nudge span { flex: 1; }
+  .drawer .card-nudge .nudge-waits { margin-top: 4px; font-weight: 600; color: var(--vscode-editorWarning-foreground, #cca700); }
+  .drawer .card-nudge button.off { opacity: .4; }
   .drawer .summary .text { font-size: 13px; line-height: 1.5; }
+  .drawer .fold-head { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 2px; }
+  .drawer .fold-info { margin-left: auto; flex: none; padding: 1px 3px; opacity: .8; }
+  .drawer .fold-info svg { width: 14px; height: 14px; }
+  .legend-pop { position: fixed; z-index: 1000; width: 300px; max-width: calc(100vw - 8px); max-height: calc(100vh - 8px); overflow: auto; padding: 8px 10px; border-radius: 6px; font-size: 12px; line-height: 1.4; color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground)); background: var(--vscode-editorHoverWidget-background, #252526); border: 1px solid var(--vscode-editorHoverWidget-border, #8886); box-shadow: 0 4px 14px #0006; }
+  .legend-pop .legend-title { font-weight: 600; margin-bottom: 6px; }
+  .legend-pop .legend-row { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; }
+  .legend-pop .legend-mark { width: 18px; flex: none; text-align: center; font-weight: 700; }
+  .legend-pop .legend-mark svg { width: 13px; height: 13px; vertical-align: -2px; }
+  .legend-pop .legend-mark.word { width: auto; min-width: 18px; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; opacity: .7; }
+  .legend-pop .legend-mark.empty { display: none; }
+  .legend-pop .legend-row:last-child .legend-text { opacity: .75; }
+  .drawer .fold-head:hover { opacity: 1; color: var(--vscode-foreground); }
+  .drawer .fold-arrow { display: inline-block; width: 12px; opacity: .7; }
+  .drawer .fold:not(.open) > .fold-body { display: none; }
   .drawer .story { margin: 4px 0; border-radius: 4px; }
+  .drawer .impact-top { display: flex; gap: 6px; align-items: center; margin: 2px 0 6px; }
+  .drawer .impact-pick { flex: 1; min-width: 0; font: inherit; font-size: 12px; color: var(--vscode-dropdown-foreground); background: var(--vscode-dropdown-background); border: 1px solid var(--vscode-dropdown-border, #8884); border-radius: 4px; padding: 3px 6px; }
+  .drawer .impact-verdict { font-size: 12px; line-height: 1.45; margin: 4px 0 8px; padding: 6px 8px; border-radius: 4px; border-left: 2px solid var(--vscode-charts-orange, #d18616); background: color-mix(in srgb, var(--vscode-charts-orange, #d18616) 9%, transparent); }
+  .drawer .impact-head { font-size: 11px; font-weight: 600; opacity: .7; margin: 8px 0 2px; }
+  .drawer .impact-row { display: flex; gap: 6px; align-items: baseline; padding: 3px 6px; border-radius: 3px; font-size: 12px; line-height: 1.45; }
+  .drawer .impact-row[title] { cursor: pointer; }
+  .drawer .impact-row:hover { background: var(--vscode-list-hoverBackground); }
+  .drawer .impact-row .impact-words { flex: 1; min-width: 0; }
+  .drawer .impact-row.further { opacity: .8; }
+  .drawer .impact-row.unsure .mark { color: var(--vscode-editorWarning-foreground, #cca700); }
+  .drawer .impact-row button { flex: none; padding: 0 3px; }
+  .drawer .field-branch { font-size: 11px; font-weight: 600; opacity: .65; margin: 8px 0 2px; }
+  .drawer .field-step { display: flex; gap: 6px; align-items: baseline; padding: 2px 6px; border-radius: 3px; font-size: 12px; line-height: 1.45; }
+  .drawer .field-step[title] { cursor: pointer; }
+  .drawer .field-step:hover { background: var(--vscode-list-hoverBackground); }
+  .drawer .field-step .text { flex: 1; min-width: 0; }
+  .drawer .field-step .mark { width: 16px; flex: none; text-align: center; }
+  .drawer .field-step.origin .mark, .drawer .field-step.origin .text { color: var(--vscode-charts-green, #89d185); }
+  .drawer .field-step.here { font-weight: 600; }
+  .drawer .field-step.unsure .mark { color: var(--vscode-editorWarning-foreground, #cca700); }
+  .drawer .field-step button { flex: none; padding: 0 3px; }
   .drawer .story-head { display: flex; gap: 6px; align-items: baseline; padding: 4px 6px; border-radius: 4px; cursor: pointer; font-size: 12px; }
   .drawer .story-head:hover { background: var(--vscode-list-hoverBackground); }
   .drawer .story.open .story-head { font-weight: 600; }
@@ -336,13 +373,242 @@ const storiesOf = new Map<string, Story[]>();
 const openStories = new Set<string>();
 let lastCard: CardMemory | undefined;
 
+/** Each card's fields, or the trail of the one followed, as its plugin last sent it. */
+const fieldOf = new Map<string, FieldTrail>();
+
+const FIELD_MARKS: Record<FieldStep['kind'], string> = { origin: '◉', step: '↓', here: '▶', shown: '👁', look: '🎨', into: '↳', used: '⚙', branch: '', unsure: '?' };
+
+/** "Follow a field": pick one of its fields; where it comes from (each way from its start) and where it's shown. */
+function drawField(item: Item) {
+  const trail = fieldOf.get(item.id);
+  if (!trail?.fields.length) return;
+  drawer.append(heading(`Follow a field (${trail.fields.length})`, FIELD_LEGEND));
+  const top = el('div', 'impact-top');
+  const pick = el('select', 'impact-pick');
+  pick.title = 'A value it is given (or a part of one): where it comes from, and where it is shown';
+  const none = el('option', undefined, 'Pick a field to follow…');
+  none.value = '';
+  pick.append(none);
+  for (const f of trail.fields) {
+    const o = el('option', undefined, f);
+    o.value = f;
+    o.selected = trail.field === f;
+    pick.append(o);
+  }
+  pick.addEventListener('change', () => vscode.postMessage({ type: 'field', id: item.id, ...(pick.value ? { field: pick.value } : {}) }));
+  top.append(pick);
+  if (trail.field) {
+    const cards = [...new Set([item.id, ...[...trail.comesFrom, ...trail.shown].map((s) => s.card).filter((c): c is string => !!c)])];
+    const light = iconButton('focus', `Light up its path on the map: ${cards.length} card${cards.length === 1 ? '' : 's'} (choosing another card ends it)`);
+    light.addEventListener('click', () => mv.showPath(cards));
+    top.append(light);
+  }
+  drawer.append(top);
+  if (!trail.field) return;
+  const steps = (title: string, list: FieldStep[]) => {
+    drawer.append(el('div', 'impact-head', title));
+    if (!list.length) return void drawer.append(el('div', 'none', 'Nowhere it can be told.'));
+    let lastCardOfStep: string | undefined;
+    for (const st of list) {
+      if (st.kind === 'branch') {
+        drawer.append(el('div', 'field-branch', st.text));
+        lastCardOfStep = undefined;
+        continue;
+      }
+      const row = el('div', `field-step ${st.kind}`);
+      row.style.paddingLeft = `${6 + (st.depth ?? 0) * 12}px`;
+      row.append(el('span', 'mark', FIELD_MARKS[st.kind]), el('span', 'text', st.text));
+      const enters = !!st.card && st.card !== lastCardOfStep;
+      if (st.card) lastCardOfStep = st.card;
+      if (enters && st.card && st.card !== item.id && mv.placedById.has(st.card)) {
+        const go = iconButton('onMap', `Go to ${mv.placedById.get(st.card)!.item.label}`);
+        go.addEventListener('click', (e) => {
+          e.stopPropagation();
+          focusCard(st.card!);
+        });
+        row.append(go);
+      }
+      if (st.at) {
+        const where = st.at;
+        row.title = `${where.path}:${where.line}: click to open it`;
+        row.addEventListener('click', () => vscode.postMessage({ type: 'open', path: where.path, line: where.line }));
+      }
+      drawer.append(row);
+    }
+  };
+  steps('Comes from', trail.comesFrom);
+  steps('Where it’s shown', trail.shown);
+}
+
+/** What depends on each card (or the prop picked), as its plugin last sent it. */
+const impactOf = new Map<string, Impact>();
+
+/** "If you change it…": what depends on the card, or on one of its props (picked in the list), near and far. */
+function drawImpact(item: Item) {
+  const imp = impactOf.get(item.id);
+  if (!imp) return;
+  drawer.append(heading('If you change it…', IMPACT_LEGEND));
+  const top = el('div', 'impact-top');
+  const pick = el('select', 'impact-pick');
+  pick.title = 'What you change: the whole component, or one thing it is given';
+  for (const v of ['', ...imp.props]) {
+    const o = el('option', undefined, v ? `its prop “${v}”` : 'the whole component');
+    o.value = v;
+    o.selected = (imp.prop ?? '') === v;
+    pick.append(o);
+  }
+  pick.addEventListener('change', () => vscode.postMessage({ type: 'impact', id: item.id, ...(pick.value ? { prop: pick.value } : {}) }));
+  const cards = [...new Set([item.id, ...[...imp.direct, ...imp.further].map((p) => p.card).filter((c): c is string => !!c)])];
+  const light = iconButton('focus', `Light up what it affects on the map: ${cards.length} card${cards.length === 1 ? '' : 's'} (choosing another card ends it)`);
+  light.addEventListener('click', () => mv.showPath(cards));
+  top.append(pick, light);
+  drawer.append(top);
+  if (imp.verdict) drawer.append(el('div', 'impact-verdict', imp.verdict));
+  const list = (title: string, places: ImpactPlace[], cls: string) => {
+    if (!places.length) return;
+    drawer.append(el('div', `impact-head ${cls}`, title));
+    for (const p of places) {
+      const row = el('div', `impact-row ${cls}${p.unsure ? ' unsure' : ''}`);
+      const words = el('div', 'impact-words');
+      words.append(el('b', undefined, p.label), document.createTextNode(` ${p.why}`));
+      row.append(el('span', 'mark', p.unsure ? '?' : cls === 'direct' ? '•' : '·'), words);
+      if (p.card && p.card !== item.id && mv.placedById.has(p.card)) {
+        const go = iconButton('onMap', `Go to ${p.label}`);
+        go.addEventListener('click', (e) => {
+          e.stopPropagation();
+          focusCard(p.card!);
+        });
+        row.append(go);
+      }
+      if (p.at) {
+        const where = p.at;
+        row.title = `${where.path}:${where.line}: click to open it`;
+        row.addEventListener('click', () => vscode.postMessage({ type: 'open', path: where.path, line: where.line }));
+      }
+      drawer.append(row);
+    }
+  };
+  list('Directly', imp.direct, 'direct');
+  list('Further away', imp.further, 'further');
+}
+
 const STEP_MARKS: Record<StoryStep['kind'], string> = { action: '▶', run: '↳', ask: '?', state: '●', store: '◆', data: '⛁', api: '⇄', navigate: '→', message: '✉', reload: '↻', prop: '⇡' };
+
+/** One line of a section's symbol list: the symbol (or a button's icon) and what it means. */
+interface LegendLine {
+  mark?: string;
+  icon?: Icon;
+  /** The symbol's colour, as it shows in the section. */
+  tone?: string;
+  text: string;
+}
+const TONE = {
+  blue: 'var(--vscode-charts-blue, #3794ff)',
+  yellow: 'var(--vscode-charts-yellow, #cca700)',
+  purple: 'var(--vscode-charts-purple, #b180d7)',
+  green: 'var(--vscode-charts-green, #89d185)',
+  orange: 'var(--vscode-charts-orange, #d18616)',
+  warn: 'var(--vscode-editorWarning-foreground, #cca700)',
+};
+const OPEN_LINE: LegendLine = { text: 'Click a row to open its line in the code.' };
+const GO_LINE: LegendLine = { icon: 'onMap', text: 'Go to that card on the map' };
+const STORY_LEGEND: LegendLine[] = [
+  { mark: '▸', text: 'A story: click it to see its steps (▾ hides them)' },
+  { mark: STEP_MARKS.action, tone: TONE.blue, text: 'What the person does (a click, typing…)' },
+  { mark: STEP_MARKS.run, text: 'A function runs' },
+  { mark: STEP_MARKS.ask, tone: TONE.yellow, text: 'Asks the person a yes/no question' },
+  { mark: STEP_MARKS.state, tone: TONE.purple, text: 'What the component remembers (its state) changes' },
+  { mark: STEP_MARKS.store, tone: TONE.purple, text: 'A shared store changes' },
+  { mark: STEP_MARKS.data, tone: TONE.green, text: 'Saved data changes (a database, storage)' },
+  { mark: STEP_MARKS.api, tone: TONE.orange, text: 'A request goes to a server' },
+  { mark: STEP_MARKS.navigate, tone: TONE.orange, text: 'Another page opens' },
+  { mark: STEP_MARKS.message, tone: TONE.yellow, text: 'Something is shown (an alert, a toast)' },
+  { mark: STEP_MARKS.reload, text: 'Data is loaded again' },
+  { mark: STEP_MARKS.prop, text: 'Calls a function it was given: what happens is up to the component using it' },
+  { icon: 'focus', text: 'Light up the story’s path on the map' },
+  { ...GO_LINE, text: 'Go to the card the story moves into' },
+  OPEN_LINE,
+];
+const IMPACT_LEGEND: LegendLine[] = [
+  { mark: '•', text: 'Directly: uses it straight away (renders it, passes it on, is its page)' },
+  { mark: '·', text: 'Further away: affected through something else (a page it’s seen on, data it shares)' },
+  { mark: '?', tone: TONE.warn, text: 'Can’t be told for sure: it passes {...} into it' },
+  { icon: 'focus', text: 'Light up everything it affects on the map' },
+  GO_LINE,
+  OPEN_LINE,
+];
+const FIELD_LEGEND: LegendLine[] = [
+  { mark: 'Way 1', text: 'One way the value comes, when there are several' },
+  { mark: FIELD_MARKS.origin, tone: TONE.green, text: 'Where the value starts (saved data, a server, a fixed value…)' },
+  { mark: FIELD_MARKS.step, text: 'It passes through here' },
+  { mark: FIELD_MARKS.here, text: 'This card gets it' },
+  { mark: FIELD_MARKS.shown, text: 'It’s shown on screen (as text, or in a title, alt…)' },
+  { mark: FIELD_MARKS.look, text: 'It sets a look (a class, a style)' },
+  { mark: FIELD_MARKS.into, text: 'It’s passed into another component (followed inside it)' },
+  { mark: FIELD_MARKS.used, text: 'Code uses it without showing it' },
+  { mark: FIELD_MARKS.unsure, tone: TONE.warn, text: 'Can’t be told from the code' },
+  { icon: 'focus', text: 'Light up its whole path on the map' },
+  GO_LINE,
+  OPEN_LINE,
+];
+
+/** Each section heading's symbol list, shown from the ⓘ at its right edge. */
+const legendOf = new WeakMap<HTMLElement, LegendLine[]>();
+
+/** A drawer heading whose section uses symbols: they're listed from an ⓘ at its right edge. */
+function heading(text: string, legend: LegendLine[]): HTMLElement {
+  const h = el('h3', undefined, text);
+  legendOf.set(h, legend);
+  return h;
+}
+
+/** The symbol list open now (one at a time), and whether a click keeps it open. */
+let legendPop: HTMLElement | undefined;
+let legendKept = false;
+
+function hideLegend() {
+  legendPop?.remove();
+  legendPop = undefined;
+  legendKept = false;
+}
+
+function showLegend(button: HTMLElement, lines: LegendLine[]) {
+  hideLegend();
+  const pop = el('div', 'legend-pop');
+  pop.append(el('div', 'legend-title', 'What the symbols mean'));
+  for (const l of lines) {
+    const row = el('div', 'legend-row');
+    const mark = el('span', `legend-mark${l.mark && l.mark.length > 2 ? ' word' : ''}`, l.mark ?? '');
+    if (l.icon) {
+      setIcon(mark, l.icon, '');
+      mark.removeAttribute('aria-label');
+      delete mark.dataset.tip;
+    }
+    if (l.tone) mark.style.color = l.tone;
+    if (!l.mark && !l.icon) mark.classList.add('empty');
+    row.append(mark, el('span', 'legend-text', l.text));
+    pop.append(row);
+  }
+  document.body.append(pop);
+  legendPop = pop;
+  // (Under the ⓘ, its right edge lined up with it; above it when there's no room below.)
+  const r = button.getBoundingClientRect();
+  const below = r.bottom + 6;
+  const top = below + pop.offsetHeight > window.innerHeight - 4 ? r.top - pop.offsetHeight - 6 : below;
+  pop.style.top = `${Math.max(4, top)}px`;
+  pop.style.left = `${Math.max(4, Math.min(window.innerWidth - pop.offsetWidth - 4, r.right - pop.offsetWidth))}px`;
+}
+
+document.addEventListener('pointerdown', (e) => {
+  if (legendPop && !legendPop.contains(e.target as Node) && !(e.target as Element | null)?.closest?.('.fold-info')) hideLegend();
+});
+document.addEventListener('scroll', (e) => legendPop && !legendPop.contains(e.target as Node) && hideLegend(), true);
 
 /** "What happens when…": the card's stories; a click opens one's steps (each opens its line; another card's, its card). */
 function drawStories(item: Item) {
   const stories = storiesOf.get(item.id);
   if (!stories?.length) return;
-  drawer.append(el('h3', undefined, `What happens when… (${stories.length})`));
+  drawer.append(heading(`What happens when… (${stories.length})`, STORY_LEGEND));
   for (const s of stories) {
     const open = openStories.has(s.id);
     const box = el('div', `story${open ? ' open' : ''}`);
@@ -400,6 +666,7 @@ function showCard(m: CardMemory) {
   if (m.id !== selected) return;
   const item = mv.placedById.get(m.id)?.item;
   if (!item) return;
+  hideLegend();
   drawer.replaceChildren();
   const close = iconButton('close', 'Close', { cls: 'close' });
   close.addEventListener('click', () => select(undefined));
@@ -414,10 +681,14 @@ function showCard(m: CardMemory) {
   // What its plugin suggests an agent could do for it (React: Make previewable): a line, and ▶ to start it.
   const nudgeLines: HTMLElement[] = [];
   for (const n of m.nudges ?? []) {
-    const go = iconButton('play', `${n.title}: start it for ${item.label} (it works in the background; the change comes to Review)`);
+    // (Not yet: the project needs setting up first, or a job is at work on this card already. A click says so.)
+    const go = iconButton('play', n.waits ? `Not yet: ${n.waits}` : `${n.title}: start it for ${item.label} (it works in the background; the change comes to Review)`, { cls: n.waits ? 'off' : undefined });
     go.addEventListener('click', () => vscode.postMessage({ type: 'cardAgent', id: item.id, agent: n.agent }));
-    const line = el('div', 'card-nudge');
-    line.append(el('span', undefined, n.text), go);
+    const line = el('div', `card-nudge${n.waits ? ' waits' : ''}`);
+    const words = el('span');
+    words.append(el('div', undefined, n.text));
+    if (n.waits) words.append(el('div', 'nudge-waits', n.waits));
+    line.append(words, go);
     nudgeLines.push(line);
   }
   if (item.preview) {
@@ -464,8 +735,10 @@ function showCard(m: CardMemory) {
     drawer.append(row);
   }
 
-  // What happens when someone does something on it (Story view).
+  // What happens when someone does something on it (Story view), and what changing it would affect (Impact).
   drawStories(item);
+  drawImpact(item);
+  drawField(item);
 
   // Its looks (variants) and the fixed-data states Preview shows them with.
   if (item.preview) {
@@ -474,7 +747,7 @@ function showCard(m: CardMemory) {
       drawer.append(el('h3', undefined, `Problems (${item.preview.problems.length})`));
       for (const p of item.preview.problems) drawer.append(el('div', 'entry problem', p));
     }
-    drawer.append(el('h3', undefined, 'Variants'));
+    drawer.append(el('h3', undefined, `Variants (${item.preview.variants.length})`));
     for (const v of item.preview.variants) {
       const row = el('div', `entry link${v.inUse ? ' in-use' : ''}`);
       const use = v.inUseFor?.length ? `In use for ${v.inUseFor.join(', ')}` : v.inUse ? 'In use' : '';
@@ -489,13 +762,79 @@ function showCard(m: CardMemory) {
 
   const notes = m.entries.filter((e) => e.kind !== 'change');
   const changes = m.entries.filter((e) => e.kind === 'change');
-  drawer.append(el('h3', undefined, 'Notes'));
+  drawer.append(el('h3', undefined, `Notes (${notes.length})`));
   if (notes.length) for (const e of notes) drawer.append(entry(e));
   else drawer.append(el('div', 'none', 'No notes yet.'));
-  drawer.append(el('h3', undefined, 'History'));
+  drawer.append(el('h3', undefined, `History (${changes.length})`));
   if (changes.length) for (const e of changes) drawer.append(entry(e));
   else drawer.append(el('div', 'none', 'No reviewed changes yet. Approved, sent back and rejected changes appear here.'));
+  foldSections();
   drawer.hidden = false;
+}
+
+/** The drawer's sections that are open, by name (kept across cards and reloads): only "What it does" at first. */
+const openSections = new Set<string>(
+  ((): string[] => {
+    try {
+      return (vscode.getState() as { openSections?: string[] } | undefined)?.openSections ?? ['What it does'];
+    } catch {
+      return ['What it does'];
+    }
+  })(),
+);
+
+/** Each heading of the drawer and what follows it: one section, folded or open (a click on its heading). */
+function foldSections() {
+  let body: HTMLElement | undefined;
+  for (const kid of [...drawer.children]) {
+    if (kid.tagName !== 'H3') {
+      body?.append(kid);
+      continue;
+    }
+    const head = kid as HTMLElement;
+    // (Its name without its count: "What happens when… (6)" is "What happens when…".)
+    const name = (head.textContent ?? '').replace(/\s*\(\d+\)$/, '');
+    const open = openSections.has(name);
+    const section = el('div', `fold${open ? ' open' : ''}`);
+    const arrow = el('span', 'fold-arrow', open ? '▾' : '▸');
+    body = el('div', 'fold-body');
+    head.replaceWith(section);
+    head.classList.add('fold-head');
+    head.prepend(arrow);
+    head.title = open ? 'Fold it' : 'Open it';
+    section.append(head, body);
+    const legend = legendOf.get(head);
+    if (legend) {
+      const info = iconButton('info', 'What the symbols mean', { cls: 'fold-info' });
+      // (Its list is its hover: no name tip on top of it.)
+      delete info.dataset.tip;
+      info.addEventListener('mouseenter', () => !legendKept && showLegend(info, legend));
+      info.addEventListener('mouseleave', () => !legendKept && hideLegend());
+      info.addEventListener('focus', () => !legendKept && showLegend(info, legend));
+      info.addEventListener('blur', () => !legendKept && hideLegend());
+      info.addEventListener('click', (e) => {
+        // (A click keeps it open until a click elsewhere; it doesn't fold the section.)
+        e.stopPropagation();
+        if (legendKept && legendPop) return hideLegend();
+        showLegend(info, legend);
+        legendKept = true;
+      });
+      head.append(info);
+    }
+    head.addEventListener('click', () => {
+      const on = !openSections.has(name);
+      if (on) openSections.add(name);
+      else openSections.delete(name);
+      section.classList.toggle('open', on);
+      arrow.textContent = on ? '▾' : '▸';
+      head.title = on ? 'Fold it' : 'Open it';
+      try {
+        vscode.setState({ ...((vscode.getState() as object | undefined) ?? {}), openSections: [...openSections] });
+      } catch {
+        // (Not kept: it opens as at first next time.)
+      }
+    });
+  }
 }
 
 function entry(e: MemoryEntry): HTMLElement {
@@ -1202,6 +1541,12 @@ window.addEventListener('message', (e: MessageEvent<ToMap>) => {
   else if (e.data?.type === 'card') {
     lastCard = e.data;
     showCard(e.data);
+  } else if (e.data?.type === 'field') {
+    fieldOf.set(e.data.id, e.data.trail);
+    if (lastCard?.id === e.data.id) showCard(lastCard);
+  } else if (e.data?.type === 'impact') {
+    impactOf.set(e.data.id, e.data.impact);
+    if (lastCard?.id === e.data.id) showCard(lastCard);
   } else if (e.data?.type === 'stories') {
     storiesOf.set(e.data.id, e.data.stories);
     if (lastCard?.id === e.data.id) showCard(lastCard);

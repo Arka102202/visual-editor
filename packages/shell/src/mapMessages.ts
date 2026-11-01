@@ -1,6 +1,6 @@
 // What the shell and the map page say to each other. Shared by both sides, so they can't drift apart.
 
-import type { Item, Story } from '@visual-editor/contract';
+import type { FieldTrail, Impact, Item, Story } from '@visual-editor/contract';
 import type { Mark } from './changes';
 import type { Layout as PanelLayout } from './ui/frame';
 import type { Recorded } from './proxy/proxy';
@@ -25,6 +25,10 @@ export type ToMap =
   | CardLines
   /** What happens when someone does something on the chosen card (Story view), read from its code by its plugin. */
   | { type: 'stories'; id: string; stories: Story[] }
+  /** What depends on the chosen card, or one of its props (Impact), read by its plugin. */
+  | { type: 'impact'; id: string; impact: Impact }
+  /** The chosen card's fields, or where one comes from and where it's shown (Follow a field). */
+  | { type: 'field'; id: string; trail: FieldTrail }
   | { type: 'focus'; id: string }
   | { type: 'measure' }
   /** The code colours of the theme on now (type, string, keyword…), for text shown the way the editor colours it. */
@@ -85,7 +89,8 @@ export interface CardMemory {
   /** Notes, rules and decisions about it, and changes to it, newest first. */
   entries: MemoryEntry[];
   /** What its plugin suggests an agent could do for it (React: Make previewable), with the agent's name and title. */
-  nudges?: { text: string; agent: string; title: string }[];
+  /** What its plugin suggests an agent could do for it; `waits`: why it can't start now (set up first, or at work on it). */
+  nudges?: { text: string; agent: string; title: string; waits?: string }[];
   /** "What it does": its summary (when it was written; whether its code changed since), or none; being written now. */
   summary?: { text: string; at: string; stale: boolean };
   summarizing?: boolean;
@@ -152,6 +157,10 @@ export type FromMap =
   | { type: 'previewFix'; id: string; need: string }
   /** Start a design session about this card. */
   | { type: 'session'; id: string }
+  /** Follow one of a card's fields (none: just its list). */
+  | { type: 'field'; id: string; field?: string }
+  /** What depends on a card, or on one of its props (none: the whole card). */
+  | { type: 'impact'; id: string; prop?: string }
   /** Write (or write again) a card's summary. */
   | { type: 'summarize'; id: string }
   /** A card's nudge: run its agent for that card. */

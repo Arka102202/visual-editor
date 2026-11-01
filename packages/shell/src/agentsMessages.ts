@@ -13,10 +13,26 @@ export interface AgentsEntry {
   summary: string;
   /** What Claude Code calls it. */
   claudeName: string;
-  /** An agent's latest job: working now (it can be stopped), or how it ended. */
-  job?: { id: string; status: string; round: number; rounds: number; request: string; running: boolean; progress?: string; by: string };
+  /** An agent's jobs at work now, or waiting their turn, newest first: each its own row (Watch, Stop). */
+  jobs?: LiveJob[];
+  /** Why it can't be started now, in plain words (the project needs setting up first). */
+  blocked?: string;
+  /** An agent with nothing to do in the project (what it makes is there already): why. Its buttons are off. */
+  done?: string;
   /** An agent's last jobs that ended, newest first, with what happened and the proof. */
   recent?: JobResult[];
+}
+
+/** A job at work (or waiting its turn), as the Agents section shows it. */
+export interface LiveJob {
+  id: string;
+  status: string;
+  round: number;
+  rounds: number;
+  request: string;
+  by: string;
+  /** What it's doing now, in words (or its place in the line). */
+  progress?: string;
 }
 
 /** A finished job, as the Agents section shows it. */
@@ -36,6 +52,8 @@ export interface JobResult {
   /** What the developer did with it in Review, in words ("waiting for you", "approved"…). */
   inReview?: string;
   proof?: { mark: string; title: string }[];
+  /** Stopped (or out of time) before it finished: it can be resumed where it was. */
+  resumable?: boolean;
 }
 
 /** Shell → Agents section. */
@@ -53,6 +71,8 @@ export type FromAgents =
   | { type: 'connect' }
   | { type: 'addAgents' }
   | { type: 'stop'; job: string }
+  /** Carry on a stopped job where it was. */
+  | { type: 'resume'; job: string }
   /** Run an agent from its button: in the background or in a terminal. */
   | { type: 'run'; agent: string; way: 'background' | 'terminal' }
   /** Watch a running job: its log (in the background) or its terminal. */

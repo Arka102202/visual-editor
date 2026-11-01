@@ -2,14 +2,15 @@
 // The worker makes a draft and hands it in; the checker proves it (the draft's proof for its current version must have
 // passed) or sends it back with reasons; at most `rounds` rounds, within a time limit, and it can be stopped at any
 // moment. A draft that passes goes to Review. Each job is a JSON file in the project's .visual-editor/jobs/ folder
-// (kept out of git). No VS Code APIs here, so it can be tested on its own.
+// (kept out of git). Started from a button, it may wait its turn (only so many run at once); stopped, it can be resumed
+// from where it was. No VS Code APIs here, so it can be tested on its own.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export const JOBS_DIR = '.visual-editor/jobs';
 
-export type JobStatus = 'working' | 'checking' | 'passed' | 'failed' | 'stopped' | 'out of time';
+export type JobStatus = 'waiting' | 'working' | 'checking' | 'passed' | 'failed' | 'stopped' | 'out of time';
 
 export interface Job {
   id: string;
@@ -34,6 +35,14 @@ export interface Job {
   history: { at: string; who: 'worker' | 'checker' | 'developer' | 'Visual Editor'; what: string }[];
   /** Who started it ("Claude Code", "a button"…). */
   by: string;
+  /** Started from a button: in the background or in a terminal (a run Visual Editor looks after). */
+  way?: 'background' | 'terminal';
+  /** The card it's for (its id), when it was started for one: only one job works on a card at a time. */
+  card?: string;
+  /** The Claude Code conversation running it (to resume it where it stopped). */
+  session?: string;
+  /** Stopped: where it was (the worker's turn or the checker's), to carry on from there when resumed. */
+  stoppedAt?: 'working' | 'checking';
 }
 
 /** How long an agent job may take. */
@@ -59,15 +68,41 @@ export function newJob(agent: { name: string; title: string; rounds?: number }, 
 /** Finished: nothing more happens to it. */
 export const finished = (j: Job) => j.status === 'passed' || j.status === 'failed' || j.status === 'stopped' || j.status === 'out of time';
 
-/** The job as it is now: one past its time limit is out of time. */
+/** The job as it is now: one past its time limit is out of time (one waiting its turn hasn't started its clock). */
 export function current(j: Job, now = new Date()): Job {
-  if (finished(j) || now.toISOString() < j.until) return j;
-  return { ...j, status: 'out of time', history: [...j.history, { at: now.toISOString(), who: 'Visual Editor', what: 'Stopped: it ran out of time.' }] };
+  if (finished(j) || j.status === 'waiting' || now.toISOString() < j.until) return j;
+  return { ...stopped(j, 'Stopped: it ran out of time.', 'Visual Editor', now), status: 'out of time' };
+}
+
+/** Stopped in the middle (by the developer, or its run ended): it remembers where it was, to resume from there. */
+export function stopped(j: Job, what: string, who: Job['history'][number]['who'], now = new Date()): Job {
+  const at = j.status === 'checking' ? 'checking' : 'working';
+  return { ...j, status: 'stopped', stoppedAt: at, history: [...j.history, { at: now.toISOString(), who, what }] };
+}
+
+/** It can be resumed: it was stopped or ran out of time before it finished its rounds. */
+export const resumable = (j: Job) => j.status === 'stopped' || j.status === 'out of time';
+
+/** Resumed: back where it was (the worker's turn or the checker's), with a new time limit; or waiting its turn. */
+export function resumed(j: Job, wait: boolean, now = new Date()): Job {
+  return {
+    ...j,
+    status: wait ? 'waiting' : j.stoppedAt ?? 'working',
+    until: new Date(now.getTime() + JOB_MINUTES * 60_000).toISOString(),
+    history: [...j.history, { at: now.toISOString(), who: 'developer', what: `Resumed${wait ? ': it waits its turn' : ''} (round ${j.round} of ${j.rounds}).` }],
+  };
+}
+
+/** Its turn came: it starts working (or carries on where it was stopped), its clock starting now. */
+export function started(j: Job, now = new Date()): Job {
+  return { ...j, status: j.stoppedAt ?? 'working', until: new Date(now.getTime() + JOB_MINUTES * 60_000).toISOString(), history: [...j.history, { at: now.toISOString(), who: 'Visual Editor', what: 'Its turn came: it started.' }] };
 }
 
 /** What to do next, in words, for whoever runs the job (the chat, a button's run). */
 export function nextStep(j: Job): string {
   switch (j.status) {
+    case 'waiting':
+      return 'It is waiting its turn (only so many jobs run at once): Visual Editor starts it when one ends. Do nothing for it now.';
     case 'working':
       return j.round === 1
         ? `Run the worker (round 1 of ${j.rounds}) with the request.`
@@ -102,7 +137,7 @@ export function parseJob(text: string, fallbackId: string): Job | undefined {
       agent: raw.agent,
       title: typeof raw.title === 'string' ? raw.title : raw.agent,
       request: raw.request,
-      status: (['working', 'checking', 'passed', 'failed', 'stopped', 'out of time'] as const).find((s) => s === raw.status) ?? 'failed',
+      status: (['waiting', 'working', 'checking', 'passed', 'failed', 'stopped', 'out of time'] as const).find((s) => s === raw.status) ?? 'failed',
       round: typeof raw.round === 'number' ? raw.round : 1,
       rounds: typeof raw.rounds === 'number' ? raw.rounds : 3,
       startedAt: typeof raw.startedAt === 'string' ? raw.startedAt : '',
@@ -111,6 +146,10 @@ export function parseJob(text: string, fallbackId: string): Job | undefined {
       ...(typeof raw.proposal === 'string' ? { proposal: raw.proposal } : {}),
       history: Array.isArray(raw.history) ? raw.history : [],
       by: typeof raw.by === 'string' ? raw.by : 'Assistant',
+      ...(raw.way === 'background' || raw.way === 'terminal' ? { way: raw.way } : {}),
+      ...(typeof raw.card === 'string' ? { card: raw.card } : {}),
+      ...(typeof raw.session === 'string' ? { session: raw.session } : {}),
+      ...(raw.stoppedAt === 'working' || raw.stoppedAt === 'checking' ? { stoppedAt: raw.stoppedAt } : {}),
     };
   } catch {
     return undefined;

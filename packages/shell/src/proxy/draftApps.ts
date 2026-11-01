@@ -52,6 +52,8 @@ interface Running {
 export class DraftApps {
   private readonly running = new Map<string, Running>();
   private readonly starting = new Map<string, Promise<string>>();
+  /** Ports given to draft apps that haven't stopped (one starting may not be listening yet). */
+  private readonly ports = new Set<number>();
 
   constructor(private readonly options: DraftAppsOptions) {}
 
@@ -120,7 +122,9 @@ export class DraftApps {
     mkdirSync(dir, { recursive: true });
     const files = join(dir, 'files.json');
     writeFileSync(files, JSON.stringify(Object.fromEntries(draft.changes.map((c) => [c.path, c.after]))));
-    const port = await freePort(5600);
+    // (Kept from the other draft apps starting at the same time until this one has stopped: each its own port.)
+    const port = await freePort(5600, this.ports);
+    this.ports.add(port);
     const { command, env } = this.options.node;
     const child = spawn(command, [`--max-old-space-size=${this.options.memoryMb ?? 1024}`, this.options.script, root, files, String(port), join(dir, 'vite')], {
       cwd: root,
@@ -128,6 +132,7 @@ export class DraftApps {
       // (Its input stays open while VS Code runs: when VS Code goes, even by crashing, it closes and the app stops.)
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    child.on('exit', () => this.ports.delete(port));
     let said = '';
     const app = await new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(`The draft's app didn't start within 60 seconds.\n${said.slice(-1500)}`)), 60_000);

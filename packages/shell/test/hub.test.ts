@@ -11,7 +11,7 @@ import type { ProjectState } from '../src/projectIndex';
 import type { Proposal } from '../src/proposals';
 import { HUB_TOOLS } from '../src/registry';
 import type { Draft } from '../src/drafts';
-import type { Job } from '../src/jobs';
+import { resumed, stopped, type Job } from '../src/jobs';
 
 const plugin: Plugin = { id: 'react', name: 'React', version: '0', contract: CONTRACT_VERSION, detect: () => ({ reason: 'react is in package.json' }), maps: [{ id: 'components', title: 'Components' }] };
 const state: ProjectState = {
@@ -423,6 +423,40 @@ test('hub: an agent job: worker hands in, checker needs proof to pass, sends bac
   }
 });
 
+test('hub: a job resumed goes on where it stopped; one waiting its turn takes no steps; an agent waits while its project needs setting up', async () => {
+  const { host, drafts, jobs } = fakeHost();
+  const agent: PluginAgent = { name: 'new-variant', title: 'New variant', description: 'A new design.', worker: { prompt: 'w' }, checker: { prompt: 'c' }, rounds: 3 };
+  host.agents = () => [{ plugin, agent }];
+  let setUp = false;
+  host.blocked = (_root, name) => (name === 'new-variant' && !setUp ? 'The project isn’t set up for Preview yet. Run Set up project first.' : undefined);
+  const hub = await connect(host);
+  try {
+    // Not set up: the chat can't start it either, and is told why (to tell the developer).
+    const refused = await hub.call('job_start', { agent: 'new-variant', request: 'A tiny card' });
+    assert.ok(refused.error);
+    assert.match(refused.text, /New variant can't start now\. The project isn’t set up for Preview yet\. Run Set up project first\. Tell the developer\./);
+    assert.equal(jobs.length, 0);
+    setUp = true;
+    await hub.call('job_start', { agent: 'new-variant', request: 'A tiny card' });
+    const id = jobs[0].id;
+    await hub.call('save_draft', { asked: 'A tiny card', title: 'Tiny', why: 'Small', changes: [{ path: 'src/Tiny.tsx', content: 'export const Tiny = 1' }] });
+    await hub.call('job_hand_in', { job: id, draft: drafts[0].id });
+    // Stopped at the checker's turn, then resumed: the checker's turn again, same round and draft.
+    jobs[0] = stopped(jobs[0], 'Stopped.', 'developer');
+    assert.match((await hub.call('job_status', { id })).text, /stopped[\s\S]*Next: The developer stopped it/);
+    jobs[0] = resumed(jobs[0], false);
+    const status = (await hub.call('job_status', { id })).text;
+    assert.match(status, /checking, round 1 of 3, draft/);
+    assert.match(status, /- developer: Resumed \(round 1 of 3\)/);
+    assert.match(status, /Next: Run the checker on draft/);
+    // Waiting its turn: no step can be taken for it.
+    jobs[0] = { ...jobs[0], status: 'waiting' };
+    assert.match((await hub.call('job_verdict', { job: id, passed: false, reasons: 'x' })).text, /isn't waiting for the checker \(it's waiting\)\. It is waiting its turn/);
+  } finally {
+    await hub.close();
+  }
+});
+
 test('hub: a change from the chat is checked as planned: a failing check keeps it out of Review; passing, it goes with its proof', async () => {
   const { host, proposals, drafts } = fakeHost();
   const judge: PluginTool = { name: 'judge', title: 'Judge it', description: 'A check.', checks: true, run: async (_i, ctx) => ((await ctx.read('src/Card.tsx'))?.includes('fetch') ? 'Calls the API\nPROBLEMS' : 'Fine\nPASSED') };
@@ -481,6 +515,117 @@ test('hub: compare_app keeps "looks the same" as proof: passed when the pictures
     assert.equal(drafts[0].evidence[0].passed, false);
     differing = 0;
     assert.match((await hub.call('compare_app', { draft: id, path: 'broken' })).text, /Problem on the page: The page threw: boom\n[\s\S]*PROBLEMS$/);
+  } finally {
+    await hub.close();
+  }
+});
+
+test('hub: a slow tool answers within the wait and goes on in the background: asked again, it gives its answer (never started twice); a verdict waits for it', async () => {
+  const { host, drafts, jobs } = fakeHost();
+  host.checkWaitMs = 40;
+  host.agents = () => [{ plugin, agent: { name: 'previewable', title: 'Make previewable', description: 'd', worker: { prompt: 'w', tools: ['compare_app'] }, checker: { prompt: 'c', tools: ['compare_app'] } } }];
+  let calls = 0;
+  let release = () => {};
+  host.compareApp = async (root, d) => {
+    calls++;
+    await new Promise<void>((done) => (release = done));
+    return { before: `${root}/b.png`, after: `${root}/a.png`, diff: `${root}/.visual-editor/drafts/${d.id}/x.png`, differing: 0, total: 100, problems: [] };
+  };
+  // A plugin check that is quick: it answers at once, as before.
+  const quick: PluginTool = { name: 'quick', title: 'Quick check', description: 'd', checks: true, run: async () => 'Fine\nPASSED' };
+  host.tools = () => [{ plugin, tool: quick }];
+  const hub = await connect(host);
+  try {
+    await hub.call('job_start', { agent: 'previewable', request: 'Make Card previewable' });
+    await hub.call('save_draft', { asked: 'Do what the test asks', title: 't', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'x' }] });
+    const id = drafts[0].id;
+    await hub.call('job_hand_in', { job: jobs[0].id, draft: id });
+    assert.deepEqual(await hub.call('quick', { draft: id }), { text: 'Fine\nPASSED', error: false }, 'a quick tool answers at once');
+
+    const first = await hub.call('compare_app', { draft: id, path: '/' });
+    assert.equal(first.error, false, 'still running is not a failure');
+    assert.match(first.text, /^Still running \(started \d+ s ago\): compare_app takes a while on this project, so it goes on in the background\. Call compare_app again with the same input in a minute/);
+    assert.match((await hub.call('compare_app', { draft: id, path: '/' })).text, /^Still running/);
+    assert.equal(calls, 1, 'asked again while it runs: not started twice');
+    assert.match((await hub.call('job_verdict', { job: jobs[0].id, passed: false, reasons: 'No proof yet.' })).text, /^Not yet: compare_app on this version is still running\. Call it again/);
+    assert.equal(jobs[0].status, 'checking', 'not sent back while its proof is on the way');
+
+    release();
+    await new Promise((r) => setTimeout(r, 10));
+    assert.match((await hub.call('compare_app', { draft: id, path: '/' })).text, /^The page \/ looks the same[\s\S]*PASSED$/, 'its answer, once done');
+    assert.equal(calls, 1);
+    assert.deepEqual(drafts[0].evidence.filter((e) => e.title.startsWith('Looks the same')).map((e) => e.passed), [true], 'kept as proof');
+    assert.match((await hub.call('job_verdict', { job: jobs[0].id, passed: true, reasons: 'Looks the same.' })).text, /^Passed/);
+  } finally {
+    await hub.close();
+  }
+});
+
+test('hub: plugin tools given a draft see the draft\'s own cards (a component it moves is found where it goes); without one, today\'s', async () => {
+  const { host, drafts } = fakeHost();
+  const seen: string[][] = [];
+  const where: PluginTool = { name: 'where', title: 'Where', description: 'd', run: async (_i, ctx) => (seen.push(ctx.items.map((i) => i.source?.path ?? '')), `${ctx.links.length} line(s)`) };
+  host.tools = () => [{ plugin, tool: where }];
+  host.draftCards = async () => ({ items: [{ id: 'react:Card', map: 'components', kind: 'component', label: 'Card', source: { path: 'src/Card/index.tsx' } }], links: [] });
+  const hub = await connect(host);
+  try {
+    await hub.call('save_draft', { asked: 'Do what the test asks', title: 't', why: 'w', changes: [{ path: 'src/Card/index.tsx', content: 'x' }, { path: 'src/Card.tsx', content: null }] });
+    assert.equal((await hub.call('where', { draft: drafts[0].id })).text, '0 line(s)');
+    assert.equal((await hub.call('where', {})).text, '1 line(s)');
+    assert.deepEqual(seen, [['src/Card/index.tsx'], ['src/List.tsx', 'src/Card.tsx']]);
+  } finally {
+    await hub.close();
+  }
+});
+
+test('hub: when Visual Editor\'s own tool fails on a draft, sending it back stops the job for the developer instead; the draft\'s own failures still go back to the worker', async () => {
+  const { host, drafts, jobs } = fakeHost();
+  host.agents = () => [{ plugin, agent: { name: 'previewable', title: 'Make previewable', description: 'd', worker: { prompt: 'w', tools: ['compare_app'] }, checker: { prompt: 'c', tools: ['compare_app'] }, rounds: 3 } }];
+  let appWorks = false;
+  host.compareApp = async (root, d) => (appWorks ? { before: `${root}/b.png`, after: `${root}/a.png`, diff: `${root}/.visual-editor/drafts/${d.id}/x.png`, differing: 0, total: 100, problems: [] } : 'The app took too long to start.');
+  // A check that couldn't do its job (its answer a problem) is Visual Editor's trouble too; one that says PROBLEMS is the draft's.
+  let typesRun = true;
+  const types: PluginTool = { name: 'types', title: 'Types', description: 'd', checks: true, run: async (_i, ctx) => (!typesRun ? { problem: 'The TypeScript check stopped: out of memory' } : (await ctx.read('src/Card.tsx'))?.includes('bad') ? '1 problem\nPROBLEMS' : 'None\nPASSED') };
+  host.tools = () => [{ plugin, tool: types }];
+  const hub = await connect(host);
+  try {
+    await hub.call('job_start', { agent: 'previewable', request: 'Make Card previewable' });
+    const job = jobs[0].id;
+    await hub.call('save_draft', { asked: 'Do what the test asks', title: 't', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'x' }] });
+    const id = drafts[0].id;
+    await hub.call('job_hand_in', { job, draft: id });
+    assert.match((await hub.call('compare_app', { draft: id, path: '/p7' })).text, /The app took too long to start/);
+    const verdict = await hub.call('job_verdict', { job, passed: false, reasons: 'No proof the look stays.' });
+    assert.match(verdict.text, /^Not sent back: Visual Editor's own tools failed on this version \(compare_app \/p7: The app took too long to start\.\), which the worker can't fix, so the job stopped for the developer/);
+    assert.equal(jobs[0].status, 'stopped');
+    assert.equal(jobs[0].stoppedAt, 'checking', 'Resume carries on with the checker');
+    assert.equal(jobs[0].round, 1, 'no round used up');
+    const last = jobs[0].history.at(-1)!;
+    assert.equal(last.who, 'Visual Editor');
+    assert.match(last.what, /^Stopped instead of sending it back: .*That isn't the worker's to fix\. Resume carries on once it's fixed\. The checker said: No proof the look stays\.$/);
+
+    // Fixed and resumed: it works now, and the checker sends back for the draft's own reasons as usual.
+    appWorks = true;
+    host.saveJob(state.project.root, resumed(jobs[0], false));
+    await hub.call('save_draft', { asked: 'Do what the test asks', draft: id, title: 't', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'y' }] });
+    assert.match((await hub.call('compare_app', { draft: id, path: '/p7' })).text, /PASSED$/);
+    assert.match((await hub.call('job_verdict', { job, passed: false, reasons: 'The markup changed.' })).text, /^Sent back for round 2 of 3/, 'no trouble on this version');
+
+    // Trouble, but the draft failed a check of its own on the same version: that goes back to the worker.
+    await hub.call('save_draft', { asked: 'Do what the test asks', draft: id, title: 't', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'bad' }] });
+    await hub.call('job_hand_in', { job, draft: id });
+    appWorks = false;
+    await hub.call('compare_app', { draft: id, path: '/p7' });
+    assert.match((await hub.call('types', { draft: id })).text, /PROBLEMS$/);
+    assert.match((await hub.call('job_verdict', { job, passed: false, reasons: 'A TypeScript problem.' })).text, /^Sent back for round 3 of 3/);
+
+    // A check that couldn't run counts as Visual Editor's trouble too.
+    await hub.call('save_draft', { asked: 'Do what the test asks', draft: id, title: 't', why: 'w', changes: [{ path: 'src/Card.tsx', content: 'z' }] });
+    await hub.call('job_hand_in', { job, draft: id });
+    typesRun = false;
+    assert.match((await hub.call('types', { draft: id })).text, /out of memory/);
+    assert.match((await hub.call('job_verdict', { job, passed: false, reasons: 'No types proof.' })).text, /^Not sent back: .*\(types: The TypeScript check stopped: out of memory\)/);
+    assert.equal(jobs[0].status, 'stopped');
   } finally {
     await hub.close();
   }
@@ -881,6 +1026,61 @@ test('hub: a card comes with its summary (what it does), saying when its code ch
     stale = true;
     assert.match((await hub.call('card', { id: 'react:Card' })).text, /written 2026-11-01; its code changed since, so check it\): Shows one project\./);
     assert.doesNotMatch((await hub.call('card', { id: 'react:List' })).text, /What it does/, 'no summary: nothing said');
+  } finally {
+    await hub.close();
+  }
+});
+
+test('hub: impact: what changing a card (or a prop) affects, in words; a prop it doesn\'t have is refused', async () => {
+  const { host } = fakeHost();
+  host.impact = async (_root, _item, prop) => ({
+    props: ['title', 'onDelete'],
+    ...(prop ? { prop, verdict: `${prop} is passed in 1 place.` } : {}),
+    direct: [{ label: 'List', why: prop ? 'passes onDelete={remove}' : 'renders it, passing title, onDelete', at: { path: 'src/List.tsx', line: 4 } }, { label: 'Grid', why: 'passes {...} into it', unsure: true }],
+    further: prop ? [] : [{ label: 'Home', why: 'the page at /: it\'s seen there' }],
+  });
+  const hub = await connect(host);
+  try {
+    assert.equal((await hub.call('impact', { id: 'react:Card' })).text, [
+      'If you change Card:',
+      'Directly:',
+      '- List: renders it, passing title, onDelete (src/List.tsx:4)',
+      "- Grid: passes {...} into it [can't be told for sure]",
+      'Further away:',
+      "- Home: the page at /: it's seen there",
+      'Its props: title, onDelete (ask with prop for one).',
+    ].join('\n'));
+    assert.match((await hub.call('impact', { id: 'react:Card', prop: 'onDelete' })).text, /^If you change Card's prop "onDelete":\nonDelete is passed in 1 place\.\nDirectly:\n- List: passes onDelete=\{remove\}/);
+    assert.match((await hub.call('impact', { id: 'react:Card', prop: 'nope' })).text, /Card has no prop "nope"\. Its props: title, onDelete\./);
+  } finally {
+    await hub.close();
+  }
+});
+
+test('hub: follow_field: a card\'s fields, or where one comes from (way by way) and is shown, in words', async () => {
+  const { host } = fakeHost();
+  host.fields = async (_root, _item, field) =>
+    field
+      ? {
+          field,
+          fields: ['thing', 'thing.name'],
+          comesFrom: [{ kind: 'origin', text: 'saved data (db.things)', at: { path: 'src/useThings.ts', line: 5 } }, { kind: 'step', text: 'List passes it as thing' }, { kind: 'here', text: 'Card gets it as thing.name' }],
+          shown: [{ kind: 'into', text: 'Card passes it to Badge as label' }, { kind: 'shown', text: 'Badge shows it as text in <i>', depth: 1 }],
+        }
+      : { field: '', fields: ['thing', 'thing.name'], comesFrom: [], shown: [] };
+  const hub = await connect(host);
+  try {
+    assert.equal((await hub.call('follow_field', { id: 'react:Card' })).text, 'Fields of Card one can follow: thing, thing.name.');
+    assert.equal((await hub.call('follow_field', { id: 'react:Card', field: 'thing.name' })).text, [
+      "Card's thing.name",
+      'Comes from:',
+      '  - Starts at saved data (db.things) (src/useThings.ts:5)',
+      '  - List passes it as thing',
+      '  - Card gets it as thing.name',
+      'Shown:',
+      '  - Card passes it to Badge as label',
+      '    - Badge shows it as text in <i>',
+    ].join('\n'));
   } finally {
     await hub.close();
   }
