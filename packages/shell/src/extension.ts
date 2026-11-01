@@ -21,6 +21,8 @@ import type { MemoryEntry } from './memory';
 import { claudeCommand, Hub, run } from './hub/hub';
 import { locked } from './hub/claudeLock';
 import { cleanupPrompt, deletable, readCleanup, type SessionSummary } from './hub/sessionCleanup';
+import { filesOf, outOfDate, SummaryStore } from './summaries';
+import { SummaryWriter } from './summaryWriter';
 import type { CleanupRow, FromCleanup, ToCleanup } from './cleanupMessages';
 import { webviewPage } from './webviewPage';
 import { askClaude, otherState, runCases, runLogicCheck, type LogicCase, type LogicVerdict, type RunPlaces } from './hub/logicCheck';
@@ -428,6 +430,7 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     agents: () => registry.agents(),
     // Design sessions, for Claude in the developer's chat: the open one, opening one, continuing a proposal in one.
     session: (root) => sessions.current(root),
+    summary: (root, item) => summaryOf(root, item),
     // Only a session whose tab is open is worked in; a closed one is opened again when the developer agrees.
     sessionOpen: (root, id) => sessions.isOpen(root, id),
     openSession: (root, id) => {
@@ -613,6 +616,40 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     review.draftsChanged(root);
     memoryView.refresh();
   };
+  // Summaries ("What it does"): written only when asked for a card, then kept up to date after every approve or undo
+  // that touches it. One small run (Haiku unless set otherwise) for several cards.
+  const summaryWriter = new SummaryWriter({
+    project: (root) => index.snapshot().find((s) => s.project.root === root),
+    ask: (root, prompt) => askClaude(claudeCommand(), root, vscode.workspace.getConfiguration('visualEditor.summaries').get<string>('model', 'haiku'), prompt, 300_000, 'The summary writer'),
+    changed: (root) => {
+      map.refreshCard();
+      review.refresh(root);
+    },
+  });
+  map.setSummaries({
+    get: (root, item) => summaryOf(root, item),
+    writing: (root, id) => summaryWriter.isWriting(root, id),
+    write: (root, ids) =>
+      void summaryWriter.write(root, ids).then((why) => {
+        if (why) void vscode.window.showWarningMessage(`The summary couldn't be written: ${why}`);
+      }),
+  });
+  review.setDecided(
+    (root, p) =>
+      void (async () => {
+        // (The map reads the changed code first, so new and changed cards are known.)
+        await new Promise<void>((done) => {
+          const off = index.onChange(() => (off.dispose(), done()));
+          setTimeout(() => (off.dispose(), done()), 8000);
+        });
+        const paths = new Set(p.changes.map((c) => c.path));
+        const items = index.snapshot().find((s) => s.project.root === root)?.items ?? [];
+        const touched = items.filter((i) => i.source && (p.items?.includes(i.id) || filesOf(i).some((f) => paths.has(f)))).map((i) => i.id);
+        if (touched.length) await summaryWriter.write(root, touched, p.id);
+      })(),
+    (id) => summaryWriter.jobs.get(id),
+  );
+
   // The Memory section lists the sessions not finished yet, with where each stands (to open again after a reload).
   // (Finished ones too, as history: what became of their proposal, when Review knows.)
   const OUTCOMES: Partial<Record<Proposal['status'], string>> = { proposed: 'waiting for review', applied: 'applied', rejected: 'rejected', 'sent-back': 'sent back', undone: 'undone', 'held-back': 'held back' };
@@ -929,8 +966,14 @@ export function activate(context: vscode.ExtensionContext): ShellApi {
     },
   };
   // The VS Code test (npm run test:vscode) reaches inside; never switched on otherwise.
-  if (process.env.VISUAL_EDITOR_TEST === '1') return Object.assign(api, { _test: { index, current, review, memory, changes, map, hub, agentsView, sessions, memoryView } });
+  if (process.env.VISUAL_EDITOR_TEST === '1') return Object.assign(api, { _test: { index, current, review, memory, changes, map, hub, agentsView, sessions, memoryView, summaryWriter } });
   return api;
 }
 
 export function deactivate() {}
+
+/** A card's summary for the views and Claude: its text, when it was written, and whether its code changed since. */
+function summaryOf(root: string, item: Item): { text: string; at: string; stale: boolean } | undefined {
+  const s = new SummaryStore(root).get(item.id);
+  return s ? { text: s.text, at: s.at, stale: outOfDate(root, s) } : undefined;
+}

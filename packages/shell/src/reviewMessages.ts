@@ -44,6 +44,8 @@ export interface ReviewItem {
   rerun?: { can: boolean; running?: string; view?: PlanView; items?: ProgressLine[] };
   /** Waiting for its checks: its test cases being written, ready for the developer, or running (the step it's on). */
   plan?: { state: 'writing' | 'ready' | 'running'; step?: string; view?: PlanView; items?: ProgressLine[] };
+  /** Applied or undone: the summaries of the cards it touched, being written (each card, and where it is). */
+  summaries?: { items: ProgressLine[]; ended: boolean; error?: string };
 }
 
 /** Shell → review page. */

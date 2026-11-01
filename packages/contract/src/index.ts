@@ -196,6 +196,8 @@ export interface Plugin {
    * set up for Preview yet" → Set up project). Closed by the developer, it stays closed for that project.
    */
   nudges?(project: ProjectInfo, items: Item[]): PluginNudge[];
+  /** Contract 8: the same for one card, shown in its drawer on the map (React: "not previewable yet" → Make previewable). */
+  cardNudges?(item: Item, project: ProjectInfo): PluginNudge[];
 }
 
 export interface PluginNudge {

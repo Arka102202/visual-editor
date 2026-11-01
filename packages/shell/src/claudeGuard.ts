@@ -9,6 +9,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FREE_READ_ENV, guard, readNote, type SessionNote, type ToolCall, type Turn } from './hub/claudeLock';
+import { SUMMARIES_FILE, type Summary } from './summaries';
 
 const folder = process.argv[2];
 let input = '';
@@ -36,7 +37,17 @@ process.stdin.on('end', () => {
   } catch {
     note = {};
   }
-  const out = guard(call, folder, turn, process.env[FREE_READ_ENV] === '1', note.open, note.closed);
+  // Cards' summaries (summaries.ts): what comes with a file Claude reads.
+  let summaries: Record<string, Summary> = {};
+  if (call.hook_event_name === 'PostToolUse') {
+    try {
+      summaries = JSON.parse(readFileSync(join(folder, SUMMARIES_FILE), 'utf8')) as Record<string, Summary>;
+    } catch {
+      summaries = {};
+    }
+  }
+  const out = guard(call, folder, turn, process.env[FREE_READ_ENV] === '1', note.open, note.closed, summaries);
+  if (out.context) process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: out.context } })}\n`);
   if (out.turn) {
     try {
       mkdirSync(dir, { recursive: true });

@@ -67,6 +67,16 @@
           ],
           "default": "sonnet",
           "description": "Which Claude model runs the logic check that every change passes before it reaches Review."
+        },
+        "visualEditor.summaries.model": {
+          "type": "string",
+          "enum": [
+            "haiku",
+            "sonnet",
+            "opus"
+          ],
+          "default": "haiku",
+          "description": "Which Claude model writes cards' summaries (\"What it does\" on the map): only when you ask for one, then after each approve or undo that touches the card. One small run for several cards; Haiku is enough for a few plain sentences."
         }
       }
     },

@@ -75,6 +75,14 @@ export async function run() {
   await vscode.commands.executeCommand('workbench.action.closeAllEditors');
   await vscode.commands.executeCommand('workbench.view.extension.visualEditor');
 
+  // Summaries are written after every approve and undo: a stand-in for Claude writes them here (each says which run
+  // wrote it), so no step ever uses real Claude for them.
+  let summaryRuns = 0;
+  (t.summaryWriter as any).host.ask = async (_root: string, prompt: string) => {
+    summaryRuns++;
+    const ids = [...prompt.matchAll(/\(id ([^)\s]+)\)/g)].map((m) => m[1]);
+    return { result: JSON.stringify({ summaries: ids.map((id) => ({ id, text: `Says hello (run ${summaryRuns}).` })) }) };
+  };
   const root = vscode.workspace.workspaceFolders![0].uri.fsPath;
   const readme = join(root, 'README.md');
   const original = readFileSync(readme, 'utf8');
@@ -506,6 +514,46 @@ export async function run() {
     // ✕: one, for good.
     await vscode.commands.executeCommand('visualEditor.deleteSession', draft.id, true);
     if (history().some((r) => r.id === draft.id) || store.list().some((d) => d.id === draft.id)) throw new Error('✕ did not delete it');
+  });
+
+  await step('summaries: written for a card only when asked (its drawer); after an approve, every card it touched gets its summary again, shown in Review', async () => {
+    // (Starts from no summaries; the stand-in for Claude counts its runs from here.)
+    require('node:fs').rmSync(join(root, '.visual-editor', 'memory', 'summaries.json'), { force: true });
+    summaryRuns = 0;
+    const id = 'hello:card';
+    const item = () => t.index.snapshot()[0].items.find((i: any) => i.id === id);
+    if (!item()?.source) throw new Error('the Hello card has no file');
+    t.map.show();
+    const seen = listen(t.map.panel);
+    await until(() => t.map.ready, 'the map page');
+    t.map.receive({ type: 'card', id });
+    await until(() => seen.some((m) => m.type === 'card' && m.id === id && m.canSummarize && !m.summary), 'its drawer, with no summary yet', 5000).catch((e) => {
+      throw new Error(`${e.message}; it got: ${JSON.stringify(seen.filter((m) => m.type === 'card').map(({ entries: _e, ...m }: any) => m))}`);
+    });
+    if (summaryRuns) throw new Error('a summary was written before anyone asked');
+    t.map.receive({ type: 'summarize', id });
+    await until(() => seen.some((m) => m.type === 'card' && m.summary?.text === 'Says hello (run 1).' && !m.summarizing), 'its drawer to show its summary', 5000);
+    await shot('20-summary');
+    // An approved change to its file: its summary is written again, as Review shows.
+    const path = item().source.path;
+    const before = readFileSync(join(root, path), 'utf8');
+    const pid = `${Date.now()}-sum1`;
+    const at = new Date().toISOString();
+    t.review.receiveProposal(root, { id: pid, title: 'A friendlier hello', why: 'w', asked: ['Be friendlier'], by: { kind: 'assistant', name: 'Claude Code' }, createdAt: at, status: 'proposed', changes: [{ path, before, after: path.endsWith('.json') ? before.replace(/\{/, '{\n  "description": "friendly",') : `${before}\nHi!\n` }], history: [{ at, status: 'proposed' }] });
+    await vscode.commands.executeCommand('visualEditor.openReview');
+    const inReview = listen(t.review.panel);
+    await (t.review as any).receive({ type: 'approve', id: pid });
+    await until(() => inReview.some((m) => m.type === 'show' && m.items?.find((i: any) => i.id === pid)?.summaries?.ended), 'Review to show its summaries updated', 20_000);
+    const shown = [...inReview].reverse().find((m) => m.type === 'show' && m.items?.find((i: any) => i.id === pid)?.summaries)?.items.find((i: any) => i.id === pid).summaries;
+    if (shown.items.map((x: any) => `${x.title}:${x.state}`).join() !== `${item().label}:done`) throw new Error(`Review shows: ${JSON.stringify(shown)}`);
+    await shot('21-summaries-updated');
+    if (!seen.some((m) => m.type === 'card' && m.summary?.text === 'Says hello (run 2).')) throw new Error('the drawer did not follow the new summary');
+    // Put it back (undo writes it once more), and drop the summary.
+    await (t.review as any).receive({ type: 'undo', id: pid });
+    await until(() => readFileSync(join(root, path), 'utf8') === before, 'the undo', 5000);
+    await until(() => summaryRuns >= 3, 'the summary written again after the undo', 20_000);
+    require('node:fs').rmSync(join(root, '.visual-editor', 'memory', 'summaries.json'), { force: true });
+    require('node:fs').rmSync(join(root, '.visual-editor', 'proposals', `${pid}.json`), { force: true });
   });
 
   await step('the map pops out into its own window and comes back', async () => {

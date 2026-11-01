@@ -13,6 +13,9 @@ declare function acquireVsCodeApi(): { postMessage(message: FromReview): void };
 const vscode = acquireVsCodeApi();
 
 addStyles(`
+  .summaries { margin: 12px 0; padding: 10px 12px; border-radius: 4px; font-size: 12px; border: 1px solid color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 50%, transparent); background: color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 8%, var(--vscode-editor-background)); }
+  .summaries .head { font-weight: 600; margin-bottom: 4px; }
+  .summaries.ended { border-color: color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 50%, transparent); background: color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 8%, var(--vscode-editor-background)); }
   body { display: flex; }
   .list { width: 300px; min-width: 220px; border-right: 1px solid var(--vscode-panel-border, #8883); overflow-y: auto; }
   .group { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; opacity: .6; padding: 14px 14px 6px; }
@@ -289,6 +292,18 @@ function drawDetail(item: ReviewItem) {
     actions.append(undo);
   }
   if (actions.childElementCount) detail.append(actions);
+  // Applied (or undone): the summaries of the cards it touched, written as it goes.
+  if (item.summaries) {
+    const s = item.summaries;
+    const done = s.items.filter((i) => i.state === 'done').length;
+    const box = el('div', `summaries${s.ended ? ' ended' : ''}`);
+    box.append(
+      el('div', 'head', s.ended ? (s.error ? `Summaries: ${done} of ${s.items.length} updated` : `Summaries updated (${done})`) : `${item.status === 'undone' ? 'Undone' : 'Changes applied'}. Now updating the summaries of the cards it touched:`),
+      drawProgress(s.items),
+    );
+    if (s.error) box.append(el('div', 'hint', `${s.error} Ask for those again from each card’s drawer on the map.`));
+    detail.append(box);
+  }
 
   // (Waiting for its checks: nothing is checked yet, as planned; its proof comes when they run.)
   if (item.evidence && item.status !== 'awaiting-checks') detail.append(...drawProof(item));

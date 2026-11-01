@@ -2,7 +2,7 @@
 // and when another project is chosen.
 
 import * as vscode from 'vscode';
-import type { MapDefinition, PluginNudge, ProposedChange } from '@visual-editor/contract';
+import type { Item, MapDefinition, PluginNudge, ProposedChange } from '@visual-editor/contract';
 import { webviewPage } from './webviewPage';
 import { isAbsolute, join } from 'node:path';
 import { cardMarks, type OutsideChanges } from './changes';
@@ -220,6 +220,14 @@ export class MapPanel {
       if (state && item && plugin?.previewFix) this.proposeChange(state.project.root, plugin.previewFix(state.project, m.need), item.id);
     } else if (m.type === 'session') {
       void vscode.commands.executeCommand('visualEditor.startSession', { card: m.id });
+    } else if (m.type === 'summarize') {
+      const root = this.current.get()?.project.root;
+      if (root) this.summaries?.write(root, [m.id]);
+    } else if (m.type === 'cardAgent') {
+      // Its agent, for this card: what it's for is said already, so nothing is asked.
+      const item = this.current.get()?.items.find((i) => i.id === m.id);
+      const nudge = item && this.cardNudges(item).find((n) => n.agent === m.agent);
+      if (item && nudge) void vscode.commands.executeCommand('visualEditor.runAgent', nudge.agent, undefined, `${nudge.title}: ${item.label}${item.source ? ` (${item.source.path})` : ''}`);
     } else if (m.type === 'nudge') {
       const nudge = this.nudgesFor(this.current.get())?.find((n) => n.key === m.key);
       // Closed, or its agent started: it doesn't come back for this project.
@@ -315,7 +323,44 @@ export class MapPanel {
     const state = this.current.get();
     const item = state?.items.find((i) => i.id === this.card);
     if (!state || !item) return;
-    void this.panel?.webview.postMessage({ type: 'card', id: item.id, entries: forCard(this.memory.entries(state.project.root), item) } satisfies ToMap);
+    const root = state.project.root;
+    const summary = this.summaries?.get(root, item);
+    void this.panel?.webview.postMessage({
+      type: 'card',
+      id: item.id,
+      entries: forCard(this.memory.entries(root), item),
+      nudges: this.cardNudges(item),
+      ...(summary ? { summary } : {}),
+      summarizing: !!this.summaries?.writing(root, item.id),
+      canSummarize: !!this.summaries && !!item.source,
+    } satisfies ToMap);
+  }
+
+  /** Cards' summaries ("What it does"), given once they exist. */
+  private summaries: { get(root: string, item: Item): { text: string; at: string; stale: boolean } | undefined; writing(root: string, id: string): boolean; write(root: string, ids: string[]): void } | undefined;
+
+  setSummaries(api: NonNullable<MapPanel['summaries']>) {
+    this.summaries = api;
+  }
+
+  /** The chosen card's drawer again (its summary written, or being written). */
+  refreshCard() {
+    void this.sendCard();
+  }
+
+  /** What the card's plugin suggests an agent could do for it (only agents it has). */
+  private cardNudges(item: Item): { text: string; agent: string; title: string }[] {
+    const state = this.current.get();
+    const plugin = state?.detected.find(({ plugin: p }) => item.id.startsWith(`${p.id}:`))?.plugin;
+    if (!state || !plugin?.cardNudges) return [];
+    try {
+      return plugin.cardNudges(item, state.project).flatMap((n) => {
+        const agent = plugin.agents?.find((a) => a.name === n.agent);
+        return agent ? [{ text: n.text, agent: agent.name, title: agent.title }] : [];
+      });
+    } catch {
+      return [];
+    }
   }
 
   /** A plugin panel's question for its plugin's VS Code side (PreviewPanel.serve). */
