@@ -88,6 +88,13 @@ addStyles(`
   .bar .chip.held-back { background: #c74e39; color: #fff; }
   .drawer { position: absolute; top: 40px; right: 0; bottom: 0; width: 300px; box-sizing: border-box; padding: 16px; overflow-y: auto; background: var(--vscode-sideBar-background, var(--vscode-editor-background)); border-left: 1px solid var(--vscode-panel-border, #8883); z-index: 3; }
   .drawer h2 { font-size: 15px; margin: 0 24px 2px 0; word-break: break-word; }
+  .drawer .card-nudge { display: flex; align-items: flex-start; gap: 8px; margin: 10px 0 4px; padding: 8px 10px; border-radius: 4px; font-size: 12px; line-height: 1.45; background: color-mix(in srgb, var(--vscode-charts-purple, #b180d7) 10%, transparent); border-left: 2px solid var(--vscode-charts-purple, #b180d7); }
+  .drawer .card-nudge span { flex: 1; }
+  .drawer .summary .text { font-size: 13px; line-height: 1.5; }
+  .drawer .summary .metaline { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+  .drawer .summary .meta, .drawer .summary .hint { flex: 1; font-size: 11px; opacity: .65; }
+  .drawer .summary .meta.stale { color: var(--vscode-editorWarning-foreground, #cca700); opacity: 1; }
+  .drawer .card-nudge button { flex: none; }
   .drawer .close { position: absolute; top: 10px; right: 10px; }
   .drawer .sub { font-size: 12px; opacity: .7; margin-bottom: 12px; word-break: break-all; }
   .drawer .buttons { margin-bottom: 14px; }
@@ -324,6 +331,15 @@ function showCard(m: CardMemory) {
     buttons.append(open);
   }
   drawerToggles = [];
+  // What its plugin suggests an agent could do for it (React: Make previewable): a line, and ▶ to start it.
+  const nudgeLines: HTMLElement[] = [];
+  for (const n of m.nudges ?? []) {
+    const go = iconButton('play', `${n.title}: start it for ${item.label} (it works in the background; the change comes to Review)`);
+    go.addEventListener('click', () => vscode.postMessage({ type: 'cardAgent', id: item.id, agent: n.agent }));
+    const line = el('div', 'card-nudge');
+    line.append(el('span', undefined, n.text), go);
+    nudgeLines.push(line);
+  }
   if (item.preview) {
     const one = iconButton('single', previewTip(item.label));
     one.addEventListener('click', () => preview.open(item));
@@ -342,7 +358,31 @@ function showCard(m: CardMemory) {
   const note = iconButton('note', 'Add a note: something to remember about this card (kept in the project, read by assistants)');
   note.addEventListener('click', () => vscode.postMessage({ type: 'addNote', id: item.id }));
   buttons.append(note);
-  drawer.append(buttons);
+  drawer.append(buttons, ...nudgeLines);
+
+  // What it does: its summary (written only when asked for, then kept up to date), or a button to write one.
+  if (m.canSummarize || m.summary) {
+    drawer.append(el('h3', undefined, 'What it does'));
+    const row = el('div', 'summary');
+    if (m.summarizing) row.append(el('span', 'hint', m.summary ? 'Writing it again…' : 'Writing its summary… (one small Claude run)'));
+    else if (m.summary) {
+      row.append(el('div', 'text', m.summary.text));
+      const meta = el('div', 'meta', `Written ${ago(m.summary.at)}${m.summary.stale ? ' · its code changed since: it may be out of date' : ''}`);
+      if (m.summary.stale) meta.classList.add('stale');
+      const again = iconButton('reload', 'Write it again from the code as it is now (one small Claude run)');
+      again.addEventListener('click', () => vscode.postMessage({ type: 'summarize', id: item.id }));
+      const line = el('div', 'metaline');
+      line.append(meta, again);
+      row.append(line);
+    } else {
+      const write = iconButton('example', 'Write a summary of what it does (one small Claude run; then kept up to date by itself)');
+      write.addEventListener('click', () => vscode.postMessage({ type: 'summarize', id: item.id }));
+      const line = el('div', 'metaline');
+      line.append(el('span', 'hint', 'No summary yet.'), write);
+      row.append(line);
+    }
+    drawer.append(row);
+  }
 
   // Its looks (variants) and the fixed-data states Preview shows them with.
   if (item.preview) {

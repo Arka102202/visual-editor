@@ -82,6 +82,13 @@ export interface CardMemory {
   id: string;
   /** Notes, rules and decisions about it, and changes to it, newest first. */
   entries: MemoryEntry[];
+  /** What its plugin suggests an agent could do for it (React: Make previewable), with the agent's name and title. */
+  nudges?: { text: string; agent: string; title: string }[];
+  /** "What it does": its summary (when it was written; whether its code changed since), or none; being written now. */
+  summary?: { text: string; at: string; stale: boolean };
+  summarizing?: boolean;
+  /** Whether it has code to describe (a summary can be asked for). */
+  canSummarize?: boolean;
 }
 
 export type ShowMap = {
@@ -143,6 +150,10 @@ export type FromMap =
   | { type: 'previewFix'; id: string; need: string }
   /** Start a design session about this card. */
   | { type: 'session'; id: string }
+  /** Write (or write again) a card's summary. */
+  | { type: 'summarize'; id: string }
+  /** A card's nudge: run its agent for that card. */
+  | { type: 'cardAgent'; id: string; agent: string }
   /** A nudge: run its agent, or close it (for this project). */
   | { type: 'nudge'; key: string; act: 'run' | 'close' }
   /** Open the developer's own file for a place in the code the browser runs (a console message's). */

@@ -71,6 +71,8 @@ export interface HubHost {
   sessionKinds?(root: string): { id: string; title: string; summary: string; needs: { card?: string; design?: boolean; name?: string; page?: boolean } }[];
   /** Continues a waiting (or sent-back, held-back) proposal in a design session; its draft, or why it couldn't. */
   continueProposal?(root: string, id: string): { draft: string } | string;
+  /** A card's summary ("what it does"), if one was written: its text, when, and whether its code changed since. */
+  summary?(root: string, item: Item): { text: string; at: string; stale: boolean } | undefined;
   /** Whether a session's tab is open in the developer's editor (only then is it worked in). */
   sessionOpen?(root: string, draft: string): boolean;
   /** Opens a closed session's tab again (the developer agreed); why not, if it can't. */
@@ -235,6 +237,8 @@ export function createHubServer(host: HubHost, version = '0.0.1', client = 'Assi
       if (!item) return fail(`No card "${id}" in ${s.project.name}. Use list_cards to find it.`);
       const label = (other: string) => s.items.find((i: Item) => i.id === other)?.label ?? other;
       const out = [`${item.label} (${item.kind})${item.sub ? ` · ${item.sub}` : ''}`];
+      const summary = host.summary?.(s.project.root, item);
+      if (summary) out.push(`What it does (Visual Editor's summary, written ${summary.at.slice(0, 10)}${summary.stale ? '; its code changed since, so check it' : ''}): ${summary.text}`);
       if (item.source) out.push(`Defined in ${item.source.path}${item.source.line ? `:${item.source.line}` : ''}`);
       if (item.fields?.length) out.push('Rows:', ...item.fields.map((f) => `- ${f.name}${f.value ? `: ${f.value}` : ''}${f.tag ? ` [${f.tag}]` : ''}`));
       const out1 = s.links.filter((l) => l.from === id);

@@ -870,3 +870,18 @@ test('hub: a session is worked in only while its tab is open: a closed one is re
     await hub.close();
   }
 });
+
+test('hub: a card comes with its summary (what it does), saying when its code changed since', async () => {
+  const { host } = fakeHost();
+  let stale = false;
+  host.summary = (_root, item) => (item.id === 'react:Card' ? { text: 'Shows one project.', at: '2026-11-01T10:00:00.000Z', stale } : undefined);
+  const hub = await connect(host);
+  try {
+    assert.match((await hub.call('card', { id: 'react:Card' })).text, /^Card \(component\)[^\n]*\nWhat it does \(Visual Editor's summary, written 2026-11-01\): Shows one project\.\n/);
+    stale = true;
+    assert.match((await hub.call('card', { id: 'react:Card' })).text, /written 2026-11-01; its code changed since, so check it\): Shows one project\./);
+    assert.doesNotMatch((await hub.call('card', { id: 'react:List' })).text, /What it does/, 'no summary: nothing said');
+  } finally {
+    await hub.close();
+  }
+});

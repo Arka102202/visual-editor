@@ -59,6 +59,8 @@ export const helloPlugin: Plugin = {
             label: `Hello, ${project.name}`,
             sub: `${project.files.length} files in this project`,
             fields: files.map((f) => ({ name: f.path, value: `${f.text.split('\n').length} lines` })),
+            // (The file it's read from: "Open code" opens it, and a summary describes it.)
+            ...(files[0] ? { source: { path: files[0].path } } : {}),
           },
         ],
       }),

@@ -39,6 +39,10 @@ export class Review implements vscode.Disposable {
   private openSession: ((root: string, p: Proposal) => void) | undefined;
   private draftsTimer: ReturnType<typeof setTimeout> | undefined;
   private replan: ((root: string, draft: string) => void) | undefined;
+  /** A change was applied or undone (the cards it touched get their summaries written). */
+  private decided: ((root: string, p: Proposal) => void) | undefined;
+  /** Summaries being written for a change, by its id. */
+  private summaryJob: ((id: string) => { cards: { label: string; state: 'waiting' | 'running' | 'done' | 'failed' }[]; ended: boolean; error?: string } | undefined) | undefined;
   /** A change whose test cases' window opens with the next showing. */
   private planFor: string | undefined;
   private runPlan: ((root: string, draft: string, choice: PlanChoice) => string | undefined) | undefined;
@@ -112,6 +116,17 @@ export class Review implements vscode.Disposable {
   /** Has new test cases written for a change's draft. */
   setReplan(replan: (root: string, draft: string) => void) {
     this.replan = replan;
+  }
+
+  /** After a change is applied or undone, and what's shown of the summaries then written for its cards. */
+  setDecided(decided: (root: string, p: Proposal) => void, job: NonNullable<Review['summaryJob']>) {
+    this.decided = decided;
+    this.summaryJob = job;
+  }
+
+  /** Shows a project's changes again (e.g. summaries being written for one). */
+  refresh(root: string) {
+    if (this.current.get()?.project.root === root) void this.send();
   }
 
   /** Shows a change waiting for its checks with the window of its test cases open. */
@@ -507,6 +522,7 @@ export class Review implements vscode.Disposable {
           this.wakeImporters(root, p);
           store.mark(p, 'applied');
           this.memory.recordReview(root, p, 'applied');
+          this.decided?.(root, p);
           void vscode.window.showInformationMessage(`Applied: ${p.title}`, 'Undo').then((pick) => pick && this.receive({ type: 'undo', id: p.id }));
         }
       } else if (m.type === 'undo') {
@@ -520,6 +536,7 @@ export class Review implements vscode.Disposable {
           this.wakeImporters(root, latest);
           store.mark(latest, 'undone');
           this.memory.recordReview(root, latest, 'undone');
+          this.decided?.(root, latest);
         }
       } else if (m.type === 'sendBack' || m.type === 'reject') {
         if (p.status !== 'proposed') return;
@@ -577,6 +594,7 @@ export class Review implements vscode.Disposable {
         ...(p.evidence ? { evidence: p.evidence.map((e) => (e.image && root && this.panel ? { ...e, src: this.panel.webview.asWebviewUri(vscode.Uri.file(join(root, e.image))).toString() } : e)) } : {}),
         ...this.liveParts(p, state?.items ?? []),
         ...(this.checking.has(p.id) ? { checking: this.checking.get(p.id) } : {}),
+        ...summariesOf(this.summaryJob?.(p.id)),
       });
     }
     if (!this.selected || !items.some((i) => i.id === this.selected)) this.selected = (items.find((i) => i.status === 'proposed') ?? items[0])?.id;
@@ -613,4 +631,11 @@ export class Review implements vscode.Disposable {
   private files(root: string): Files {
     return vscodeFiles(root, this.changes);
   }
+}
+
+/** What Review shows of the summaries written for a change: each card, and where it is. */
+function summariesOf(job: { cards: { label: string; state: 'waiting' | 'running' | 'done' | 'failed' }[]; ended: boolean; error?: string } | undefined) {
+  if (!job?.cards.length) return {};
+  const state = { waiting: 'waiting', running: 'running', done: 'done', failed: 'failed' } as const;
+  return { summaries: { items: job.cards.map((c) => ({ title: c.label, kind: 'card' as const, state: state[c.state] })), ended: job.ended, ...(job.error ? { error: job.error } : {}) } };
 }

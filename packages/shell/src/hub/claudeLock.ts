@@ -8,7 +8,8 @@
 
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { summariesOf, type Summary } from '../summaries';
 
 /** Marks the check's command as Visual Editor's, so it's found again (to update or remove). */
 export const GUARD_MARK = 'visual-editor-guard';
@@ -72,7 +73,7 @@ const ours = (e: HookEntry) => e.hooks?.some((h) => h.command?.includes(GUARD_MA
 /** Whether Claude Code is locked to Visual Editor in this folder. */
 export function locked(folder: string): boolean {
   const s = readSettings(folder);
-  return !!s.permissions?.deny?.some((d) => denyRules(folder).includes(d)) && !!s.hooks?.PreToolUse?.some(ours) && !!s.hooks?.UserPromptSubmit?.some(ours);
+  return !!s.permissions?.deny?.some((d) => denyRules(folder).includes(d)) && !!s.hooks?.PreToolUse?.some(ours) && !!s.hooks?.UserPromptSubmit?.some(ours) && !!s.hooks?.PostToolUse?.some(ours);
 }
 
 /**
@@ -90,6 +91,8 @@ export function lock(folder: string, guard: string) {
     ...s.hooks,
     PreToolUse: [...others('PreToolUse'), { matcher: MATCHER, hooks: [{ type: 'command', command }] }],
     UserPromptSubmit: [...others('UserPromptSubmit'), { hooks: [{ type: 'command', command }] }],
+    // (After a file is read: its cards' summaries come with it.)
+    PostToolUse: [...others('PostToolUse'), { matcher: 'Read', hooks: [{ type: 'command', command }] }],
   };
   writeSettings(folder, s);
 }
@@ -138,7 +141,12 @@ export interface Turn {
  * message, and the session's `turn` as it is now (to remember). `turn` is what was remembered (undefined: nothing yet);
  * `free`: reading isn't held (Visual Editor's own checker).
  */
-export function guard(call: ToolCall, folder: string, turn: Turn | undefined, free = false, session?: OpenSession, closed: ClosedSession[] = []): { stop?: string; say?: string; turn?: Turn } {
+export function guard(call: ToolCall, folder: string, turn: Turn | undefined, free = false, session?: OpenSession, closed: ClosedSession[] = [], summaries: Record<string, Summary> = {}): { stop?: string; say?: string; turn?: Turn; context?: string } {
+  // A file read: the summaries of the cards it belongs to come with it.
+  if (call.hook_event_name === 'PostToolUse') {
+    const context = summaryContext(call, folder, summaries);
+    return context ? { context } : {};
+  }
   if (call.hook_event_name === 'UserPromptSubmit') return { say: [MAP_FIRST_WORDS, ...(session ? [sessionWords(session)] : []), ...(closed.length ? [closedWords(closed, !!session)] : [])].join('\n'), turn: { asked: false } };
   if (HUB_TOOL.test(call.tool_name ?? '')) return { turn: { asked: true } };
   const why = blocked(call, folder);
@@ -146,6 +154,16 @@ export function guard(call: ToolCall, folder: string, turn: Turn | undefined, fr
   const reading = !free && !turn?.asked ? readsFrom(call, folder) : undefined;
   if (reading) return { stop: `${ASK_FIRST_WORDS} (Held: ${reading}.)` };
   return {};
+}
+
+/** What Claude gets with a project file it reads: Visual Editor's summaries of the cards the file belongs to. */
+export function summaryContext(call: ToolCall, folder: string, summaries: Record<string, Summary>): string | undefined {
+  if (call.tool_name !== 'Read' || !call.tool_input?.file_path) return undefined;
+  const rel = relative(folder, resolve(call.cwd || folder, call.tool_input.file_path)).split(sep).join('/');
+  if (rel.startsWith('..') || isAbsolute(rel)) return undefined;
+  const found = summariesOf(rel, summaries);
+  if (!found.length) return undefined;
+  return found.map((s) => `Visual Editor's summary of ${s.label} (what it does, written ${s.at.slice(0, 10)}; the code is the truth if they differ): ${s.text}`).join('\n');
 }
 
 /** Said with each message while a design session is open in the developer's editor. */

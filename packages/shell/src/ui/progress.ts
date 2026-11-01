@@ -6,7 +6,7 @@ import { addStyles, el } from './dom';
 /** One line of the list (drafts.ts's ProgressItem). */
 export interface ProgressLine {
   title: string;
-  kind: 'check' | 'scenario';
+  kind: 'check' | 'scenario' | 'card';
   state: 'waiting' | 'running' | 'passed' | 'failed' | 'done' | 'skipped' | 'not run';
   /** When it started; how long it took (seconds). */
   at?: string;
@@ -37,14 +37,14 @@ export function drawProgress(items: ProgressLine[]): HTMLElement {
     const mark = el('span', 'pg-mark');
     if (i.state === 'running') mark.append(el('span', 'pg-spin'));
     else mark.textContent = { waiting: '○', passed: '✓', done: '✓', failed: '✗', skipped: '–', 'not run': '·' }[i.state];
-    row.title = `${i.kind === 'check' ? 'Check' : 'Scenario'}: ${WORDS[i.state]}`;
+    row.title = `${i.kind === 'check' ? 'Check' : i.kind === 'card' ? 'Its summary' : 'Scenario'}: ${WORDS[i.state]}`;
     // When: how long the running one has gone (counting live), how long the others took.
     const time = el('span', 'pg-time');
     if (i.state === 'running' && i.at) {
       time.dataset.since = i.at;
       time.textContent = `running · ${seconds(Date.now() - Date.parse(i.at))}`;
     } else if (i.took !== undefined) time.textContent = seconds(i.took * 1000);
-    row.append(mark, el('span', 'pg-title', i.title), time, el('span', 'pg-kind', i.kind === 'check' ? 'check' : 'scenario'));
+    row.append(mark, el('span', 'pg-title', i.title), time, el('span', 'pg-kind', i.kind));
     box.append(row);
   }
   return box;

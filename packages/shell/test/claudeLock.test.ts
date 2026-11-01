@@ -76,6 +76,7 @@ test('review only: the lock goes into the folder\'s own Claude Code settings and
   assert.deepEqual(s.hooks.PreToolUse.map((e: { hooks: { command: string }[] }) => e.hooks[0].command), ['mine', `node newer-guard.js visual-editor-guard '${folder}'`], 'one check of ours, the newest');
   assert.match(s.hooks.PreToolUse[1].matcher, /^Bash\|Edit\|Write\|MultiEdit\|NotebookEdit\|Read\|Grep\|Glob\|mcp__visual-editor__\.\*$/);
   assert.deepEqual(s.hooks.UserPromptSubmit, [{ hooks: [{ type: 'command', command: `node newer-guard.js visual-editor-guard '${folder}'` }] }], 'and with each message');
+  assert.deepEqual(s.hooks.PostToolUse, [{ matcher: 'Read', hooks: [{ type: 'command', command: `node newer-guard.js visual-editor-guard '${folder}'` }] }], 'and after a file is read (its summaries)');
   unlock(folder);
   assert.equal(locked(folder), false);
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { enabledPlugins: { 'visual-editor@visual-editor': true }, permissions: { allow: ['Bash(npm test)'] }, hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'mine' }] }] } });
@@ -141,4 +142,14 @@ test('through Visual Editor only: closed sessions are told about only to ask (op
   assert.deepEqual(readNote({ draft: 'd1', title: 'T' }), { open: { draft: 'd1', title: 'T' } }, 'an older note: the open session alone');
   assert.deepEqual(readNote({ closed }), { closed });
   assert.deepEqual(readNote(null), {});
+});
+
+test('through Visual Editor only: a file Claude reads comes with the summaries of its cards (and nothing else does)', () => {
+  const summaries = { 'react:Card': { id: 'react:Card', label: 'ProjectCard', text: 'Shows one project.', at: '2026-11-01T10:00:00.000Z', files: ['src/Card.tsx', 'src/Card.data.tsx'], hash: 'x' } };
+  const read = (file_path: string) => guard({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path }, cwd: '/p' }, '/p', undefined, false, undefined, [], summaries);
+  assert.match(read('/p/src/Card.data.tsx').context ?? '', /^Visual Editor's summary of ProjectCard \(what it does, written 2026-11-01; the code is the truth if they differ\): Shows one project\.$/);
+  assert.equal(read('src/Card.tsx').context?.startsWith("Visual Editor's summary of ProjectCard"), true, 'a path from where Claude is');
+  assert.equal(read('/p/src/Other.tsx').context, undefined);
+  assert.equal(read('/elsewhere/src/Card.tsx').context, undefined, 'not this project');
+  assert.equal(guard({ hook_event_name: 'PostToolUse', tool_name: 'Grep', tool_input: { pattern: 'x' } }, '/p', undefined, false, undefined, [], summaries).context, undefined);
 });
