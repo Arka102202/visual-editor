@@ -322,6 +322,27 @@ export async function run() {
     for (const j of new JobStore(root).list()) rmSync(join(root, '.visual-editor', 'jobs', `${j.id}.json`), { force: true });
   });
 
+  await step('Story view: ProjectList\'s Delete is told from the click in ProjectCard to the saved data, step by step', async () => {
+    const list = card('ProjectList');
+    if (!list) throw new Error('ProjectList is not on the map');
+    t.map.show();
+    const seen: any[] = [];
+    const post = t.map.panel.webview.postMessage.bind(t.map.panel.webview);
+    t.map.panel.webview.postMessage = (m: any) => (seen.push(m), post(m));
+    await until(() => t.map.ready, 'the map page', 20_000);
+    t.map.receive({ type: 'card', id: list.id });
+    await until(() => seen.some((m) => m.type === 'stories' && m.id === list.id), 'its stories', 20_000);
+    const stories = seen.find((m) => m.type === 'stories' && m.id === list.id).stories;
+    const del = stories.find((s: any) => /^Click “Delete project” on ProjectCard$/.test(s.title));
+    if (!del) throw new Error(`its stories: ${stories.map((s: any) => s.title).join(' | ')}`);
+    const texts = del.steps.map((x: any) => x.text);
+    for (const want of [/^You click “Delete project”$/, /^ProjectCard calls onDelete, which ProjectList gives it$/, /^Runs deleteProject from useProjectList$/, /^Deletes from saved data \(db\.projects\)$/]) {
+      if (!texts.some((x: string) => want.test(x))) throw new Error(`no step ${want}: ${texts.join(' / ')}`);
+    }
+    const cards = new Set(del.steps.map((x: any) => x.card));
+    if (!cards.has(projectCard().id) || !cards.has(list.id)) throw new Error(`its steps' cards: ${[...cards].join(', ')}`);
+  });
+
   // Agents: from a button (a stand-in for claude), and from the chat (job_start, as the agent's skill does).
   const fakeOut = process.env.VISUAL_EDITOR_FAKE_OUT!;
   const realAssistants = t.hub.assistants.bind(t.hub);

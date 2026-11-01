@@ -10,7 +10,7 @@ import { checkFolder } from './read/variantChecks';
 
 const CODE = /\.[cm]?[jt]sx?$/;
 /** Files that say how imports like "@/components/Card" resolve. */
-const CONFIG = /(^|\/)(tsconfig[\w.-]*\.json|jsconfig\.json|(vite|webpack)\.config\.[cm]?[jt]s)$/;
+export const CONFIG = /(^|\/)(tsconfig[\w.-]*\.json|jsconfig\.json|(vite|webpack)\.config\.[cm]?[jt]s)$/;
 
 /** Shared pieces are used by this many components or more. */
 export const SHARED_FROM = 3;

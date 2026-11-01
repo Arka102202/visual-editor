@@ -12,6 +12,7 @@ import { previewFix } from './providers';
 import { providersFile } from './previewPage';
 import { makePreviewableAgent, newVariantAgent, setUpProjectAgent } from './agents';
 import { setupBriefTool } from './setupBrief';
+import { storiesFor } from './storyView';
 import { sessionKinds } from './sessions';
 import { checkTypesTool, checkVariantFilesTool, previewableTool, rememberModel, variantBriefTool, variantRulesSkill } from './tools';
 import { existsSync, readFileSync } from 'node:fs';
@@ -70,6 +71,8 @@ export const reactPlugin: Plugin = {
   skills: [variantRulesSkill],
   agents: [makePreviewableAgent, newVariantAgent, setUpProjectAgent],
   sessions: sessionKinds,
+  // What happens when someone does something on a component: its stories, read from the code (Story view).
+  stories: (item, project) => storiesFor(item, project),
   // A component or page that isn't previewable yet: Make previewable, from its drawer.
   cardNudges: (item) =>
     item.map === 'components' && item.source && !item.preview

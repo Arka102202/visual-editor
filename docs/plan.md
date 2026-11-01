@@ -379,10 +379,22 @@ Claude.
   the card tool); in VS Code with a stand-in for Claude: nothing written until asked, written from the drawer, written
   again after an approve (shown in Review) and after an undo. Not yet with Claude itself writing one.
 
-### 3.2 Story view
+### 3.2 Story view ✅ built
 - **You get:** "What happens when I click?" as steps: click → handler → state → API call. It stops at the API card
   until Express exists.
 - **Done when:** ProjectList's "Delete" shows its full story.
+- **How it works:** read from the code, no Claude. A card's drawer lists "What happens when…": each action on its
+  elements (click, type, submit, key…), named by what it shows (its words, aria-label, a shared message's text). A story
+  follows the handler through local functions, values from hooks (into the hook), imported modules, a previewable
+  folder's design in use into its data part, and callbacks a parent gives (the child's click carried on in the parent);
+  it says what each step does: asks (confirm), sets state, runs a store action, changes saved data, sends a request
+  (the story stops there), opens a page, shows a message, loads again. Each step opens its line; the first step in
+  another card goes to that card; a story's cards can be lit up on the map. A callback no one gives stays "up to the
+  component using it"; a click that does nothing isn't a story.
+- **Checked:** on archFlow, ProjectList's Delete: the click in ProjectCard's design, ProjectCard's data part, ProjectList's
+  data part, deleteProject in useProjectList, the three deletes in the browser's database, the reload. Unit tests on a
+  made-up project (each pattern, both ways); the archFlow VS Code test checks the Delete story arrives with its cards.
+- **Later (second pass):** what you see change on screen at each step.
 
 ### 3.3 Follow a field
 - **You get:** pick a value (for example `project.name`) and see where it comes from and every place it's shown.

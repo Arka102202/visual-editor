@@ -63,6 +63,9 @@ export function previewableText(items: Item[], search?: string): string {
 /** The last model the reader made, per project: today's project, read again only with a draft. */
 const models = new Map<string, FeModel>();
 
+/** The project's model as last read, if it was (Story view reads its folders and cards from it). */
+export const knownModel = (root: string): FeModel | undefined => models.get(root);
+
 export function rememberModel(root: string, model: FeModel) {
   models.set(root, model);
 }
