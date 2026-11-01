@@ -70,6 +70,11 @@ export const reactPlugin: Plugin = {
   skills: [variantRulesSkill],
   agents: [makePreviewableAgent, newVariantAgent, setUpProjectAgent],
   sessions: sessionKinds,
+  // A component or page that isn't previewable yet: Make previewable, from its drawer.
+  cardNudges: (item) =>
+    item.map === 'components' && item.source && !item.preview
+      ? [{ id: 'make-previewable', text: 'Not previewable yet: you can’t see it in Preview or the Playground, or give it new designs. Make previewable rebuilds it so you can; the app looks and works the same.', agent: 'make-previewable' }]
+      : [],
   // Not set up for Preview yet (no providers file, nothing previewable, a Vite app): the Set up project agent does it.
   nudges: (project, items) =>
     !providersFile(project) && !items.some((i) => i.preview) && project.files.some((f) => /^vite\.config\.[cm]?[jt]s$/.test(f))

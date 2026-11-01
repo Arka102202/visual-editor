@@ -214,3 +214,14 @@ test('setup brief: the map nudges a Vite app with nothing set up to Set up proje
   assert.deepEqual(reactPlugin.nudges!(fresh, [comp('Badge', 'src/Badge.tsx', { preview: { variants: [], states: [] } })]), []);
   assert.deepEqual(reactPlugin.nudges!(project({ 'next.config.js': '' }), []), []);
 });
+
+test('card nudges: a component that isn\'t previewable gets Make previewable in its drawer; a previewable one, an API call or one without a file doesn\'t', async () => {
+  const { reactPlugin } = await import('../src/plugin');
+  const p = project({ 'vite.config.ts': '' });
+  const nudges = reactPlugin.cardNudges!(comp('CreateProjectModal', 'src/CreateProjectModal.tsx'), p);
+  assert.deepEqual(nudges.map((n) => n.agent), ['make-previewable']);
+  assert.match(nudges[0].text, /^Not previewable yet:/);
+  assert.deepEqual(reactPlugin.cardNudges!(comp('ProjectCard', 'src/ProjectCard/index.tsx', { preview: { variants: [], states: [] } }), p), []);
+  assert.deepEqual(reactPlugin.cardNudges!({ id: 'react:api:GET /x', map: 'api', kind: 'api call', label: 'GET /x', source: { path: 'src/api.ts' } }, p), []);
+  assert.deepEqual(reactPlugin.cardNudges!({ id: 'react:X', map: 'components', kind: 'component', label: 'X' }, p), []);
+});

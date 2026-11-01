@@ -295,6 +295,33 @@ export async function run() {
     close(id);
   });
 
+  await step('a card that isn\'t previewable offers Make previewable in its drawer; ▶ starts it for that card', async () => {
+    const modal = card('CreateProjectModal');
+    if (!modal || modal.preview) throw new Error('CreateProjectModal: not on the map, or previewable already');
+    t.map.show();
+    const seen: any[] = [];
+    const post = t.map.panel.webview.postMessage.bind(t.map.panel.webview);
+    t.map.panel.webview.postMessage = (m: any) => (seen.push(m), post(m));
+    await until(() => t.map.ready, 'the map page', 20_000);
+    t.map.receive({ type: 'card', id: modal.id });
+    await until(() => seen.some((m) => m.type === 'card' && m.id === modal.id), 'its drawer', 5000);
+    const nudge = seen.find((m) => m.type === 'card' && m.id === modal.id).nudges;
+    if (nudge?.[0]?.agent !== 'make-previewable' || nudge[0].title !== 'Make previewable') throw new Error(`its drawer offers: ${JSON.stringify(nudge)}`);
+    t.map.receive({ type: 'card', id: projectCard().id });
+    await until(() => seen.some((m) => m.type === 'card' && m.id === projectCard().id), 'ProjectCard\'s drawer', 5000);
+    if (seen.find((m) => m.type === 'card' && m.id === projectCard().id).nudges?.length) throw new Error('a previewable card is offered Make previewable');
+    // ▶: the agent starts for exactly this card (a stand-in for claude).
+    const realAssistants = t.hub.assistants.bind(t.hub);
+    t.hub.assistants = () => realAssistants().map((a: any) => (a.id === 'claude' ? { ...a, state: 'on', agents: 'on' } : a));
+    t.map.receive({ type: 'cardAgent', id: modal.id, agent: 'make-previewable' });
+    await until(() => new JobStore(root).list().some((j: any) => j.agent === 'make-previewable' && /CreateProjectModal \(src\/.*CreateProjectModal\.tsx\)/.test(j.request)), 'its job, for that card', 10_000);
+    // (Its stand-in for claude finishes before the next steps use it.)
+    const fakes = process.env.VISUAL_EDITOR_FAKE_OUT!;
+    await until(() => existsSync(fakes) && readdirSync(fakes).some((f) => { try { return JSON.parse(readFileSync(join(fakes, f), 'utf8')).prompt.includes('CreateProjectModal'); } catch { return false; } }), 'the stand-in to be given the job', 20_000);
+    t.hub.assistants = realAssistants;
+    for (const j of new JobStore(root).list()) rmSync(join(root, '.visual-editor', 'jobs', `${j.id}.json`), { force: true });
+  });
+
   // Agents: from a button (a stand-in for claude), and from the chat (job_start, as the agent's skill does).
   const fakeOut = process.env.VISUAL_EDITOR_FAKE_OUT!;
   const realAssistants = t.hub.assistants.bind(t.hub);
@@ -312,7 +339,8 @@ export async function run() {
       const job = new JobStore(root).list().find((j: any) => j.request === a.request && j.agent === a.name);
       if (!job) throw new Error('no job');
       await until(() => existsSync(fakeOut) && readdirSync(fakeOut).length > before, 'Claude Code (the stand-in) to be run', 20_000);
-      const got = JSON.parse(readFileSync(join(fakeOut, readdirSync(fakeOut).sort().at(-1)!), 'utf8'));
+      const got = readdirSync(fakeOut).sort().reverse().map((f) => { try { return JSON.parse(readFileSync(join(fakeOut, f), 'utf8')); } catch { return undefined; } }).find((g) => g?.prompt.includes(`Request: ${a.request}`));
+      if (!got) throw new Error('the stand-in was not given this job');
       if (!got.prompt.includes(`visual-editor:${a.name} skill`) || !got.prompt.includes(job.id) || !got.prompt.includes(`Request: ${a.request}`)) throw new Error(`it was given: ${got.prompt}`);
       if (!got.args.includes('-p')) throw new Error(`its arguments: ${got.args.join(' ')}`);
       rmSync(join(root, '.visual-editor', 'jobs', `${job.id}.json`), { force: true });

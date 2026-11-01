@@ -364,12 +364,20 @@ Claude.
 
 ## Phase 3: Understand without reading code (React)
 
-### 3.1 Summaries
-- **You get:** "What does this do?" on every card, in plain words.
-  - Written by the Documentation writer and checked by its checker.
-  - Marked "read" (straight from code) or "worked out".
-  - Refreshed when the code changes.
+### 3.1 Summaries ✅ built
+- **You get:** "What it does" on a card, in a few plain sentences.
+- **How it works (decided 2026-11-01):** nothing is written up front. A summary is written for a card only when you ask
+  (✨ in its drawer on the map), one small Claude run (Haiku unless set otherwise: `visualEditor.summaries.model`). From
+  then on they keep themselves up to date: after every approve or undo, every card the change touched gets its summary
+  written (or written again), several cards in one run, and Review shows it under the change as it goes ("Now updating
+  the summaries of the cards it touched", then "Summaries updated"). Each summary keeps the files it describes and a
+  fingerprint of their code: changed some other way, it says "may be out of date", with ↻ to write it again. Kept in
+  `.visual-editor/memory/summaries.json`. Claude gets a card's summary with the card (the `card` tool) and with any file
+  of it that it reads (a hook after Read).
 - **Done when:** summaries stay correct after code changes.
+- **Checked:** unit tests (keeping, out of date, the prompt and the answer, ten cards a run, a failed run, the hook,
+  the card tool); in VS Code with a stand-in for Claude: nothing written until asked, written from the drawer, written
+  again after an approve (shown in Review) and after an undo. Not yet with Claude itself writing one.
 
 ### 3.2 Story view
 - **You get:** "What happens when I click?" as steps: click → handler → state → API call. It stops at the API card
